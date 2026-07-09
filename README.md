@@ -81,6 +81,14 @@ If you use Twitch Toolkit / ToolkitUtils:
 
 ---
 
+## Acknowledgements
+
+Overlord is inspired by **[Puppeteer](https://github.com/pardeike/Puppeteer)** by **Andreas Pardeike (Brrainz)** — the original RimWorld mod that let Twitch viewers control colonists from a browser. Overlord is a new codebase aimed at RimWorld 1.5/1.6 and self-hosted relays; it is not affiliated with or maintained by the Puppeteer authors.
+
+Harmony is by the same author: [HarmonyRimWorld](https://github.com/pardeike/HarmonyRimWorld).
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
