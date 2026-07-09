@@ -89,6 +89,12 @@ Harmony is by the same author: [HarmonyRimWorld](https://github.com/pardeike/Har
 
 ---
 
+## Feedback
+
+Questions, bugs, and ideas: [broteampill@gmail.com](mailto:broteampill@gmail.com) · or open a GitHub issue on this repo.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
