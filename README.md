@@ -35,6 +35,13 @@ Native pawn control (draft, move, work, gear) is Overlord. Toolkit **Buy** still
 
 ## Install
 
+### From Steam Workshop
+
+1. Subscribe: [Overlord on Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3760983440)
+2. Also subscribe to **[Harmony](https://steamcommunity.com/workshop/filedetails/?id=2009463077)** (or install Harmony another way).
+3. Enable **Harmony**, then **Overlord**, in the RimWorld mod list.
+4. Deploy **your own relay** — Workshop does not include a shared server. See **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
+
 ### From a GitHub Release
 
 1. Download the latest **Release** zip.

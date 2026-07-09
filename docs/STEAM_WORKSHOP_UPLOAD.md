@@ -1,20 +1,22 @@
-# Steam Workshop upload (remaining manual step)
+# Steam Workshop
 
-Prep is done in the repo / Steam Mods folder. Steam requires the upload click inside RimWorld.
+**Live item:** https://steamcommunity.com/sharedfiles/filedetails/?id=3760983440  
+**PublishedFileId:** `3760983440` (stored in `About/PublishedFileId.txt`)
 
-## Already prepared
-- `About/Preview.png` (1280x720, under 1 MB)
-- Latest `About/About.xml` (with Puppeteer credit)
-- Mod package under Steam Mods: About, Assemblies, Defs, WebUI
-- Workshop BBCode: `docs/STEAM_WORKSHOP_DESCRIPTION.txt`
+## Visibility
 
-## You do this in RimWorld
-1. Own RimWorld on Steam and be logged into Steam.
-2. Options → enable **Development mode**.
-3. Main menu → **Mods** → select **Overlord**.
-4. Click **Upload on Steam**.
-5. After success, copy `About/PublishedFileId.txt` from the Steam Mods folder back into `E:\Overlord\About\` (and commit it) so future updates hit the same Workshop item.
-6. On the Workshop page, paste the text from `docs/STEAM_WORKSHOP_DESCRIPTION.txt` into the description (Steam uses BBCode).
+If the Workshop link shows a Steam “Sorry / problem accessing the item” page for people who are not you, set the item to **Public** on the Workshop page (Change Visibility). Friends-only / Private / Unlisted will break Reddit and X links for most readers.
+
+## Description
+
+Paste BBCode from `docs/STEAM_WORKSHOP_DESCRIPTION.txt` into the Workshop description editor if it is still the short in-game default.
+
+## Updating later
+
+1. Rebuild / sync into `RimWorld/Mods/Overlord` (`build.bat`).
+2. Keep `About/PublishedFileId.txt` = `3760983440`.
+3. RimWorld → Mods (dev mode) → **Upload on Steam** again.
 
 ## Do not upload
-- `.git`, `Source/`, `docs/` session logs, `AGENTS.md`, personal `fly.toml`, secrets
+
+- `.git`, `Source/`, private docs, `AGENTS.md`, personal `fly.toml`, secrets
