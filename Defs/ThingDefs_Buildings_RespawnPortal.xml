@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef ParentName="BuildingBase">
+    <defName>Overlord_RespawnPortal</defName>
+    <label>respawn portal</label>
+    <description>A shimming device that allows Twitch viewers to manifest as new colonists. Viewers who have lost their pawn and still hold respawn tickets may enter through this portal.</description>
+    <thingClass>Overlord.Building_RespawnPortal</thingClass>
+    <graphicData>
+      <texPath>Things/Building/Misc/DropBeacon</texPath>
+      <graphicClass>Graphic_Single</graphicClass>
+      <drawSize>(2,2)</drawSize>
+    </graphicData>
+    <altitudeLayer>Building</altitudeLayer>
+    <passability>PassThroughOnly</passability>
+    <blockWind>false</blockWind>
+    <fillPercent>0.5</fillPercent>
+    <castEdgeShadows>false</castEdgeShadows>
+    <statBases>
+      <MaxHitPoints>150</MaxHitPoints>
+      <WorkToBuild>600</WorkToBuild>
+      <Flammability>0.5</Flammability>
+      <Beauty>2</Beauty>
+    </statBases>
+    <size>(2,2)</size>
+    <building>
+      <isInert>true</isInert>
+    </building>
+    <costList>
+      <ComponentIndustrial>2</ComponentIndustrial>
+      <Steel>60</Steel>
+      <Gold>10</Gold>
+    </costList>
+    <constructEffect>ConstructMetal</constructEffect>
+    <researchPrerequisites>
+      <li>Microelectronics</li>
+    </researchPrerequisites>
+    <designationCategory>Misc</designationCategory>
+    <designationHotKey>Misc1</designationHotKey>
+    <tickerType>Normal</tickerType>
+    <canOverlapZones>false</canOverlapZones>
+    <rotatable>false</rotatable>
+  </ThingDef>
+</Defs>

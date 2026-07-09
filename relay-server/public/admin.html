@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Overlord Admin</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #0e0f10; --surface: #1a1b1d; --border: #2e2f33; --text: #d8d9db; --muted: #6b6d72; --accent: #4a9eff; --green: #3da64a; --red: #c0392b; --purple: #8e44ad; --amber: #c8922a; --radius: 3px; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
+
+    #app { max-width: 860px; margin: 0 auto; padding: 20px 16px; }
+    h1 { font-size: 20px; margin-bottom: 12px; }
+    h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 60px auto; }
+    .auth-box input { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; color: var(--text); font-size: 14px; }
+    .auth-box button { background: var(--accent); border: none; border-radius: var(--radius); padding: 9px; color: #fff; font-weight: 600; cursor: pointer; }
+    #error-msg { color: var(--red); font-size: 12px; }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin-bottom: 6px; }
+    .status-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+    .status-row .label { color: var(--muted); }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .dot.on { background: var(--green); }
+    .dot.off { background: var(--red); }
+
+    /* Assignment grid */
+    .assign-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .assign-col h3 { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+
+    .viewer-card, .colonist-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 4px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .viewer-card:hover, .colonist-card:hover { border-color: var(--accent); }
+    .viewer-card.selected, .colonist-card.selected { border-color: var(--accent); background: #1a2e48; }
+    .viewer-card .assignment { font-size: 10px; color: var(--green); }
+    .colonist-card .owner { font-size: 10px; color: var(--muted); }
+    .claim-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 4px; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .claim-actions { display: flex; gap: 4px; }
+    .claim-actions button { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 4px 8px; cursor: pointer; font-size: 12px; }
+    .claim-actions button:first-child { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    .action-bar { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
+    .action-btn { border: none; border-radius: var(--radius); padding: 7px 16px; color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .action-btn:hover { filter: brightness(1.1); }
+    .action-btn:disabled { opacity: 0.4; cursor: default; }
+    .btn-assign { background: var(--accent); }
+    .btn-unassign { background: #555; }
+    .btn-spawn { background: var(--purple); }
+    .btn-kick { background: #555; }
+    .btn-ban { background: var(--red); }
+    .btn-ticket { background: var(--amber); }
+    .btn-vote { background: var(--green); }
+    .btn-end-vote { background: var(--red); }
+
+    .msg-bar { display: flex; gap: 6px; margin-top: 8px; }
+    .msg-bar input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: var(--text); font-size: 13px; }
+    .msg-bar button { background: var(--accent); border: none; border-radius: var(--radius); padding: 6px 14px; color: #fff; font-size: 13px; cursor: pointer; }
+
+    .vote-bar { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+    .vote-bar input { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: var(--text); font-size: 13px; }
+    .vote-bar input.vote-q { flex: 2; min-width: 160px; }
+    .vote-bar input.vote-opts { flex: 3; min-width: 200px; }
+    .vote-bar button { border: none; border-radius: var(--radius); padding: 6px 14px; color: #fff; font-size: 13px; cursor: pointer; }
+    .vote-active { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; margin-top: 8px; }
+    .vote-result { font-size: 13px; color: var(--muted); }
+    .vote-result strong { color: var(--text); }
+
+    .timeout-bar { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .timeout-bar button { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 5px 12px; cursor: pointer; font-size: 12px; }
+    .timeout-bar button:hover { border-color: var(--amber); color: var(--amber); }
+
+    .log { background: #111; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; max-height: 160px; overflow-y: auto; font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .log-entry { padding: 1px 0; border-bottom: 1px solid #1a1a1a; }
+    .none { color: var(--muted); font-style: italic; font-size: 12px; }
+    .refresh-note { color: #444; font-size: 10px; margin-top: 3px; }
+    .selected-label { font-size: 12px; color: var(--muted); margin: 6px 0 2px; min-height: 18px; }
+
+    @media (max-width: 600px) { .assign-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="auth-screen">
+      <div class="auth-box">
+        <h1>Overlord Admin</h1>
+        <input id="secret-input" type="password" placeholder="Host secret" autocomplete="off">
+        <button id="btn-auth">Login</button>
+        <div id="error-msg"></div>
+      </div>
+    </div>
+
+    <div id="dashboard" style="display:none">
+      <h1>Overlord Admin</h1>
+
+      <h2>Status</h2>
+      <div class="card">
+        <div class="status-row"><span class="label">Host</span><span id="host-status">...</span></div>
+        <div class="status-row"><span class="label">Viewers</span><span id="viewer-count">0</span></div>
+        <div class="status-row"><span class="label">Uptime</span><span id="uptime">0s</span></div>
+      </div>
+
+      <h2>Assignments</h2>
+      <div class="assign-grid">
+        <div class="assign-col">
+          <h3>Viewers</h3>
+          <div id="viewer-list"></div>
+        </div>
+        <div class="assign-col">
+          <h3>Colonists</h3>
+          <div id="colonist-list"><span class="none">Waiting for colonist data…</span></div>
+        </div>
+      </div>
+
+      <div class="selected-label" id="selected-label"></div>
+      <div class="action-bar">
+        <button class="action-btn btn-assign" id="btn-assign" disabled>Assign</button>
+        <button class="action-btn btn-unassign" id="btn-unassign" disabled>Unassign</button>
+        <button class="action-btn btn-spawn" id="btn-spawn">Spawn Colonist</button>
+        <button class="action-btn btn-kick" id="btn-kick" disabled>Kick</button>
+        <button class="action-btn btn-ban" id="btn-ban" disabled>Ban</button>
+        <button class="action-btn btn-ticket" id="btn-ticket" disabled>+1 Ticket</button>
+      </div>
+      <div class="timeout-bar" id="timeout-bar" style="display:none">
+        <span style="font-size:12px;color:var(--muted);align-self:center">Timeout:</span>
+        <button onclick="doTimeout(60)">1m</button>
+        <button onclick="doTimeout(300)">5m</button>
+        <button onclick="doTimeout(900)">15m</button>
+      </div>
+
+      <h2>Claim Requests</h2>
+      <div class="card" id="claim-list"><span class="none">No pending claims</span></div>
+
+      <h2>Broadcast</h2>
+      <div class="msg-bar">
+        <input id="msg-input" type="text" placeholder="Message to all viewers" maxlength="200">
+        <button id="btn-broadcast">Send</button>
+      </div>
+
+      <h2>Vote</h2>
+      <div id="vote-idle">
+        <div class="vote-bar">
+          <input class="vote-q" id="vote-q" type="text" placeholder="Question…" maxlength="120">
+          <input class="vote-opts" id="vote-opts" type="text" placeholder="Option A, Option B, Option C" maxlength="200">
+          <button class="btn-vote" id="btn-start-vote">Start Vote</button>
+        </div>
+      </div>
+      <div id="vote-active-panel" class="vote-active" style="display:none">
+        <div id="vote-results" class="vote-result"></div>
+        <div style="margin-top:8px">
+          <button class="action-btn btn-end-vote" id="btn-end-vote">End Vote</button>
+        </div>
+      </div>
+
+      <h2>Log</h2>
+      <div class="log" id="event-log"></div>
+      <p class="refresh-note">Auto-refreshes every 15s</p>
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    let secret = '';
+    let selectedViewer = null;
+    let selectedColonist = null;
+    let colonists = [];
+    let claimRequests = [];
+    let activeVote = null;
+
+    // ── Auth ──
+    $('btn-auth').addEventListener('click', tryAuth);
+    $('secret-input').addEventListener('keydown', e => { if (e.key === 'Enter') tryAuth(); });
+    const saved = sessionStorage.getItem('overlord_admin_secret');
+    if (saved) { secret = saved; tryAuth(); }
+
+    async function tryAuth() {
+      secret = secret || $('secret-input').value.trim();
+      if (!secret) { $('error-msg').textContent = 'Enter the host secret'; return; }
+      try {
+        const res = await api('/admin/status');
+        if (res.error) { $('error-msg').textContent = 'Invalid secret'; secret = ''; return; }
+        sessionStorage.setItem('overlord_admin_secret', secret);
+        $('auth-screen').style.display = 'none';
+        $('dashboard').style.display = '';
+        renderStatus(res);
+        loadOpsLogs();
+        setInterval(pollStatus, 15000);
+        connectAdminWS();
+        log('Logged in');
+      } catch (e) { $('error-msg').textContent = 'Connection error'; secret = ''; }
+    }
+
+    async function api(path, body) {
+      const opts = { headers: { Authorization: `Bearer ${secret}` } };
+      if (body !== undefined) {
+        opts.method = 'POST';
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(path, opts);
+      return r.json();
+    }
+
+    // ── Admin WebSocket ──
+    let adminWs = null;
+    let adminConnectSeq = 0;
+    let adminReconnectTimer = null;
+    let liveViewers = [];
+
+    function connectAdminWS() {
+      clearTimeout(adminReconnectTimer);
+      const seq = ++adminConnectSeq;
+      if (adminWs) {
+        try { adminWs.onclose = null; adminWs.onerror = null; adminWs.close(1000, 'Reconnecting'); } catch {}
+      }
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${location.host}/ws?role=admin&secret=${encodeURIComponent(secret)}`;
+      adminWs = new WebSocket(url);
+
+      adminWs.onopen = () => {
+        if (seq !== adminConnectSeq) { try { adminWs.close(); } catch {} return; }
+        log('WebSocket connected');
+        pollStatus();
+      };
+
+      adminWs.onmessage = (e) => {
+        if (seq !== adminConnectSeq) return;
+        try {
+          const msg = JSON.parse(e.data);
+          switch (msg.type) {
+            case 'admin_sync':
+              liveViewers = msg.viewers || [];
+              $('host-status').innerHTML = msg.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
+              $('viewer-count').textContent = liveViewers.length;
+              $('uptime').textContent = formatUptime(msg.uptime);
+              renderViewers(liveViewers);
+              break;
+
+            case 'host_status':
+              $('host-status').innerHTML = msg.connected ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
+              log(msg.connected ? 'Host connected' : 'Host disconnected');
+              break;
+
+            case 'viewer_update':
+              if (msg.action === 'joined') {
+                if (!liveViewers.find(v => v.login === msg.login))
+                  liveViewers.push({ login: msg.login, displayName: msg.displayName || msg.login });
+                log(`${msg.displayName || msg.login} joined`);
+              } else if (msg.action === 'left') {
+                liveViewers = liveViewers.filter(v => v.login !== msg.login);
+                log(`${msg.login} left`);
+              }
+              $('viewer-count').textContent = liveViewers.length;
+              renderViewers(liveViewers);
+              break;
+
+            case 'colonist_list':
+              colonists = msg.colonists || [];
+              claimRequests = claimRequests.filter(claim => {
+                const c = colonists.find(col => col.id === claim.pawnId);
+                return c && !c.assignedTo;
+              });
+              renderColonists();
+              renderViewers(liveViewers);
+              renderClaims();
+              break;
+
+            case 'claim_request':
+              upsertClaim(msg);
+              renderClaims();
+              log(`${msg.displayName || msg.username} requested ${msg.pawnName}`);
+              break;
+
+            case 'vote_update':
+              activeVote = msg.active ? msg : null;
+              renderVote(msg);
+              break;
+
+            case 'game_info':
+              $('host-status').innerHTML = `<span class="dot on"></span>Connected — ${msg.season || ''} Day ${msg.day || '?'}, ${msg.hour ?? '?'}h, ${msg.temperature ?? '?'}°C`;
+              break;
+
+            case 'host_capabilities':
+              log(`Capabilities: RimWorld ${msg.rimworldVersion || 'unknown'}, context=${msg.contextMenu ? 'on' : 'off'}, portraits=${msg.portraits ? 'on' : 'off'}`);
+              break;
+
+            case 'diagnostics':
+              if (msg.category === 'map')
+                log(`map viewers=${msg.viewers} frames=${msg.frames} render=${msg.renderWidth}x${msg.renderHeight} avg=${msg.avgRenderMs}/${msg.avgEncodeMs}ms ${msg.avgJpegKB}KB`);
+              break;
+
+            case 'chat':
+              if (msg.username && msg.message) log(`[chat] ${msg.username}: ${msg.message}`);
+              break;
+
+            case 'action_result':
+            case 'command_result':
+              log(`${msg.ok === false ? 'Failed' : 'OK'}: ${msg.message || ''}`);
+              break;
+
+            case 'ops_log':
+              renderOpsEntry(msg.entry);
+              break;
+          }
+        } catch {}
+      };
+
+      adminWs.onclose = () => {
+        if (seq !== adminConnectSeq) return;
+        log('WebSocket disconnected - reconnecting...');
+        adminReconnectTimer = setTimeout(connectAdminWS, 3000);
+      };
+      adminWs.onerror = () => { if (seq === adminConnectSeq) adminWs.close(); };
+    }
+
+    async function pollStatus() {
+      try {
+        const data = await api('/admin/status');
+        liveViewers = data.viewers;
+        $('viewer-count').textContent = data.viewers.length;
+        $('uptime').textContent = formatUptime(data.uptime);
+        renderViewers(data.viewers);
+      } catch {}
+    }
+
+    async function loadOpsLogs() {
+      try {
+        const data = await api('/admin/logs?limit=80');
+        if (data.logs) { $('event-log').innerHTML = ''; data.logs.forEach(renderOpsEntry); }
+      } catch {}
+    }
+
+    function renderOpsEntry(entry) {
+      if (!entry) return;
+      const parts = [entry.event || 'event'];
+      if (entry.type) parts.push(entry.type);
+      if (entry.action) parts.push(entry.action);
+      if (entry.username) parts.push(entry.username);
+      if (entry.target) parts.push(`target=${entry.target}`);
+      if (entry.bytes) parts.push(`${entry.bytes}b`);
+      if (entry.frames) parts.push(`${entry.frames} frames`);
+      log(parts.join(' '));
+    }
+
+    function renderStatus(data) {
+      $('host-status').innerHTML = data.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
+      liveViewers = data.viewers;
+      $('viewer-count').textContent = data.viewers.length;
+      $('uptime').textContent = formatUptime(data.uptime);
+      renderViewers(data.viewers);
+    }
+
+    function renderViewers(viewers) {
+      const el = $('viewer-list');
+      if (!viewers.length) { el.innerHTML = '<span class="none">No viewers</span>'; return; }
+      el.innerHTML = viewers.map(v => {
+        const assigned = colonists.find(c => c.assignedTo === v.login);
+        const assignLabel = assigned ? `→ ${assigned.name}` : '';
+        const sel = selectedViewer === v.login ? ' selected' : '';
+        const label = v.displayName && v.displayName !== v.login ? `${v.displayName} (${v.login})` : v.login;
+        return `<div class="viewer-card${sel}" onclick="selectViewer('${esc(v.login)}')">
+          <span>${esc(label)}</span>
+          <span class="assignment">${assignLabel}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function renderColonists() {
+      const el = $('colonist-list');
+      if (!colonists.length) { el.innerHTML = '<span class="none">No colonists</span>'; return; }
+      el.innerHTML = colonists.map(c => {
+        const owner = c.assignedTo ? `← ${c.assignedTo}` : 'open';
+        const sel = selectedColonist === c.id ? ' selected' : '';
+        return `<div class="colonist-card${sel}" onclick="selectColonist(${c.id})">
+          <span>${esc(c.name)}</span>
+          <span class="owner">${owner}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function renderVote(msg) {
+      const idle = $('vote-idle');
+      const active = $('vote-active-panel');
+      if (!msg || !msg.active) {
+        idle.style.display = '';
+        active.style.display = 'none';
+        return;
+      }
+      idle.style.display = 'none';
+      active.style.display = '';
+      const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
+      const lines = (msg.options || []).map((o, i) => {
+        const pct = Math.round((o.votes || 0) / total * 100);
+        return `<strong>${esc(o.label)}</strong>: ${o.votes || 0} (${pct}%)`;
+      }).join('  ·  ');
+      $('vote-results').innerHTML = `<strong>${esc(msg.question)}</strong><br><span>${lines}</span>`;
+    }
+
+    function upsertClaim(msg) {
+      claimRequests = claimRequests.filter(c => c.username !== msg.username);
+      claimRequests.push({ username: msg.username, displayName: msg.displayName || msg.username, pawnId: msg.pawnId, pawnName: msg.pawnName || `#${msg.pawnId}` });
+    }
+
+    function renderClaims() {
+      const el = $('claim-list');
+      if (!claimRequests.length) { el.innerHTML = '<span class="none">No pending claims</span>'; return; }
+      el.innerHTML = claimRequests.map(c => `<div class="claim-card">
+        <span>${esc(c.displayName)} → ${esc(c.pawnName)}</span>
+        <span class="claim-actions">
+          <button onclick="approveClaim('${esc(c.username)}', ${c.pawnId})">Approve</button>
+          <button onclick="rejectClaim('${esc(c.username)}', ${c.pawnId})">Reject</button>
+        </span>
+      </div>`).join('');
+    }
+
+    // ── Selection ──
+    window.selectViewer = function(login) {
+      selectedViewer = selectedViewer === login ? null : login;
+      const v = liveViewers.find(v => v.login === login);
+      $('selected-label').textContent = selectedViewer ? `Selected: ${v?.displayName || login}` : '';
+      $('timeout-bar').style.display = selectedViewer ? '' : 'none';
+      updateButtons();
+      renderViewers(liveViewers);
+    };
+    window.selectColonist = function(id) {
+      selectedColonist = selectedColonist === id ? null : id;
+      updateButtons();
+      renderColonists();
+    };
+
+    function updateButtons() {
+      $('btn-assign').disabled = !(selectedViewer && selectedColonist);
+      $('btn-unassign').disabled = !selectedViewer;
+      $('btn-kick').disabled = !selectedViewer;
+      $('btn-ban').disabled = !selectedViewer;
+      $('btn-ticket').disabled = !selectedViewer;
+    }
+
+    // ── Actions ──
+    $('btn-assign').addEventListener('click', async () => {
+      if (!selectedViewer || !selectedColonist) return;
+      await api('/admin/host-command', { command: { type: 'assign', username: selectedViewer, pawnId: selectedColonist } });
+      log(`Assigned ${selectedViewer} → colonist #${selectedColonist}`);
+      selectedViewer = null; selectedColonist = null; updateButtons();
+    });
+
+    $('btn-unassign').addEventListener('click', async () => {
+      if (!selectedViewer) return;
+      await api('/admin/host-command', { command: { type: 'unassign', username: selectedViewer } });
+      log(`Unassigned ${selectedViewer}`);
+      selectedViewer = null; updateButtons();
+    });
+
+    $('btn-spawn').addEventListener('click', async () => {
+      const name = selectedViewer || prompt('Spawn colonist for which viewer? (leave blank for unassigned)');
+      await api('/admin/host-command', { command: { type: 'command', action: 'spawn_colonist', username: name || '' } });
+      log(`Spawn requested${name ? ' for ' + name : ''}`);
+    });
+
+    $('btn-kick').addEventListener('click', async () => {
+      if (!selectedViewer) return;
+      if (!confirm(`Kick ${selectedViewer}? They can rejoin.`)) return;
+      await api('/admin/kick', { username: selectedViewer });
+      log(`Kicked ${selectedViewer}`);
+      selectedViewer = null; updateButtons();
+    });
+
+    $('btn-ban').addEventListener('click', async () => {
+      if (!selectedViewer) return;
+      if (!confirm(`Ban ${selectedViewer}? This is permanent until unbanned.`)) return;
+      await api('/admin/host-command', { command: { type: 'command', action: 'ban', adminCommand: true, source: 'admin', username: selectedViewer } });
+      log(`Banned ${selectedViewer}`);
+      selectedViewer = null; updateButtons();
+    });
+
+    $('btn-ticket').addEventListener('click', async () => {
+      if (!selectedViewer) return;
+      await api('/admin/host-command', { command: { type: 'command', action: 'grant_ticket', adminCommand: true, source: 'admin', username: selectedViewer } });
+      log(`+1 ticket granted to ${selectedViewer}`);
+    });
+
+    window.doTimeout = async function(seconds) {
+      if (!selectedViewer) return;
+      await api('/admin/host-command', { command: { type: 'command', action: 'timeout', adminCommand: true, source: 'admin', username: selectedViewer, seconds } });
+      log(`Timed out ${selectedViewer} for ${seconds}s`);
+    };
+
+    window.approveClaim = async function(username, pawnId) {
+      await api('/admin/host-command', { command: { type: 'assign', username, pawnId } });
+      claimRequests = claimRequests.filter(c => c.username !== username);
+      renderClaims();
+      log(`Approved ${username} → colonist #${pawnId}`);
+    };
+
+    window.rejectClaim = async function(username, pawnId) {
+      await api('/admin/host-command', { command: { type: 'claim_response', username, pawnId, approved: false } });
+      claimRequests = claimRequests.filter(c => c.username !== username);
+      renderClaims();
+      log(`Rejected ${username}'s claim`);
+    };
+
+    $('btn-broadcast').addEventListener('click', async () => {
+      const msg = $('msg-input').value.trim();
+      if (!msg) return;
+      await api('/admin/message', { message: msg });
+      log(`Broadcast: ${msg}`);
+      $('msg-input').value = '';
+    });
+
+    $('btn-start-vote').addEventListener('click', async () => {
+      const q = $('vote-q').value.trim();
+      const opts = $('vote-opts').value.trim();
+      if (!q || !opts) { log('Vote needs a question and options'); return; }
+      await api('/admin/host-command', { command: { type: 'command', action: 'start_vote', adminCommand: true, source: 'admin', question: q, options: opts } });
+      log(`Vote started: ${q}`);
+      $('vote-q').value = ''; $('vote-opts').value = '';
+    });
+
+    $('btn-end-vote').addEventListener('click', async () => {
+      await api('/admin/host-command', { command: { type: 'command', action: 'end_vote', adminCommand: true, source: 'admin' } });
+      log('Vote ended');
+    });
+
+    // ── Helpers ──
+    function formatUptime(s) {
+      const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function log(text) {
+      const el = $('event-log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+      el.appendChild(entry);
+      while (el.children.length > 100) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight;
+    }
+  </script>
+</body>
+</html>

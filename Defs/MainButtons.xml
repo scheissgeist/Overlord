@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <MainButtonDef>
+    <defName>Overlord_MainButton</defName>
+    <label>Overlord</label>
+    <order>200</order>
+    <buttonVisible>true</buttonVisible>
+    <tabWindowClass>Overlord.OverlordMainTabWindow</tabWindowClass>
+  </MainButtonDef>
+</Defs>

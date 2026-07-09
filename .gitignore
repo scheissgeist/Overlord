@@ -1,0 +1,41 @@
+# Build output
+obj/
+bin/
+Assemblies/*.dll
+Assemblies/*.pdb
+
+# IDE
+.vscode/
+.vs/
+*.user
+*.suo
+
+# Node
+relay-server/node_modules/
+relay-server/logs/
+relay-server/.env
+relay-server/.env.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local testing artifacts
+docs/viewer_ui_smoke*.png
+
+# --- Keep off public GitHub ---
+# Personal agent rules (health context, private project registry)
+AGENTS.md
+
+# Private ops / session notes (live URLs, emails, machine IDs)
+docs/SESSION_LOG_*.md
+docs/HANDOFF_*.md
+docs/TASK_*.md
+docs/IMPLEMENTATION_STATUS.md
+
+# Personal Fly app name / region — use fly.toml.example
+relay-server/fly.toml
+
+# Release staging
+dist/
+*.zip

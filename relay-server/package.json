@@ -1,0 +1,22 @@
+{
+  "name": "overlord-relay",
+  "version": "1.0.0",
+  "description": "Relay server for Overlord RimWorld mod — bridges Twitch viewers to the game host",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "fly": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/fly.ps1",
+    "deploy:fly": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/fly.ps1 deploy",
+    "smoke:intake": "node scripts/smoke-viewer-intake.js",
+    "smoke:tilemap": "node scripts/smoke-tilemap.js",
+    "smoke:relay-cache": "node scripts/smoke-relay-cache.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

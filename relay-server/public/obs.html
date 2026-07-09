@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Overlord OBS Overlay</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; color: #fff; }
+
+    #overlay { position: relative; width: 100%; height: 100%; }
+
+    /* Kill feed — bottom left */
+    #kill-feed { position: absolute; bottom: 20px; left: 20px; display: flex; flex-direction: column; gap: 4px; max-width: 350px; }
+    .kill-entry { background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px; font-size: 14px; animation: fadeIn 0.3s ease, fadeOut 0.5s ease 8s forwards; display: flex; align-items: center; gap: 8px; }
+    .kill-entry .skull { font-size: 16px; }
+    .kill-entry .name { color: #f87171; font-weight: 600; }
+
+    /* Viewer bar — top right */
+    #viewer-bar { position: absolute; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+    .viewer-tag { background: rgba(0,0,0,0.65); padding: 4px 10px; border-radius: 3px; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    .viewer-tag .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .viewer-tag .dot.assigned { background: #4ade80; }
+    .viewer-tag .dot.waiting { background: #fbbf24; }
+    .viewer-tag .pawn-name { color: #a0a0a8; font-size: 10px; }
+
+    /* Event feed — top center */
+    #event-feed { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .event-entry { background: rgba(0,0,0,0.75); padding: 8px 20px; border-radius: 4px; font-size: 15px; font-weight: 600; animation: fadeIn 0.3s ease, fadeOut 0.5s ease 5s forwards; }
+    .event-entry.assign { color: #60a5fa; }
+    .event-entry.death { color: #f87171; }
+    .event-entry.vote { color: #a78bfa; }
+    .event-entry.event { color: #fbbf24; }
+
+    /* Vote display — bottom right */
+    #vote-display { position: absolute; bottom: 20px; right: 20px; max-width: 300px; display: none; }
+    .vote-box { background: rgba(0,0,0,0.8); border: 1px solid rgba(167,139,250,0.4); border-radius: 6px; padding: 12px 16px; }
+    .vote-question { font-size: 14px; font-weight: 600; color: #a78bfa; margin-bottom: 8px; }
+    .vote-option { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 13px; }
+    .vote-bar-bg { flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin: 0 8px; overflow: hidden; }
+    .vote-bar { height: 100%; background: #a78bfa; border-radius: 2px; transition: width 0.3s; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="viewer-bar"></div>
+    <div id="event-feed"></div>
+    <div id="kill-feed"></div>
+    <div id="vote-display"></div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const secret = new URLSearchParams(location.search).get('secret') || '';
+
+    // Connect as admin to get all broadcasts
+    let ws = null;
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}/ws?role=admin&secret=${encodeURIComponent(secret)}`);
+      ws.onmessage = e => { try { handleMsg(JSON.parse(e.data)); } catch {} };
+      ws.onclose = () => setTimeout(connect, 3000);
+      ws.onerror = () => ws.close();
+    }
+    connect();
+
+    let viewers = {}; // login -> { displayName, pawnName }
+
+    function handleMsg(msg) {
+      switch (msg.type) {
+        case 'admin_sync':
+          (msg.viewers || []).forEach(v => { viewers[v.login] = { displayName: v.login, pawnName: null }; });
+          renderViewerBar();
+          break;
+
+        case 'viewer_update':
+          if (msg.action === 'joined') {
+            viewers[msg.login] = { displayName: msg.displayName || msg.login, pawnName: null };
+            addEvent(`${msg.displayName || msg.login} joined`, 'assign');
+          } else if (msg.action === 'left') {
+            delete viewers[msg.login];
+          }
+          renderViewerBar();
+          break;
+
+        case 'colonist_list':
+          // Update pawn assignments
+          const colonists = msg.colonists || [];
+          for (const login in viewers) viewers[login].pawnName = null;
+          colonists.forEach(c => {
+            if (c.assignedTo && viewers[c.assignedTo]) {
+              viewers[c.assignedTo].pawnName = c.name;
+            }
+          });
+          renderViewerBar();
+          break;
+
+        case 'pawn_died':
+          addKill(msg.pawnName || 'Colonist', msg.username || '');
+          break;
+
+        case 'chat':
+          // Could display chat on overlay if desired
+          break;
+
+        case 'vote_update':
+          renderVote(msg);
+          break;
+
+        case 'game_event':
+          addEvent(msg.message || 'Event triggered', 'event');
+          break;
+
+        case 'host_status':
+          if (!msg.connected) addEvent('Host disconnected', 'death');
+          break;
+      }
+    }
+
+    function renderViewerBar() {
+      const el = $('viewer-bar');
+      el.innerHTML = Object.entries(viewers).map(([login, v]) => {
+        const assigned = v.pawnName !== null;
+        return `<div class="viewer-tag">
+          <span class="dot ${assigned ? 'assigned' : 'waiting'}"></span>
+          <span>${v.displayName}</span>
+          ${assigned ? `<span class="pawn-name">→ ${v.pawnName}</span>` : ''}
+        </div>`;
+      }).join('');
+    }
+
+    function addKill(pawnName, viewer) {
+      const el = $('kill-feed');
+      const entry = document.createElement('div');
+      entry.className = 'kill-entry';
+      entry.innerHTML = `<span class="skull">💀</span><span class="name">${pawnName}</span> has fallen${viewer ? ` (${viewer})` : ''}`;
+      el.appendChild(entry);
+      setTimeout(() => entry.remove(), 9000);
+      while (el.children.length > 5) el.removeChild(el.firstChild);
+    }
+
+    function addEvent(text, cls) {
+      const el = $('event-feed');
+      const entry = document.createElement('div');
+      entry.className = `event-entry ${cls}`;
+      entry.textContent = text;
+      el.appendChild(entry);
+      setTimeout(() => entry.remove(), 6000);
+      while (el.children.length > 4) el.removeChild(el.firstChild);
+    }
+
+    function renderVote(msg) {
+      const el = $('vote-display');
+      if (!msg.active) { el.style.display = 'none'; return; }
+      el.style.display = 'block';
+      const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
+      el.innerHTML = `<div class="vote-box">
+        <div class="vote-question">${msg.question || 'Vote'}</div>
+        ${(msg.options || []).map(o => `<div class="vote-option">
+          <span>${o.label}</span>
+          <div class="vote-bar-bg"><div class="vote-bar" style="width:${(o.votes||0)/total*100}%"></div></div>
+          <span>${o.votes || 0}</span>
+        </div>`).join('')}
+      </div>`;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Overlord</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="style.css?v=20260709-buy-polish-v1">
+</head>
+<body data-twitch-client-id="">
+  <div id="app">
+
+    <div id="screen-login" class="screen active">
+      <div class="login-panel">
+        <div class="login-masthead">
+          <div class="login-wordmark">Overlord</div>
+          <div class="login-descriptor">Command a colonist. Shape their fate.</div>
+        </div>
+        <div class="login-ornament" aria-hidden="true"><span></span><span class="login-ornament-diamond"></span><span></span></div>
+        <div class="login-action-row">
+          <button id="btn-twitch" class="btn-twitch">Connect with Twitch</button>
+          <div id="local-login" class="local-login hidden">
+            <input id="username-input" class="login-input" type="text" placeholder="Enter a viewer name…" maxlength="25" autocomplete="off">
+            <button id="btn-local-connect" class="btn-local">Enter</button>
+          </div>
+        </div>
+        <div id="login-error" class="error hidden"></div>
+        <p id="login-subtitle" class="subtitle hidden"></p>
+      </div>
+      <div class="login-build-crumb" id="login-build-crumb"></div>
+    </div>
+
+    <div id="screen-lobby" class="screen">
+      <div class="ops-header lobby-ops">
+        <span class="ops-mark">overlord</span>
+        <span class="ops-divider">·</span>
+        <span id="lobby-user" class="ops-user"></span>
+        <span class="ops-divider">·</span>
+        <span id="lobby-phase" class="phase-dot" data-phase="lobby"></span>
+        <span id="lobby-status" class="ops-status"></span>
+        <span class="ops-spacer"></span>
+        <span id="lobby-tickets" class="ops-tickets"></span>
+        <span id="lobby-capabilities" class="ops-caps"></span>
+      </div>
+
+      <div id="lobby-title" class="lobby-title-row">
+        <span class="lobby-title-text">Waiting for assignment</span>
+      </div>
+      <p id="lobby-msg" class="lobby-msg"></p>
+      <div class="lobby-divider"></div>
+
+      <div id="lobby-claim-note" class="lobby-note hidden"></div>
+      <div id="lobby-death-card" class="lobby-death hidden">
+        <div id="lobby-death-name" class="lobby-death-name"></div>
+        <div id="lobby-death-copy" class="lobby-death-copy"></div>
+      </div>
+
+      <div id="colonist-list" class="colonist-list"></div>
+    </div>
+
+    <div id="screen-main" class="screen">
+
+      <!-- Full-screen map canvas — everything else floats over it -->
+      <div id="map-wrap">
+        <canvas id="map-canvas"></canvas>
+        <div id="map-zoom-label" class="map-zoom-label hidden">1.0x</div>
+        <div id="map-zoom-control" class="map-zoom-control">
+          <button id="btn-follow-pawn" type="button" class="active" title="Auto-follow your pawn">Follow</button>
+          <button id="btn-zoom-out" type="button" title="Zoom out">−</button>
+          <button id="btn-zoom-reset" type="button" title="Reset zoom / re-follow">1×</button>
+          <button id="btn-zoom-in" type="button" title="Zoom in">+</button>
+          <button id="btn-bright-down" type="button" title="Dimmer map">◐</button>
+          <button id="btn-bright-reset" type="button" class="map-bright-label" title="Reset brightness">1.2×</button>
+          <button id="btn-bright-up" type="button" title="Brighter map">☀</button>
+        </div>
+        <div id="map-hint" class="map-hint hidden">Click map to move</div>
+        <div id="map-waiting" class="map-waiting hidden">Waiting for map…</div>
+      </div>
+
+      <!-- Colony stock totals (host setting; assigned viewers only) -->
+      <aside id="resource-readout" class="resource-readout hidden" aria-label="Colony resources">
+        <button id="resource-readout-toggle" type="button" class="resource-readout-toggle" title="Collapse stock list">Stock</button>
+        <div id="resource-readout-body" class="resource-readout-body"></div>
+      </aside>
+
+      <!-- World pill: top-right, RimWorld-style date+speed -->
+      <div id="world-pill" class="world-pill parchment-panel">
+        <div id="game-info" class="world-info"></div>
+        <div id="host-speed" class="host-speed wait">Host waiting</div>
+      </div>
+
+      <!-- RimWorld inspect pane: bottom-left, portrait + identity + needs -->
+      <div id="inspect-pane" class="inspect-pane wood-panel">
+        <div class="inspect-portrait">
+          <svg id="pawn-portrait-placeholder" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="11" r="5.5" fill="#3a342a"/>
+            <ellipse cx="16" cy="27" rx="9" ry="8" fill="#3a342a"/>
+          </svg>
+          <img id="pawn-portrait" src="" alt="">
+        </div>
+        <div class="inspect-body">
+          <div class="inspect-head">
+            <div id="pawn-name" class="inspect-name"></div>
+            <span id="pawn-state-pill" class="state-pill hidden"></span>
+          </div>
+          <div id="pawn-subtitle" class="inspect-job"></div>
+          <div id="needs-panel" class="needs-panel">
+            <div class="need-row" id="need-food"></div>
+            <div class="need-row" id="need-rest"></div>
+            <div class="need-row" id="need-joy"></div>
+            <div class="need-row" id="need-mood"></div>
+          </div>
+          <div class="inspect-vitals">
+            <span id="pawn-health" class="vital"></span>
+            <span id="pawn-mood" class="vital"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Command bar — floats at bottom center -->
+      <div id="cmd-bar" aria-label="Pawn commands">
+        <button class="cmd-btn" id="btn-draft-toggle" data-action="draft">Draft</button>
+        <button class="cmd-btn" data-action="move">Walk</button>
+        <button class="cmd-btn" data-action="attack">Attack</button>
+        <button class="cmd-btn" id="btn-buy-menu" type="button" data-command-menu-open="buy">Buy</button>
+        <button class="cmd-btn" id="btn-command-menu" type="button" data-command-menu-open>Orders</button>
+      </div>
+
+      <!-- Bottom-right drawer: activity feed, pawn info, chat -->
+      <div id="bottom-panel" class="collapsed parchment-panel">
+        <div id="drawer-bar">
+          <div id="drawer-summary">
+            <div id="drawer-preview">Idle</div>
+          </div>
+          <div id="drawer-actions">
+            <button id="btn-sound-toggle" class="drawer-btn" type="button" title="Mute sound">🔊</button>
+            <button id="btn-drawer-open" class="drawer-btn" title="Show details">▴</button>
+            <button id="btn-drawer-close" class="drawer-btn hidden" title="Hide details">▾</button>
+          </div>
+        </div>
+        <div id="drawer-detail">
+          <div id="tab-bar" class="tab-row">
+            <button class="tab active" data-tab="health">Health</button>
+            <button class="tab" data-tab="skills">Skills</button>
+            <button class="tab" data-tab="gear">Gear</button>
+            <button class="tab" data-tab="social">Social</button>
+            <button class="tab" data-tab="events">Events</button>
+            <button class="tab" data-tab="log">Log</button>
+            <button class="tab" data-tab="chat">Chat</button>
+          </div>
+          <div id="tab-content">
+            <div id="tab-log" class="tab-pane active">
+              <div id="log-panel"></div>
+            </div>
+            <div id="tab-skills" class="tab-pane">
+              <div id="skills-summary" class="skills-summary"></div>
+              <div id="skills-list"></div>
+            </div>
+            <div id="tab-health" class="tab-pane">
+              <div id="bio-summary" class="bio-summary"></div>
+              <div id="traits-list" class="health-traits"></div>
+              <div id="health-list" class="health-section"></div>
+              <div id="capacities-list" class="health-section"></div>
+              <div id="thoughts-list" class="health-section"></div>
+            </div>
+            <div id="tab-social" class="tab-pane">
+              <div id="social-list"></div>
+            </div>
+            <div id="tab-gear" class="tab-pane">
+              <div id="gear-list"></div>
+              <div id="inventory-list" class="stack-section"></div>
+            </div>
+            <div id="tab-events" class="tab-pane">
+              <div id="event-buttons"></div>
+              <div id="vote-area"></div>
+            </div>
+            <div id="tab-chat" class="tab-pane">
+              <div id="chat-log"></div>
+              <div id="chat-bar">
+                <input id="chat-input" type="text" placeholder="Message..." maxlength="120" autocomplete="off">
+                <button id="btn-chat">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom-left status -->
+      <div id="status-bar">
+        <span id="status-text">Connected</span>
+        <span id="pawn-job"></span>
+      </div>
+
+    </div>
+
+    <div id="context-menu" class="context-menu hidden"></div>
+
+    <div id="command-window" class="command-window hidden" role="dialog" aria-modal="false" aria-label="Pawn orders">
+      <div class="command-window-panel wood-panel">
+        <div class="command-window-head">
+          <div class="command-head-identity">
+            <div class="command-head-portrait" id="command-head-portrait">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="11" r="5.5" fill="#3a342a"/><ellipse cx="16" cy="27" rx="9" ry="8" fill="#3a342a"/></svg>
+              <img id="command-portrait-img" src="" alt="">
+            </div>
+            <div>
+              <div class="window-kicker">Orders</div>
+              <div id="command-window-title" class="command-window-title">Waiting for pawn</div>
+            </div>
+          </div>
+          <div id="command-window-status" class="command-window-status"></div>
+          <button id="btn-command-close" class="drawer-btn" type="button">Close</button>
+        </div>
+        <div class="command-window-main">
+          <div id="command-menu-nav" class="command-menu-nav"></div>
+          <div id="command-menu-content" class="command-menu-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="overlay-disconnected" class="overlay hidden">
+      <div class="overlay-box">
+        <p>Disconnected</p>
+        <button id="btn-reconnect">Reconnect</button>
+      </div>
+    </div>
+
+  </div>
+  <script src="tilemap.js?v=20260502-intake-v5" defer></script>
+  <script src="app.js?v=20260502-intake-v5" defer></script>
+</body>
+</html>

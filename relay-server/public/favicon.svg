@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Overlord">
+  <rect width="32" height="32" rx="4" fill="#1a1610"/>
+  <rect x="1" y="1" width="30" height="30" rx="3" fill="none" stroke="#3d3120" stroke-width="1"/>
+  <!-- Crown body -->
+  <path fill="#c8922a" d="M6 14 L9 6 L14 11 L16 4 L18 11 L23 6 L26 14 L26 26 L6 26 Z"/>
+  <!-- Crown shading -->
+  <path fill="#9e6e1a" d="M6 14 L6 26 L26 26 L26 14 L23 6 L18 11 L16 4 L14 11 L9 6 Z" opacity="0.25"/>
+  <!-- Gem -->
+  <circle cx="16" cy="19" r="3" fill="#1a1610"/>
+  <circle cx="16" cy="19" r="2.2" fill="#e8b84b"/>
+  <circle cx="14.9" cy="17.9" r="0.7" fill="#fff" opacity="0.45"/>
+</svg>
