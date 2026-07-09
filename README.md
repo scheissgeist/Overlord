@@ -8,6 +8,10 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 
 There is no shared public server. Each streamer runs their own relay.
 
+![Overlord in-game host tab — viewer sessions, assignment board, and permissions](docs/images/overlord-host-ui.png)
+
+*In-game Overlord tab: assign viewers, manage colonists, and set permissions.*
+
 ---
 
 ## How it fits together
