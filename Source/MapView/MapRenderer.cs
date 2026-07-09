@@ -305,16 +305,17 @@ namespace Overlord
 
         private int GetFramesPerUpdate(int activeViewerCount)
         {
-            // Budget more frames per end-of-frame pump so overdue viewers catch up.
+            // How many full off-screen map re-renders may run in a SINGLE end-of-frame
+            // pump. Each render is a Camera.Render + ReadPixels (GPU stall) + EncodeToJPG
+            // on the main thread, so allowing 5-6 in one frame produces a visible host
+            // hitch under multi-viewer load. Cap at 2 (3 for large audiences) — overdue
+            // viewers still catch up across consecutive pumps (~10/s), they just don't all
+            // re-render in the same frame. Solo/2-viewer behaviour is unchanged.
             if (activeViewerCount <= 2)
                 return activeViewerCount;
-            if (activeViewerCount <= 4)
-                return 3;
             if (activeViewerCount <= 8)
-                return 4;
-            if (activeViewerCount <= 12)
-                return 5;
-            return 6;
+                return 2;
+            return 3;
         }
 
         private void RefreshSettings()

@@ -65,22 +65,29 @@ namespace Overlord
         {
             if (pawn == null) return null;
 
-            // Prefer live session.assignedPawn over pawnToViewer — the reverse map can
-            // briefly drift, and ownership decisions must not follow a stale username.
+            // Fast path: O(1) reverse-map lookup, but only trust it when the session's
+            // live assignedPawn still matches — that validation is exactly what made the
+            // old linear-first scan correct. A validated hit is authoritative; a miss or
+            // a stale entry falls through to the linear scan below, same as before. This
+            // turns the common (correctly-mapped) case into O(1), which matters because
+            // ColonistBarOverlay.Draw calls this once per colonist every GUI event.
+            if (pawnToViewer.TryGetValue(pawn.thingIDNumber, out string mappedUser))
+            {
+                var mappedSession = GetSession(mappedUser);
+                if (mappedSession?.assignedPawn == pawn)
+                    return mappedSession;
+                // Stale reverse map entry — drop it so claim/assign don't treat this as taken.
+                pawnToViewer.Remove(pawn.thingIDNumber);
+            }
+
+            // Fallback: the reverse map missed or was stale. Scan live session state, which
+            // is the source of truth for ownership.
             foreach (var session in sessions.Values)
             {
                 if (session?.assignedPawn == pawn)
                     return session;
             }
 
-            if (pawnToViewer.TryGetValue(pawn.thingIDNumber, out string username))
-            {
-                var session = GetSession(username);
-                if (session?.assignedPawn == pawn)
-                    return session;
-                // Stale reverse map entry — drop it so claim/assign don't treat this as taken.
-                pawnToViewer.Remove(pawn.thingIDNumber);
-            }
             return null;
         }
 

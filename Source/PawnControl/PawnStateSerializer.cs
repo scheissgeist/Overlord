@@ -15,6 +15,56 @@ namespace Overlord
     /// </summary>
     public static class PawnStateSerializer
     {
+        // Opinion sampling: relations.OpinionOf(other) is evaluated for every other free
+        // colonist inside ComputeStateSignature — O(colonists^2) across all viewers, ~6x/s.
+        // Opinions move on the order of minutes, so we sample the opinion sub-hash at most
+        // once per second per pawn and reuse it between samples. A changed opinion is still
+        // reflected in the signature within <=1s, which flips the hash and triggers a
+        // re-serialize that reads the current opinion values.
+        private const int OpinionSampleIntervalTicks = 60; // ~1s at 1x
+        private static readonly Dictionary<int, int> opinionHashCache = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> opinionSampleTickCache = new Dictionary<int, int>();
+
+        private static int GetOpinionSubHash(Pawn pawn)
+        {
+            if (pawn?.relations == null || pawn.Map == null)
+                return 0;
+
+            int id = pawn.thingIDNumber;
+            int now = Find.TickManager?.TicksGame ?? 0;
+            if (opinionSampleTickCache.TryGetValue(id, out int lastTick) &&
+                now - lastTick < OpinionSampleIntervalTicks &&
+                opinionHashCache.TryGetValue(id, out int cached))
+            {
+                return cached;
+            }
+
+            int sub = 0;
+            foreach (var other in pawn.Map.mapPawns.FreeColonists)
+            {
+                if (other == pawn || other.Dead) continue;
+                try
+                {
+                    sub = sub * 31 + other.thingIDNumber;
+                    sub = sub * 31 + pawn.relations.OpinionOf(other);
+                }
+                catch { }
+            }
+
+            // Keep the sample caches from growing unbounded across a long session with
+            // many pawn turnovers. Only assigned colonists reach here, so this realistically
+            // never trips; the clear just rebuilds lazily on next access.
+            if (opinionHashCache.Count > 256)
+            {
+                opinionHashCache.Clear();
+                opinionSampleTickCache.Clear();
+            }
+
+            opinionHashCache[id] = sub;
+            opinionSampleTickCache[id] = now;
+            return sub;
+        }
+
         public static string Serialize(Pawn pawn)
         {
             if (pawn == null)
@@ -490,6 +540,63 @@ namespace Overlord
             return options;
         }
 
+        private const float NearbyEquipmentRadius = 24f;
+
+        /// <summary>
+        /// Enumerates spawned weapons/apparel within NearbyEquipmentRadius of the pawn.
+        /// Uses the (small) Weapon and Apparel ThingRequestGroup lists rather than a
+        /// whole-map listerThings.AllThings scan, so cost is O(loose weapons+apparel),
+        /// independent of total colony thing count. Does NOT apply reachability/forbidden
+        /// filtering — callers that need it add it (Serialize does; the fingerprint doesn't).
+        /// </summary>
+        private static IEnumerable<Thing> EnumerateNearbyEquipmentCandidates(Pawn pawn, Map map)
+        {
+            float radiusSq = NearbyEquipmentRadius * NearbyEquipmentRadius;
+            IntVec3 origin = pawn.Position;
+
+            var weapons = map.listerThings.ThingsInGroup(ThingRequestGroup.Weapon);
+            for (int i = 0; i < weapons.Count; i++)
+            {
+                var thing = weapons[i];
+                if (thing?.def == null || !thing.Spawned || thing.Destroyed)
+                    continue;
+                if ((thing.Position - origin).LengthHorizontalSquared > radiusSq)
+                    continue;
+                yield return thing;
+            }
+
+            var apparel = map.listerThings.ThingsInGroup(ThingRequestGroup.Apparel);
+            for (int i = 0; i < apparel.Count; i++)
+            {
+                var thing = apparel[i];
+                if (thing?.def == null || !thing.Spawned || thing.Destroyed)
+                    continue;
+                if ((thing.Position - origin).LengthHorizontalSquared > radiusSq)
+                    continue;
+                yield return thing;
+            }
+        }
+
+        /// <summary>
+        /// Cheap change-fingerprint of nearby loose equipment for ComputeStateSignature.
+        /// Hashes only thingIDNumber + def shortHash for each nearby weapon/apparel — no
+        /// IsForbidden, no CanReserveAndReach pathfinding, no sort, no dictionary build.
+        /// A change here (item picked up, dropped, or destroyed nearby) still flips the hash,
+        /// so the full reachability-filtered GetNearbyEquipment in Serialize() still fires.
+        /// </summary>
+        private static void AddNearbyEquipmentFingerprint(ref int hash, Pawn pawn)
+        {
+            Map map = pawn?.Map;
+            if (map == null)
+                return;
+
+            foreach (Thing thing in EnumerateNearbyEquipmentCandidates(pawn, map))
+            {
+                hash = hash * 31 + thing.thingIDNumber;
+                hash = hash * 31 + thing.def.shortHash;
+            }
+        }
+
         private static List<Dictionary<string, object>> GetNearbyEquipment(Pawn pawn)
         {
             var items = new List<Dictionary<string, object>>();
@@ -497,15 +604,8 @@ namespace Overlord
             if (map == null)
                 return items;
 
-            foreach (Thing thing in map.listerThings.AllThings)
+            foreach (Thing thing in EnumerateNearbyEquipmentCandidates(pawn, map))
             {
-                if (thing?.def == null || !thing.Spawned || thing.Destroyed)
-                    continue;
-                if (!thing.def.IsWeapon && thing.def.apparel == null)
-                    continue;
-                if (thing.Position.DistanceTo(pawn.Position) > 24f)
-                    continue;
-
                 try
                 {
                     if (thing.IsForbidden(pawn))
@@ -773,19 +873,9 @@ namespace Overlord
                         }
                     }
 
-                    if (pawn.Map != null)
-                    {
-                        foreach (var other in pawn.Map.mapPawns.FreeColonists)
-                        {
-                            if (other == pawn || other.Dead) continue;
-                            try
-                            {
-                                hash = hash * 31 + other.thingIDNumber;
-                                hash = hash * 31 + pawn.relations.OpinionOf(other);
-                            }
-                            catch { }
-                        }
-                    }
+                    // Opinions are sampled at ~1 Hz (see GetOpinionSubHash) instead of the
+                    // full O(colonists^2) OpinionOf evaluation every ~167ms per viewer.
+                    hash = hash * 31 + GetOpinionSubHash(pawn);
                 }
 
                 if (pawn.inventory?.innerContainer != null)
@@ -799,16 +889,15 @@ namespace Overlord
                     }
                 }
 
-                if (pawn.Map != null)
-                {
-                    foreach (var item in GetNearbyEquipment(pawn))
-                    {
-                        if (!item.TryGetValue("id", out object id) || !item.TryGetValue("defName", out object defName))
-                            continue;
-                        hash = hash * 31 + Convert.ToInt32(id);
-                        AddStringHash(ref hash, defName?.ToString());
-                    }
-                }
+                // Cheap nearby-equipment fingerprint. The full GetNearbyEquipment
+                // (whole-map listerThings.AllThings scan + CanReserveAndReach pathfinding
+                // + IsForbidden + sort + per-item dict build) is far too heavy to run per
+                // viewer every sync cycle just to detect a change — it defeated the whole
+                // "hash first, serialize only on change" optimization. Hash only id +
+                // def shortHash for weapons/apparel within the same 24-cell radius, via the
+                // far smaller ThingRequestGroup lists instead of AllThings. Serialize() still
+                // does the full reachability-filtered build when this fingerprint changes.
+                AddNearbyEquipmentFingerprint(ref hash, pawn);
 
                 if (pawn.story != null)
                 {
