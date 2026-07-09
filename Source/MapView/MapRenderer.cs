@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Experimental.Rendering;
 using Verse;
 using RimWorld;
 
@@ -44,6 +46,17 @@ namespace Overlord
         private EndOfFrameRenderPump renderPump;
         private bool captureInProgress;
         private int initFailCount;
+
+        // ── Async capture pipeline ──────────────────────────────────────────────
+        // AsyncGPUReadback removes the ReadPixels GPU→CPU pipeline stall, and the
+        // JPEG encode runs on the send worker via ImageConversion.EncodeArrayToJPG
+        // (raw-buffer API, no Texture2D). If the off-thread encode ever throws, the
+        // pipeline flips to the legacy main-thread ReadPixels+EncodeToJPG path.
+        private bool asyncSupported;              // SystemInfo, resolved once on main thread
+        private bool gpuTopDown;                  // D3D readback rows are top-down
+        private volatile bool asyncPipelineBroken;
+        private int pendingReadbacks;             // main-thread only (callbacks on main thread)
+        private readonly object statsLock = new object();
         private float lastStatsLogTime;
         private int statsFrames;
         private int statsSkipped;
@@ -60,6 +73,12 @@ namespace Overlord
         {
             RefreshSettings();
             EnsureRenderPump();
+
+            asyncSupported = SystemInfo.supportsAsyncGPUReadback;
+            gpuTopDown = SystemInfo.graphicsUVStartsAtTop;
+            asyncPipelineBroken = false;
+            pendingReadbacks = 0;
+            LogUtil.Log($"Map capture pipeline: asyncReadback={asyncSupported} uvTopDown={gpuTopDown}");
 
             threadRunning = true;
             sendThread = new Thread(SendWorker)
@@ -88,6 +107,7 @@ namespace Overlord
             currentViewers = null;
             threadRunning = false;
             sendThread?.Join(2000);
+            sendQueue.Clear(); // drop un-encoded frames from the ending session
             frameCounter.Clear();
             initialized = false;
         }
@@ -162,10 +182,12 @@ namespace Overlord
             }
 
             float effectiveInterval = GetEffectiveInterval(activeSessions.Count);
-            int queueDepth = sendQueue.Count;
+            // Backpressure counts frames still in flight on the GPU (async readbacks)
+            // as well as frames waiting on the encode/send worker.
+            int queueDepth = sendQueue.Count + pendingReadbacks;
             if (queueDepth > Math.Max(2, activeSessions.Count * 2))
             {
-                statsSkipped++;
+                lock (statsLock) { statsSkipped++; }
                 MaybeLogStats(activeSessions.Count, queueDepth, effectiveInterval);
                 return;
             }
@@ -220,9 +242,9 @@ namespace Overlord
 
             for (int i = 0; i < due.Count && rendered < framesThisUpdate; i++)
             {
-                if (sendQueue.Count > Math.Max(2, activeSessions.Count * 2))
+                if (sendQueue.Count + pendingReadbacks > Math.Max(2, activeSessions.Count * 2))
                 {
-                    statsSkipped++;
+                    lock (statsLock) { statsSkipped++; }
                     break;
                 }
 
@@ -353,14 +375,18 @@ namespace Overlord
 
         private void RecordFrameStats(long renderMs, long encodeMs, int jpegBytes, int frameWidth, int frameHeight, int quality, string cameraMode)
         {
-            statsFrames++;
-            statsRenderMs += renderMs;
-            statsEncodeMs += encodeMs;
-            statsJpegBytes += jpegBytes;
-            statsLastRenderWidth = frameWidth;
-            statsLastRenderHeight = frameHeight;
-            statsLastQuality = quality;
-            statsLastCameraMode = cameraMode ?? "pawn";
+            // Called from the encode worker in the async pipeline — guard the counters.
+            lock (statsLock)
+            {
+                statsFrames++;
+                statsRenderMs += renderMs;
+                statsEncodeMs += encodeMs;
+                statsJpegBytes += jpegBytes;
+                statsLastRenderWidth = frameWidth;
+                statsLastRenderHeight = frameHeight;
+                statsLastQuality = quality;
+                statsLastCameraMode = cameraMode ?? "pawn";
+            }
         }
 
         private void MaybeLogStats(int activeViewerCount, int queueDepth, float effectiveInterval)
@@ -368,14 +394,34 @@ namespace Overlord
             if (Time.time - lastStatsLogTime < StatsIntervalSec)
                 return;
             lastStatsLogTime = Time.time;
-            if (statsFrames == 0 && statsSkipped == 0)
-                return;
 
-            long avgRender = statsFrames > 0 ? statsRenderMs / statsFrames : 0;
-            long avgEncode = statsFrames > 0 ? statsEncodeMs / statsFrames : 0;
-            long avgKb = statsFrames > 0 ? (statsJpegBytes / statsFrames) / 1024 : 0;
+            int frames, skipped, width, height, quality;
+            long avgRender, avgEncode, avgKb;
+            string cameraMode;
+            lock (statsLock)
+            {
+                if (statsFrames == 0 && statsSkipped == 0)
+                    return;
+
+                frames = statsFrames;
+                skipped = statsSkipped;
+                width = statsLastRenderWidth;
+                height = statsLastRenderHeight;
+                quality = statsLastQuality;
+                cameraMode = statsLastCameraMode;
+                avgRender = statsFrames > 0 ? statsRenderMs / statsFrames : 0;
+                avgEncode = statsFrames > 0 ? statsEncodeMs / statsFrames : 0;
+                avgKb = statsFrames > 0 ? (statsJpegBytes / statsFrames) / 1024 : 0;
+
+                statsFrames = 0;
+                statsSkipped = 0;
+                statsRenderMs = 0;
+                statsEncodeMs = 0;
+                statsJpegBytes = 0;
+            }
+
             LogUtil.Log(
-                $"Map stats viewers={activeViewerCount} mode={statsLastCameraMode} render={statsLastRenderWidth}x{statsLastRenderHeight} quality={statsLastQuality} interval={effectiveInterval:F2}s frames={statsFrames} skipped={statsSkipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} sendQueue={queueDepth}"
+                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} sendQueue={queueDepth}"
             );
 
             var msg = new Dictionary<string, object>
@@ -384,13 +430,13 @@ namespace Overlord
                 ["adminOnly"] = true,
                 ["category"] = "map",
                 ["viewers"] = activeViewerCount,
-                ["renderWidth"] = statsLastRenderWidth,
-                ["renderHeight"] = statsLastRenderHeight,
-                ["cameraMode"] = statsLastCameraMode,
-                ["quality"] = statsLastQuality,
+                ["renderWidth"] = width,
+                ["renderHeight"] = height,
+                ["cameraMode"] = cameraMode,
+                ["quality"] = quality,
                 ["interval"] = effectiveInterval,
-                ["frames"] = statsFrames,
-                ["skipped"] = statsSkipped,
+                ["frames"] = frames,
+                ["skipped"] = skipped,
                 ["avgRenderMs"] = avgRender,
                 ["avgEncodeMs"] = avgEncode,
                 ["avgJpegKB"] = avgKb,
@@ -398,12 +444,6 @@ namespace Overlord
             };
             OverlordGameComponent.Instance?.Relay?.Broadcast(msg);
             OverlordGameComponent.Instance?.EmbeddedServer?.Broadcast(JsonHelper.ToJson(msg));
-
-            statsFrames = 0;
-            statsSkipped = 0;
-            statsRenderMs = 0;
-            statsEncodeMs = 0;
-            statsJpegBytes = 0;
         }
 
         private static void SendMapFrame(Dictionary<string, object> metadata, byte[] jpeg, string embeddedTarget)
@@ -552,11 +592,128 @@ namespace Overlord
             if (rt == null)
                 return;
 
-            var tex = new Texture2D(frameWidth, frameHeight, TextureFormat.RGB24, false);
+            // Overlay ops read live game state — collect on the main thread at capture
+            // time; rasterization happens wherever the pixels end up (worker or here).
+            List<MapOverlayPainter.DrawOp> ops;
+            try
+            {
+                ops = MapOverlayPainter.CollectOps(pawn, cameraCenter.x, cameraCenter.z, radiusX, radiusZ, frameWidth, frameHeight);
+            }
+            catch
+            {
+                ops = new List<MapOverlayPainter.DrawOp>();
+            }
+
+            var metadata = new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.MapFrame,
+                ["target"] = session.username,
+                ["centerX"] = cameraCenter.x,
+                ["centerZ"] = cameraCenter.z,
+                ["radiusX"] = radiusX,
+                ["radiusZ"] = radiusZ,
+                ["sourceWidth"] = frameWidth,
+                ["sourceHeight"] = frameHeight,
+                ["quality"] = frameQuality,
+                ["cameraMode"] = "pawn",
+                ["zoom"] = cameraZoom,
+                ["mapWidth"] = map.Size.x,
+                ["mapHeight"] = map.Size.z
+            };
+
+            DispatchFrame(rt, frameWidth, frameHeight, frameQuality, ops, metadata, session.username, renderWatch, "pawn");
+            initFailCount = 0;
+        }
+
+        /// <summary>
+        /// Hands a rendered frame to the capture pipeline. Async path: request a GPU
+        /// readback (no ReadPixels stall) and rasterize+encode+send on the worker.
+        /// Fallback path: legacy synchronous ReadPixels + main-thread EncodeToJPG,
+        /// used when async readback is unsupported or the off-thread encode failed.
+        /// </summary>
+        private void DispatchFrame(RenderTexture rt, int width, int height, int quality,
+            List<MapOverlayPainter.DrawOp> ops, Dictionary<string, object> metadata,
+            string embeddedTarget, Stopwatch renderWatch, string cameraMode)
+        {
+            if (asyncSupported && !asyncPipelineBroken)
+            {
+                renderWatch.Stop();
+                long renderMs = renderWatch.ElapsedMilliseconds;
+                pendingReadbacks++;
+                bool topDown = gpuTopDown;
+                AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, req =>
+                    OnReadbackComplete(req, rt, width, height, quality, ops, metadata, embeddedTarget, renderMs, cameraMode, topDown));
+                return;
+            }
+
+            SyncCaptureAndSend(rt, width, height, quality, ops, metadata, embeddedTarget, renderWatch, cameraMode);
+        }
+
+        // Unity invokes readback callbacks on the main thread during the player loop.
+        private void OnReadbackComplete(AsyncGPUReadbackRequest req, RenderTexture rt, int width, int height, int quality,
+            List<MapOverlayPainter.DrawOp> ops, Dictionary<string, object> metadata,
+            string embeddedTarget, long renderMs, string cameraMode, bool topDown)
+        {
+            pendingReadbacks--;
+            RenderTexture.ReleaseTemporary(rt);
+
+            if (!initialized)
+                return;
+
+            if (req.hasError)
+            {
+                lock (statsLock) { statsSkipped++; }
+                return;
+            }
+
+            byte[] pixels;
+            try
+            {
+                pixels = req.GetData<byte>().ToArray();
+            }
+            catch (Exception ex)
+            {
+                LogUtil.Warn($"Readback copy failed: {ex.Message}");
+                return;
+            }
+
+            sendQueue.Enqueue(() =>
+            {
+                try
+                {
+                    MapOverlayPainter.RasterizeToBuffer(pixels, width, height, topDown, ops);
+                    if (!topDown)
+                        MapOverlayPainter.FlipRowsInPlace(pixels, width, height);
+
+                    var encodeWatch = Stopwatch.StartNew();
+                    byte[] jpeg = ImageConversion.EncodeArrayToJPG(
+                        pixels, GraphicsFormat.R8G8B8A8_UNorm, (uint)width, (uint)height, 0, quality);
+                    encodeWatch.Stop();
+
+                    RecordFrameStats(renderMs, encodeWatch.ElapsedMilliseconds, jpeg.Length, width, height, quality, cameraMode);
+                    SendMapFrame(metadata, jpeg, embeddedTarget);
+                }
+                catch (Exception ex)
+                {
+                    // EncodeArrayToJPG off the main thread is the one unproven Unity call
+                    // in this pipeline. Any failure permanently reverts to the legacy
+                    // main-thread path; the current frame is dropped.
+                    asyncPipelineBroken = true;
+                    LogUtil.Warn($"Async frame encode failed — reverting to main-thread capture: {ex.Message}");
+                }
+            });
+        }
+
+        // Legacy path: synchronous ReadPixels (GPU pipeline stall) + main-thread encode.
+        private void SyncCaptureAndSend(RenderTexture rt, int width, int height, int quality,
+            List<MapOverlayPainter.DrawOp> ops, Dictionary<string, object> metadata,
+            string embeddedTarget, Stopwatch renderWatch, string cameraMode)
+        {
+            var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
             tex.filterMode = FilterMode.Bilinear;
             var prevActive = RenderTexture.active;
             RenderTexture.active = rt;
-            tex.ReadPixels(new Rect(0, 0, frameWidth, frameHeight), 0, 0, false);
+            tex.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
             tex.Apply();
             RenderTexture.active = prevActive;
             renderWatch.Stop();
@@ -565,7 +722,7 @@ namespace Overlord
 
             try
             {
-                MapOverlayPainter.Paint(tex, pawn, cameraCenter.x, cameraCenter.z, radiusX, radiusZ);
+                MapOverlayPainter.RasterizeToTexture(tex, ops);
             }
             catch { }
 
@@ -573,46 +730,24 @@ namespace Overlord
             var encodeWatch = Stopwatch.StartNew();
             try
             {
-                jpeg = tex.EncodeToJPG(frameQuality);
+                jpeg = tex.EncodeToJPG(quality);
             }
             finally
             {
                 encodeWatch.Stop();
                 UnityEngine.Object.Destroy(tex);
             }
-            RecordFrameStats(renderWatch.ElapsedMilliseconds, encodeWatch.ElapsedMilliseconds, jpeg.Length, frameWidth, frameHeight, frameQuality, "pawn");
 
-            string username = session.username;
-            float centerX = cameraCenter.x;
-            float centerZ = cameraCenter.z;
-            int mapWidth = map.Size.x;
-            int mapHeight = map.Size.z;
+            RecordFrameStats(renderWatch.ElapsedMilliseconds, encodeWatch.ElapsedMilliseconds, jpeg.Length, width, height, quality, cameraMode);
+
             sendQueue.Enqueue(() =>
             {
                 try
                 {
-                    var msg = new Dictionary<string, object>
-                    {
-                        ["type"] = StateProtocol.MapFrame,
-                        ["target"] = username,
-                        ["centerX"] = centerX,
-                        ["centerZ"] = centerZ,
-                        ["radiusX"] = radiusX,
-                        ["radiusZ"] = radiusZ,
-                        ["sourceWidth"] = frameWidth,
-                        ["sourceHeight"] = frameHeight,
-                        ["quality"] = frameQuality,
-                        ["cameraMode"] = "pawn",
-                        ["zoom"] = cameraZoom,
-                        ["mapWidth"] = mapWidth,
-                        ["mapHeight"] = mapHeight
-                    };
-                    SendMapFrame(msg, jpeg, username);
+                    SendMapFrame(metadata, jpeg, embeddedTarget);
                 }
                 catch { }
             });
-
-            initFailCount = 0;
         }
 
         private Map ResolveHostCameraMap(List<ViewerSession> activeSessions)
@@ -671,59 +806,28 @@ namespace Overlord
                 gameCamera.targetTexture = savedTarget;
             }
 
-            var tex = new Texture2D(frameWidth, frameHeight, TextureFormat.RGB24, false);
-            tex.filterMode = FilterMode.Bilinear;
-            var prevActive = RenderTexture.active;
-            RenderTexture.active = rt;
-            tex.ReadPixels(new Rect(0, 0, frameWidth, frameHeight), 0, 0, false);
-            tex.Apply();
-            RenderTexture.active = prevActive;
-            renderWatch.Stop();
-
-            RenderTexture.ReleaseTemporary(rt);
-
-            byte[] jpeg;
-            var encodeWatch = Stopwatch.StartNew();
-            try
-            {
-                jpeg = tex.EncodeToJPG(frameQuality);
-            }
-            finally
-            {
-                encodeWatch.Stop();
-                UnityEngine.Object.Destroy(tex);
-            }
-
-            RecordFrameStats(renderWatch.ElapsedMilliseconds, encodeWatch.ElapsedMilliseconds, jpeg.Length, frameWidth, frameHeight, frameQuality, "host");
-
             float radiusZ = gameCamera.orthographic ? Mathf.Max(1f, gameCamera.orthographicSize) : Mathf.Clamp(frameHeight / 32f, 8f, 24f);
             float radiusX = radiusZ * aspect;
-            int mapWidth = map.Size.x;
-            int mapHeight = map.Size.z;
 
-            sendQueue.Enqueue(() =>
+            var metadata = new Dictionary<string, object>
             {
-                try
-                {
-                    var msg = new Dictionary<string, object>
-                    {
-                        ["type"] = StateProtocol.MapFrame,
-                        ["centerX"] = (float)hostPos.x,
-                        ["centerZ"] = (float)hostPos.z,
-                        ["radiusX"] = radiusX,
-                        ["radiusZ"] = radiusZ,
-                        ["sourceWidth"] = frameWidth,
-                        ["sourceHeight"] = frameHeight,
-                        ["quality"] = frameQuality,
-                        ["cameraMode"] = "host",
-                        ["zoom"] = 1f,
-                        ["mapWidth"] = mapWidth,
-                        ["mapHeight"] = mapHeight
-                    };
-                    SendMapFrame(msg, jpeg, null);
-                }
-                catch { }
-            });
+                ["type"] = StateProtocol.MapFrame,
+                ["centerX"] = (float)hostPos.x,
+                ["centerZ"] = (float)hostPos.z,
+                ["radiusX"] = radiusX,
+                ["radiusZ"] = radiusZ,
+                ["sourceWidth"] = frameWidth,
+                ["sourceHeight"] = frameHeight,
+                ["quality"] = frameQuality,
+                ["cameraMode"] = "host",
+                ["zoom"] = 1f,
+                ["mapWidth"] = map.Size.x,
+                ["mapHeight"] = map.Size.z
+            };
+
+            // Host-camera frames carry no overlay markers (same as the legacy path).
+            DispatchFrame(rt, frameWidth, frameHeight, frameQuality,
+                new List<MapOverlayPainter.DrawOp>(), metadata, null, renderWatch, "host");
 
             initFailCount = 0;
         }

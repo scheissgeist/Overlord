@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Verse;
@@ -6,37 +8,53 @@ using RimWorld;
 namespace Overlord
 {
     /// <summary>
-    /// Paints control markers onto a rendered map texture using RimWorld map-cell coordinates.
-    /// The base image remains the real world render; these markers keep small objects readable at stream scale.
+    /// Paints control markers (pawn ring, hostiles, friendlies, ground items) onto
+    /// rendered map frames using RimWorld map-cell coordinates.
+    ///
+    /// Two-phase design so the expensive part can leave the main thread:
+    ///  1. CollectOps — reads live game state (pawn positions, thing grid) and must run
+    ///     on the MAIN thread at capture time. Produces a list of primitive draw ops.
+    ///  2. RasterizeToBuffer — pure pixel math into a raw RGBA32 buffer; safe on ANY
+    ///     thread. Used by the async-readback pipeline's encode worker.
+    /// Paint(Texture2D...) remains as the main-thread fallback path (ReadPixels route)
+    /// and shares the same op collection + draw math.
     /// </summary>
     public static class MapOverlayPainter
     {
-        public static void Paint(Texture2D texture, Pawn pawn, float gridRadius)
+        private const byte KindRing = 0;
+        private const byte KindDot = 1;
+        private const byte KindDiamond = 2;
+
+        public struct DrawOp
         {
-            Paint(texture, pawn, gridRadius, gridRadius);
+            public byte kind;
+            public int px;      // bottom-up pixel coords (Texture2D convention)
+            public int py;
+            public int size;
+            public Color32 color;
         }
 
-        public static void Paint(Texture2D texture, Pawn pawn, float radiusX, float radiusZ)
-        {
-            Vector3 center = pawn.DrawPos;
-            Paint(texture, pawn, center.x, center.z, radiusX, radiusZ);
-        }
+        private static readonly Color32 ItemColor = new Color32(255, 184, 66, 255);
+        private static readonly Color32 DiamondOutline = new Color32(20, 15, 8, 255);
 
-        public static void Paint(Texture2D texture, Pawn pawn, float centerX, float centerZ, float radiusX, float radiusZ)
+        /// <summary>
+        /// Gathers all overlay draw ops for a frame. MAIN THREAD ONLY — reads live
+        /// pawn/map state. Coordinates are bottom-up (Texture2D convention); the
+        /// rasterizer flips rows for top-down buffers.
+        /// </summary>
+        public static List<DrawOp> CollectOps(Pawn pawn, float centerX, float centerZ, float radiusX, float radiusZ, int texW, int texH)
         {
-            var map = pawn.Map;
+            var ops = new List<DrawOp>(64);
+            var map = pawn?.Map;
             if (map == null)
-            {
-                texture.Apply();
-                return;
-            }
+                return ops;
 
-            PaintGroundItems(texture, map, centerX, centerZ, radiusX, radiusZ);
+            CollectGroundItems(ops, map, centerX, centerZ, radiusX, radiusZ, texW, texH);
 
             float hp = pawn.health?.summaryHealth?.SummaryHealthPercent ?? 1f;
             Color pawnColor = hp > 0.5f ? Color.green : (hp > 0.25f ? Color.yellow : Color.red);
-            if (TryWorldToPixel(texture, centerX, centerZ, radiusX, radiusZ, pawn.DrawPos.x, pawn.DrawPos.z, out int cx, out int cy))
-                DrawRing(texture, cx, cy, 8, 2, pawnColor);
+            if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, pawn.DrawPos.x, pawn.DrawPos.z, out int cx, out int cy))
+                ops.Add(new DrawOp { kind = KindRing, px = cx, py = cy, size = 8, color = pawnColor });
 
             var enemies = map.mapPawns.AllPawns
                 .Where(p => p != pawn && p.Spawned && !p.Dead &&
@@ -46,8 +64,8 @@ namespace Overlord
 
             foreach (var enemy in enemies)
             {
-                if (TryWorldToPixel(texture, centerX, centerZ, radiusX, radiusZ, enemy.DrawPos.x, enemy.DrawPos.z, out int px, out int py))
-                    DrawDot(texture, px, py, 3, Color.red);
+                if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, enemy.DrawPos.x, enemy.DrawPos.z, out int px, out int py))
+                    ops.Add(new DrawOp { kind = KindDot, px = px, py = py, size = 3, color = Color.red });
             }
 
             var friendlies = map.mapPawns.FreeColonists
@@ -56,20 +74,23 @@ namespace Overlord
 
             foreach (var friendly in friendlies)
             {
-                if (TryWorldToPixel(texture, centerX, centerZ, radiusX, radiusZ, friendly.DrawPos.x, friendly.DrawPos.z, out int px, out int py))
-                    DrawDot(texture, px, py, 3, Color.cyan);
+                if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, friendly.DrawPos.x, friendly.DrawPos.z, out int px, out int py))
+                    ops.Add(new DrawOp { kind = KindDot, px = px, py = py, size = 3, color = Color.cyan });
             }
 
-            texture.Apply();
+            return ops;
         }
 
-        private static void PaintGroundItems(Texture2D texture, Map map, float centerX, float centerZ, float radiusX, float radiusZ)
+        private static void CollectGroundItems(List<DrawOp> ops, Map map, float centerX, float centerZ, float radiusX, float radiusZ, int texW, int texH)
         {
             int drawn = 0;
             int minX = Mathf.Max(0, Mathf.FloorToInt(centerX - radiusX) - 1);
             int maxX = Mathf.Min(map.Size.x - 1, Mathf.CeilToInt(centerX + radiusX) + 1);
             int minZ = Mathf.Max(0, Mathf.FloorToInt(centerZ - radiusZ) - 1);
             int maxZ = Mathf.Min(map.Size.z - 1, Mathf.CeilToInt(centerZ + radiusZ) + 1);
+
+            float pixelsPerCell = texH / Mathf.Max(1f, radiusZ * 2f);
+            int size = pixelsPerCell > 24f ? 3 : 2;
 
             for (int z = minZ; z <= maxZ; z++)
             {
@@ -89,73 +110,137 @@ namespace Overlord
                             continue;
 
                         Vector3 pos = thing.DrawPos;
-                        if (!TryWorldToPixel(texture, centerX, centerZ, radiusX, radiusZ, pos.x, pos.z, out int px, out int py))
+                        if (!TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, pos.x, pos.z, out int px, out int py))
                             continue;
 
-                        float pixelsPerCell = texture.height / Mathf.Max(1f, radiusZ * 2f);
-                        int size = pixelsPerCell > 24f ? 3 : 2;
-                        DrawDiamond(texture, px, py, size, new Color(1f, 0.72f, 0.26f, 1f));
+                        ops.Add(new DrawOp { kind = KindDiamond, px = px, py = py, size = size, color = ItemColor });
                         drawn++;
                     }
                 }
             }
         }
 
-        private static bool TryWorldToPixel(Texture2D texture, float centerX, float centerZ, float radiusX, float radiusZ, float worldX, float worldZ, out int px, out int py)
+        /// <summary>
+        /// Rasterizes ops into a raw RGBA32 buffer. Pure pixel math — safe on any
+        /// thread. topDown = buffer row 0 is the visual TOP (D3D readback layout);
+        /// false = row 0 is the bottom (GL / Texture2D layout).
+        /// </summary>
+        public static void RasterizeToBuffer(byte[] rgba, int w, int h, bool topDown, List<DrawOp> ops)
+        {
+            for (int i = 0; i < ops.Count; i++)
+            {
+                var op = ops[i];
+                RasterizeOp(op, w, h, (x, py, c) =>
+                {
+                    int row = topDown ? (h - 1 - py) : py;
+                    int idx = (row * w + x) * 4;
+                    rgba[idx] = c.r;
+                    rgba[idx + 1] = c.g;
+                    rgba[idx + 2] = c.b;
+                    rgba[idx + 3] = 255;
+                });
+            }
+        }
+
+        /// <summary>
+        /// Vertically flips an RGBA32 buffer in place (bottom-up → top-down for JPEG
+        /// encoding on GL-layout readbacks). Any thread.
+        /// </summary>
+        public static void FlipRowsInPlace(byte[] rgba, int w, int h)
+        {
+            int stride = w * 4;
+            var tmp = new byte[stride];
+            for (int top = 0, bottom = h - 1; top < bottom; top++, bottom--)
+            {
+                Buffer.BlockCopy(rgba, top * stride, tmp, 0, stride);
+                Buffer.BlockCopy(rgba, bottom * stride, rgba, top * stride, stride);
+                Buffer.BlockCopy(tmp, 0, rgba, bottom * stride, stride);
+            }
+        }
+
+        /// <summary>
+        /// Main-thread fallback (ReadPixels route): rasterize pre-collected ops onto a
+        /// Texture2D, then Apply. Same draw math as the buffer path.
+        /// </summary>
+        public static void RasterizeToTexture(Texture2D texture, List<DrawOp> ops)
+        {
+            for (int i = 0; i < ops.Count; i++)
+            {
+                var op = ops[i];
+                RasterizeOp(op, texture.width, texture.height, (x, y, c) => texture.SetPixel(x, y, c));
+            }
+            texture.Apply();
+        }
+
+        // ── Shared draw math ────────────────────────────────────────────────────
+
+        private static void RasterizeOp(DrawOp op, int w, int h, Action<int, int, Color32> plot)
+        {
+            switch (op.kind)
+            {
+                case KindRing: DrawRing(op, w, h, plot); break;
+                case KindDot: DrawDot(op, w, h, plot); break;
+                case KindDiamond: DrawDiamond(op, w, h, plot); break;
+            }
+        }
+
+        private static void DrawRing(DrawOp op, int w, int h, Action<int, int, Color32> plot)
+        {
+            const int thickness = 2;
+            int radius = op.size;
+            for (int x = op.px - radius - thickness; x <= op.px + radius + thickness; x++)
+            {
+                for (int y = op.py - radius - thickness; y <= op.py + radius + thickness; y++)
+                {
+                    if (x < 0 || x >= w || y < 0 || y >= h)
+                        continue;
+                    float dist = Mathf.Sqrt((x - op.px) * (x - op.px) + (y - op.py) * (y - op.py));
+                    if (dist >= radius - thickness && dist <= radius)
+                        plot(x, y, op.color);
+                }
+            }
+        }
+
+        private static void DrawDot(DrawOp op, int w, int h, Action<int, int, Color32> plot)
+        {
+            for (int x = op.px - op.size; x <= op.px + op.size; x++)
+            {
+                for (int y = op.py - op.size; y <= op.py + op.size; y++)
+                {
+                    if (x >= 0 && x < w && y >= 0 && y < h)
+                        plot(x, y, op.color);
+                }
+            }
+        }
+
+        private static void DrawDiamond(DrawOp op, int w, int h, Action<int, int, Color32> plot)
+        {
+            int radius = op.size;
+            for (int x = op.px - radius - 1; x <= op.px + radius + 1; x++)
+            {
+                for (int y = op.py - radius - 1; y <= op.py + radius + 1; y++)
+                {
+                    if (x < 0 || x >= w || y < 0 || y >= h)
+                        continue;
+
+                    int dist = Mathf.Abs(x - op.px) + Mathf.Abs(y - op.py);
+                    if (dist <= radius)
+                        plot(x, y, op.color);
+                    else if (dist == radius + 1)
+                        plot(x, y, DiamondOutline);
+                }
+            }
+        }
+
+        private static bool TryWorldToPixel(int texW, int texH, float centerX, float centerZ, float radiusX, float radiusZ, float worldX, float worldZ, out int px, out int py)
         {
             float nx = 0.5f + ((worldX - centerX) / (radiusX * 2f));
             float ny = 0.5f + ((worldZ - centerZ) / (radiusZ * 2f));
 
-            px = Mathf.RoundToInt(nx * texture.width);
-            py = Mathf.RoundToInt(ny * texture.height);
+            px = Mathf.RoundToInt(nx * texW);
+            py = Mathf.RoundToInt(ny * texH);
 
-            return px >= 0 && px < texture.width && py >= 0 && py < texture.height;
-        }
-
-        private static void DrawRing(Texture2D tex, int cx, int cy, int radius, int thickness, Color color)
-        {
-            for (int x = cx - radius - thickness; x <= cx + radius + thickness; x++)
-            {
-                for (int y = cy - radius - thickness; y <= cy + radius + thickness; y++)
-                {
-                    if (x < 0 || x >= tex.width || y < 0 || y >= tex.height)
-                        continue;
-                    float dist = Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
-                    if (dist >= radius - thickness && dist <= radius)
-                        tex.SetPixel(x, y, color);
-                }
-            }
-        }
-
-        private static void DrawDot(Texture2D tex, int cx, int cy, int size, Color color)
-        {
-            for (int x = cx - size; x <= cx + size; x++)
-            {
-                for (int y = cy - size; y <= cy + size; y++)
-                {
-                    if (x >= 0 && x < tex.width && y >= 0 && y < tex.height)
-                        tex.SetPixel(x, y, color);
-                }
-            }
-        }
-
-        private static void DrawDiamond(Texture2D tex, int cx, int cy, int radius, Color color)
-        {
-            Color outline = new Color(0.08f, 0.06f, 0.03f, 1f);
-            for (int x = cx - radius - 1; x <= cx + radius + 1; x++)
-            {
-                for (int y = cy - radius - 1; y <= cy + radius + 1; y++)
-                {
-                    if (x < 0 || x >= tex.width || y < 0 || y >= tex.height)
-                        continue;
-
-                    int dist = Mathf.Abs(x - cx) + Mathf.Abs(y - cy);
-                    if (dist <= radius)
-                        tex.SetPixel(x, y, color);
-                    else if (dist == radius + 1)
-                        tex.SetPixel(x, y, outline);
-                }
-            }
+            return px >= 0 && px < texW && py >= 0 && py < texH;
         }
     }
 }
