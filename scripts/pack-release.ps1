@@ -32,5 +32,5 @@ Copy-Item -Recurse $webuiSrc (Join-Path $stage 'WebUI')
 # Do not ship private docs or AGENTS inside the mod zip
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
 Write-Host "Release package: $zip"
-Write-Host "Upload this file on GitHub → Releases (tag v$Version)."
-Write-Host "Streamers still need their own relay — see docs/SELF_HOST.md"
+Write-Host "Upload this file on GitHub Releases (tag v$Version)."
+Write-Host "Streamers still need their own relay - see docs/SELF_HOST.md"
