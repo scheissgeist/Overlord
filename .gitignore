@@ -27,11 +27,22 @@ docs/viewer_ui_smoke*.png
 # Personal agent rules (health context, private project registry)
 AGENTS.md
 
-# Private ops / session notes (live URLs, emails, machine IDs)
+# Private ops / session notes (live URLs, emails, instance IDs)
 docs/SESSION_LOG_*.md
 docs/HANDOFF_*.md
 docs/TASK_*.md
 docs/IMPLEMENTATION_STATUS.md
+docs/PUBLIC_CHECKLIST.md
+
+# Internal planning / reverse-engineering notes (not end-user docs)
+docs/PLAN.md
+docs/EXECUTION_PLAN.md
+docs/FTB_PATTERNS.md
+docs/FUTURE_PROOFING_PLAN.md
+docs/LOW_LATENCY_REDESIGN.md
+docs/PUPPETEER_*.md
+docs/RIMWORLD_16_API.md
+docs/VIEWER_DATA_RENDERER_*.md
 
 # Personal Fly app name / region — use fly.toml.example
 relay-server/fly.toml

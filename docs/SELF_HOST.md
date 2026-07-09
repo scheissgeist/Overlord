@@ -92,7 +92,7 @@ Use the `relay-server/Dockerfile`. Pass the same env vars at runtime. Map the co
    flyctl deploy --app YOUR-APP-NAME
    ```
 
-   Keep your real `fly.toml` out of public git (see `docs/PUBLIC_CHECKLIST.md`).
+   Keep your real `fly.toml` and secrets out of git.
 
 5. Check `https://YOUR-APP-NAME.fly.dev/health`.
 
@@ -150,13 +150,3 @@ If Toolkit chat is offline, Overlord shows purchases as locked.
 - [ ] No `.env` committed; secrets only in the host platform
 - [ ] Twitch redirect URI is *your* origin only
 - [ ] You are not advertising another operator’s live relay as the default
-
----
-
-## Probe for interest
-
-A simple public pitch:
-
-> Self-hosted RimWorld mod: Twitch viewers drive colonists from a browser. Repo + setup guide — come by the stream to see it live.
-
-Point at this repository and your VOD/stream. Do not put a shared production relay URL in the README.
