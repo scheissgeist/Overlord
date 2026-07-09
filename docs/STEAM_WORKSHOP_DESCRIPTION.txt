@@ -1,0 +1,33 @@
+[h1]Overlord[/h1]
+Twitch viewers control your RimWorld colonists from a browser.
+
+[b]Requires Harmony.[/b]
+[b]Self-hosted relay required[/b] — there is no shared public server. Each streamer deploys their own relay.
+
+Setup guide + source:
+[url=https://github.com/scheissgeist/Overlord]https://github.com/scheissgeist/Overlord[/url]
+
+Release zip (optional):
+[url=https://github.com/scheissgeist/Overlord/releases]https://github.com/scheissgeist/Overlord/releases[/url]
+
+[h2]Features[/h2]
+[list]
+[*] Assign colonists to Twitch viewers
+[*] Browser control panel: needs, health, skills, map view, draft / move / work / gear
+[*] Optional Twitch Toolkit Buy / Story bridge (Toolkit chat must be connected)
+[*] Host tab for sessions, assignment, and permissions
+[/list]
+
+[h2]Install[/h2]
+[olist]
+[*] Subscribe to [b]Harmony[/b], then [b]Overlord[/b]
+[*] Deploy your own relay (see the GitHub self-host guide)
+[*] In Mod Settings → Overlord: set Relay URL + Host secret
+[*] Send viewers your relay's public HTTPS URL (never the host secret)
+[/olist]
+
+[h2]Credits[/h2]
+Inspired by [url=https://github.com/pardeike/Puppeteer]Puppeteer[/url] by Andreas Pardeike (Brrainz). Overlord is a new codebase for RimWorld 1.5/1.6 and is not affiliated with Puppeteer.
+
+[h2]Feedback[/h2]
+[b]broteampill@gmail.com[/b] · or GitHub Issues on the repo above.
