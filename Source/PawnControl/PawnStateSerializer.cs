@@ -15,54 +15,182 @@ namespace Overlord
     /// </summary>
     public static class PawnStateSerializer
     {
-        // Opinion sampling: relations.OpinionOf(other) is evaluated for every other free
-        // colonist inside ComputeStateSignature — O(colonists^2) across all viewers, ~6x/s.
-        // Opinions move on the order of minutes, so we sample the opinion sub-hash at most
-        // once per second per pawn and reuse it between samples. A changed opinion is still
-        // reflected in the signature within <=1s, which flips the hash and triggers a
-        // re-serialize that reads the current opinion values.
-        private const float OpinionSampleIntervalSeconds = 1f; // realtime — immune to game-speed scaling
-        private static readonly Dictionary<int, int> opinionHashCache = new Dictionary<int, int>();
-        private static readonly Dictionary<int, float> opinionSampleTimeCache = new Dictionary<int, float>();
+        // ── Tiered change detection ─────────────────────────────────────────────
+        // The signature is split into a FAST tier (position, drafted, health, needs,
+        // gear, inventory, job — things that move constantly and are cheap to hash)
+        // recomputed every sync cycle, and a SLOW tier (skills, thoughts, work
+        // priorities, schedule, traits, policies, capacities, relations/opinions,
+        // nearby ground equipment, backstory/appearance — things that change on the
+        // order of seconds-to-never but are expensive to walk: def-database loops,
+        // O(colonists) OpinionOf, ThingsInGroup scans, reflection label lookups).
+        // The slow tier is sampled at most every SlowSampleIntervalSeconds per pawn
+        // (realtime, immune to game-speed scaling) and INVALIDATED IMMEDIATELY when a
+        // viewer command executes, so command feedback is never delayed by the cache.
+        private const float SlowSampleIntervalSeconds = 2f;
+        private static readonly Dictionary<int, int> slowHashCache = new Dictionary<int, int>();
+        private static readonly Dictionary<int, float> slowSampleTimeCache = new Dictionary<int, float>();
 
-        private static int GetOpinionSubHash(Pawn pawn)
+        /// <summary>
+        /// Drops the cached slow-tier sub-hash for a pawn so the next sync cycle
+        /// recomputes it. Call after any successful viewer/admin command targeting the
+        /// pawn — commands are the only way slow-tier fields change instantly.
+        /// </summary>
+        public static void InvalidateSignatureCache(Pawn pawn)
         {
-            if (pawn?.relations == null || pawn.Map == null)
-                return 0;
+            if (pawn == null)
+                return;
+            slowHashCache.Remove(pawn.thingIDNumber);
+            slowSampleTimeCache.Remove(pawn.thingIDNumber);
+        }
 
+        private static int GetSlowSubHash(Pawn pawn)
+        {
             int id = pawn.thingIDNumber;
             float now = UnityEngine.Time.realtimeSinceStartup;
-            if (opinionSampleTimeCache.TryGetValue(id, out float lastTime) &&
-                now - lastTime < OpinionSampleIntervalSeconds &&
-                opinionHashCache.TryGetValue(id, out int cached))
+            if (slowSampleTimeCache.TryGetValue(id, out float lastTime) &&
+                now - lastTime < SlowSampleIntervalSeconds &&
+                slowHashCache.TryGetValue(id, out int cached))
             {
                 return cached;
             }
 
-            int sub = 0;
-            foreach (var other in pawn.Map.mapPawns.FreeColonists)
-            {
-                if (other == pawn || other.Dead) continue;
-                try
-                {
-                    sub = sub * 31 + other.thingIDNumber;
-                    sub = sub * 31 + pawn.relations.OpinionOf(other);
-                }
-                catch { }
-            }
+            int sub = ComputeSlowSubHash(pawn);
 
             // Keep the sample caches from growing unbounded across a long session with
             // many pawn turnovers. Only assigned colonists reach here, so this realistically
             // never trips; the clear just rebuilds lazily on next access.
-            if (opinionHashCache.Count > 256)
+            if (slowHashCache.Count > 256)
             {
-                opinionHashCache.Clear();
-                opinionSampleTimeCache.Clear();
+                slowHashCache.Clear();
+                slowSampleTimeCache.Clear();
             }
 
-            opinionHashCache[id] = sub;
-            opinionSampleTimeCache[id] = now;
+            slowHashCache[id] = sub;
+            slowSampleTimeCache[id] = now;
             return sub;
+        }
+
+        private static int ComputeSlowSubHash(Pawn pawn)
+        {
+            unchecked
+            {
+                int hash = 23;
+
+                if (pawn.skills != null)
+                {
+                    foreach (var skill in pawn.skills.skills)
+                    {
+                        if (skill?.def == null) continue;
+                        AddStringHash(ref hash, skill.def.defName);
+                        hash = hash * 31 + skill.Level;
+                        hash = hash * 31 + (int)skill.passion;
+                        hash = hash * 31 + (skill.TotallyDisabled ? 1 : 0);
+                    }
+                }
+
+                if (pawn.needs?.mood?.thoughts?.memories?.Memories != null)
+                {
+                    foreach (var thought in pawn.needs.mood.thoughts.memories.Memories)
+                    {
+                        if (thought?.def == null) continue;
+                        AddStringHash(ref hash, thought.def.defName);
+                        hash = hash * 31 + (int)(thought.MoodOffset() * 100f);
+                    }
+                }
+
+                if (pawn.workSettings != null && pawn.workSettings.EverWork)
+                {
+                    foreach (var wt in DefDatabase<WorkTypeDef>.AllDefsListForReading)
+                    {
+                        if (wt == null) continue;
+                        try
+                        {
+                            hash = hash * 31 + (pawn.WorkTypeIsDisabled(wt) ? -1 : pawn.workSettings.GetPriority(wt));
+                        }
+                        catch { }
+                    }
+                }
+
+                if (pawn.timetable != null)
+                {
+                    for (int hour = 0; hour < 24; hour++)
+                    {
+                        AddStringHash(ref hash, pawn.timetable.GetAssignment(hour)?.defName);
+                    }
+                }
+
+                if (pawn.story?.traits != null)
+                {
+                    foreach (var trait in pawn.story.traits.allTraits)
+                    {
+                        if (trait?.def == null) continue;
+                        AddStringHash(ref hash, trait.def.defName);
+                        hash = hash * 31 + trait.Degree;
+                    }
+                }
+
+                AddStringHash(ref hash, RimWorldCompat.GetCurrentOutfitLabel(pawn));
+                AddStringHash(ref hash, RimWorldCompat.GetCurrentDrugPolicyLabel(pawn));
+                AddStringHash(ref hash, RimWorldCompat.GetCurrentFoodPolicyLabel(pawn));
+                AddStringHash(ref hash, RimWorldCompat.GetCurrentAreaRestrictionLabel(pawn) ?? "Unrestricted");
+
+                if (pawn.health?.capacities != null)
+                {
+                    foreach (var capDef in DefDatabase<PawnCapacityDef>.AllDefsListForReading)
+                    {
+                        if (capDef == null) continue;
+                        try
+                        {
+                            hash = hash * 31 + (int)(pawn.health.capacities.GetLevel(capDef) * 100f);
+                        }
+                        catch { }
+                    }
+                }
+
+                if (pawn.relations != null)
+                {
+                    var directRelations = pawn.relations.DirectRelations;
+                    if (directRelations != null)
+                    {
+                        foreach (var rel in directRelations)
+                        {
+                            if (rel?.def == null || rel.otherPawn == null) continue;
+                            AddStringHash(ref hash, rel.def.defName);
+                            hash = hash * 31 + rel.otherPawn.thingIDNumber;
+                        }
+                    }
+
+                    if (pawn.Map != null)
+                    {
+                        foreach (var other in pawn.Map.mapPawns.FreeColonists)
+                        {
+                            if (other == pawn || other.Dead) continue;
+                            try
+                            {
+                                hash = hash * 31 + other.thingIDNumber;
+                                hash = hash * 31 + pawn.relations.OpinionOf(other);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
+                // Nearby loose weapons/apparel (viewer gear-pickup list). Bounded
+                // ThingRequestGroup walk — see EnumerateNearbyEquipmentCandidates.
+                AddNearbyEquipmentFingerprint(ref hash, pawn);
+
+                if (pawn.story != null)
+                {
+                    AddStringHash(ref hash, pawn.story.Title);
+                    AddStringHash(ref hash, pawn.story.Childhood?.defName);
+                    AddStringHash(ref hash, pawn.story.Adulthood?.defName);
+                    AddStringHash(ref hash, pawn.story.hairDef?.defName);
+                    AddStringHash(ref hash, pawn.story.bodyType?.defName);
+                    hash = hash * 31 + (int)pawn.gender;
+                }
+
+                return hash;
+            }
         }
 
         public static string Serialize(Pawn pawn)
@@ -762,50 +890,6 @@ namespace Overlord
                     }
                 }
 
-                if (pawn.skills != null)
-                {
-                    foreach (var skill in pawn.skills.skills)
-                    {
-                        if (skill?.def == null) continue;
-                        AddStringHash(ref hash, skill.def.defName);
-                        hash = hash * 31 + skill.Level;
-                        hash = hash * 31 + (int)skill.passion;
-                        hash = hash * 31 + (skill.TotallyDisabled ? 1 : 0);
-                    }
-                }
-
-                if (pawn.needs?.mood?.thoughts?.memories?.Memories != null)
-                {
-                    foreach (var thought in pawn.needs.mood.thoughts.memories.Memories)
-                    {
-                        if (thought?.def == null) continue;
-                        AddStringHash(ref hash, thought.def.defName);
-                        hash = hash * 31 + (int)(thought.MoodOffset() * 100f);
-                    }
-                }
-
-                if (pawn.workSettings != null && pawn.workSettings.EverWork)
-                {
-                    foreach (var wt in DefDatabase<WorkTypeDef>.AllDefsListForReading)
-                    {
-                        if (wt == null) continue;
-                        AddStringHash(ref hash, wt.defName);
-                        try
-                        {
-                            hash = hash * 31 + (pawn.WorkTypeIsDisabled(wt) ? -1 : pawn.workSettings.GetPriority(wt));
-                        }
-                        catch { }
-                    }
-                }
-
-                if (pawn.timetable != null)
-                {
-                    for (int hour = 0; hour < 24; hour++)
-                    {
-                        AddStringHash(ref hash, pawn.timetable.GetAssignment(hour)?.defName);
-                    }
-                }
-
                 if (pawn.equipment?.Primary != null)
                 {
                     hash = hash * 31 + pawn.equipment.Primary.thingIDNumber;
@@ -828,55 +912,8 @@ namespace Overlord
                     }
                 }
 
-                if (pawn.story?.traits != null)
-                {
-                    foreach (var trait in pawn.story.traits.allTraits)
-                    {
-                        if (trait?.def == null) continue;
-                        AddStringHash(ref hash, trait.def.defName);
-                        hash = hash * 31 + trait.Degree;
-                    }
-                }
-
-                AddStringHash(ref hash, RimWorldCompat.GetCurrentOutfitLabel(pawn));
-                AddStringHash(ref hash, RimWorldCompat.GetCurrentDrugPolicyLabel(pawn));
-                AddStringHash(ref hash, RimWorldCompat.GetCurrentFoodPolicyLabel(pawn));
-                AddStringHash(ref hash, RimWorldCompat.GetCurrentAreaRestrictionLabel(pawn) ?? "Unrestricted");
-
                 if (pawn.playerSettings != null)
                     hash = hash * 31 + (int)pawn.playerSettings.hostilityResponse;
-
-                if (pawn.health?.capacities != null)
-                {
-                    foreach (var capDef in DefDatabase<PawnCapacityDef>.AllDefsListForReading)
-                    {
-                        if (capDef == null) continue;
-                        try
-                        {
-                            AddStringHash(ref hash, capDef.defName);
-                            hash = hash * 31 + (int)(pawn.health.capacities.GetLevel(capDef) * 100f);
-                        }
-                        catch { }
-                    }
-                }
-
-                if (pawn.relations != null)
-                {
-                    var directRelations = pawn.relations.DirectRelations;
-                    if (directRelations != null)
-                    {
-                        foreach (var rel in directRelations)
-                        {
-                            if (rel?.def == null || rel.otherPawn == null) continue;
-                            AddStringHash(ref hash, rel.def.defName);
-                            hash = hash * 31 + rel.otherPawn.thingIDNumber;
-                        }
-                    }
-
-                    // Opinions are sampled at ~1 Hz (see GetOpinionSubHash) instead of the
-                    // full O(colonists^2) OpinionOf evaluation every ~167ms per viewer.
-                    hash = hash * 31 + GetOpinionSubHash(pawn);
-                }
 
                 if (pawn.inventory?.innerContainer != null)
                 {
@@ -889,29 +926,15 @@ namespace Overlord
                     }
                 }
 
-                // Cheap nearby-equipment fingerprint. The full GetNearbyEquipment
-                // (whole-map listerThings.AllThings scan + CanReserveAndReach pathfinding
-                // + IsForbidden + sort + per-item dict build) is far too heavy to run per
-                // viewer every sync cycle just to detect a change — it defeated the whole
-                // "hash first, serialize only on change" optimization. Hash only id +
-                // def shortHash for weapons/apparel within the same 24-cell radius, via the
-                // far smaller ThingRequestGroup lists instead of AllThings. Serialize() still
-                // does the full reachability-filtered build when this fingerprint changes.
-                AddNearbyEquipmentFingerprint(ref hash, pawn);
-
-                if (pawn.story != null)
-                {
-                    AddStringHash(ref hash, pawn.story.Title);
-                    AddStringHash(ref hash, pawn.story.Childhood?.defName);
-                    AddStringHash(ref hash, pawn.story.Adulthood?.defName);
-                    AddStringHash(ref hash, pawn.story.hairDef?.defName);
-                    AddStringHash(ref hash, pawn.story.bodyType?.defName);
-                    hash = hash * 31 + (int)pawn.gender;
-                }
-
                 var jobLabel = pawn.jobs?.curDriver?.GetReport();
                 if (!string.IsNullOrEmpty(jobLabel))
                     AddStringHash(ref hash, jobLabel);
+
+                // Slow-moving, expensive-to-walk state (skills, thoughts, work, schedule,
+                // traits, policies, capacities, relations/opinions, nearby ground gear,
+                // backstory/appearance) — sampled every ~2s per pawn and invalidated
+                // immediately on viewer commands. See GetSlowSubHash.
+                hash = hash * 31 + GetSlowSubHash(pawn);
 
                 return hash;
             }

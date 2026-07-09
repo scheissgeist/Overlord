@@ -262,6 +262,11 @@ namespace Overlord
                 silentValue is bool silentBool &&
                 silentBool;
             bool ok = result != null && result.TryGetValue("ok", out object okValue) && okValue is bool okBool && okBool;
+            // Commands are the only way slow-tier signature fields (work priorities,
+            // schedule, policies, gear) change instantly — drop the cached slow sub-hash
+            // so the next sync cycle reflects the command without waiting out the cache.
+            if (ok && !string.IsNullOrEmpty(username))
+                PawnStateSerializer.InvalidateSignatureCache(viewerManager?.GetSession(username)?.assignedPawn);
             string resultMessage = result != null && result.TryGetValue("message", out object messageValue)
                 ? messageValue?.ToString()
                 : "";
