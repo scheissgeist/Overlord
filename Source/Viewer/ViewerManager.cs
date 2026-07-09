@@ -34,10 +34,13 @@ namespace Overlord
         private HashSet<string> bannedUsernames = new HashSet<string>();
         private Dictionary<string, int> timeoutUntilTick = new Dictionary<string, int>();
 
-        // State sync interval (ticks)
-        private const int StateSyncInterval = 10; // ~167ms
-        private const int ResourceReadoutSyncCycles = 6; // ~1s at StateSyncInterval
-        private int tickCounter;
+        // State sync interval (real time). Gating on wall-clock instead of ticks keeps
+        // the per-viewer sync cost constant at 1x/2x/3x game speed — tick-gating made all
+        // of this work run 3x as often at 3x speed, exactly when the game is already most
+        // CPU-bound. Viewers don't need 18 state updates/sec.
+        private const float StateSyncIntervalSeconds = 0.167f;
+        private const int ResourceReadoutSyncCycles = 6; // ~1s at sync cadence
+        private float lastSyncRealtime;
         private int resourceReadoutCycleCounter;
         private int lastResourceReadoutHash;
 
@@ -570,10 +573,10 @@ namespace Overlord
 
         public void Tick()
         {
-            tickCounter++;
-            if (tickCounter < StateSyncInterval)
+            float nowRealtime = UnityEngine.Time.realtimeSinceStartup;
+            if (nowRealtime - lastSyncRealtime < StateSyncIntervalSeconds)
                 return;
-            tickCounter = 0;
+            lastSyncRealtime = nowRealtime;
 
             var comp  = OverlordGameComponent.Instance;
             var settings = OverlordMod.Settings;

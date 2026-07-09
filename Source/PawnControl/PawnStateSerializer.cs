@@ -21,9 +21,9 @@ namespace Overlord
         // once per second per pawn and reuse it between samples. A changed opinion is still
         // reflected in the signature within <=1s, which flips the hash and triggers a
         // re-serialize that reads the current opinion values.
-        private const int OpinionSampleIntervalTicks = 60; // ~1s at 1x
+        private const float OpinionSampleIntervalSeconds = 1f; // realtime — immune to game-speed scaling
         private static readonly Dictionary<int, int> opinionHashCache = new Dictionary<int, int>();
-        private static readonly Dictionary<int, int> opinionSampleTickCache = new Dictionary<int, int>();
+        private static readonly Dictionary<int, float> opinionSampleTimeCache = new Dictionary<int, float>();
 
         private static int GetOpinionSubHash(Pawn pawn)
         {
@@ -31,9 +31,9 @@ namespace Overlord
                 return 0;
 
             int id = pawn.thingIDNumber;
-            int now = Find.TickManager?.TicksGame ?? 0;
-            if (opinionSampleTickCache.TryGetValue(id, out int lastTick) &&
-                now - lastTick < OpinionSampleIntervalTicks &&
+            float now = UnityEngine.Time.realtimeSinceStartup;
+            if (opinionSampleTimeCache.TryGetValue(id, out float lastTime) &&
+                now - lastTime < OpinionSampleIntervalSeconds &&
                 opinionHashCache.TryGetValue(id, out int cached))
             {
                 return cached;
@@ -57,11 +57,11 @@ namespace Overlord
             if (opinionHashCache.Count > 256)
             {
                 opinionHashCache.Clear();
-                opinionSampleTickCache.Clear();
+                opinionSampleTimeCache.Clear();
             }
 
             opinionHashCache[id] = sub;
-            opinionSampleTickCache[id] = now;
+            opinionSampleTimeCache[id] = now;
             return sub;
         }
 
