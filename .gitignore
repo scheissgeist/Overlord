@@ -33,6 +33,7 @@ docs/HANDOFF_*.md
 docs/TASK_*.md
 docs/IMPLEMENTATION_STATUS.md
 docs/PUBLIC_CHECKLIST.md
+# Full private launch handoff stays local; short public pointer is docs/LAUNCH_STATUS.md
 
 # Internal planning / reverse-engineering notes (not end-user docs)
 docs/PLAN.md
