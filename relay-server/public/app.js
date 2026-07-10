@@ -1895,6 +1895,7 @@ function handleColonistList(msg) {
 
 // ─── Pawn state ───────────────────────────────────────────────────────────────
 function handlePawnState(msg) {
+  lastPawnStateAt = Date.now();
   let s = msg.state;
   if (!s) return;
   // State may arrive as a JSON string (RawJson wrapper) — parse it
@@ -5846,3 +5847,24 @@ mapCanvas.addEventListener('contextmenu', (e) => {
   markCommandSent('context_menu', 'Checking actions');
   send({ type: 'command', action: 'context_menu', targetX: cx, targetY: cy });
 });
+
+
+// ─── Payload freshness stamp ─────────────────────────────────────────────────
+// Shows how old the last pawn_state is. Data stays rendered on stalls/drops —
+// this stamp is the honest signal (stale-while-revalidate, never blank panes).
+let lastPawnStateAt = 0;
+const syncStamp = (() => {
+  if (!statusText || !statusText.parentNode) return null;
+  const el = document.createElement('span');
+  el.className = 'sync-stamp';
+  statusText.parentNode.insertBefore(el, statusText.nextSibling);
+  return el;
+})();
+setInterval(() => {
+  if (!syncStamp) return;
+  if (!lastPawnStateAt || !pawnState) { syncStamp.textContent = ''; syncStamp.className = 'sync-stamp'; return; }
+  const age = (Date.now() - lastPawnStateAt) / 1000;
+  const band = age < 2 ? 'ok' : age < 10 ? 'warn' : 'stale';
+  syncStamp.className = 'sync-stamp ' + band;
+  syncStamp.textContent = age < 2 ? 'synced' : `synced ${age < 10 ? age.toFixed(1) : Math.round(age)}s ago`;
+}, 1000);

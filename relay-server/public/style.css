@@ -4412,3 +4412,9 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 /* Honest no-data states for vitals (payload-truth rule) */
 .dp-muted, .qs-muted { color: var(--text-muted); }
+
+/* Payload freshness stamp */
+.sync-stamp { font-size: 11px; margin-left: 8px; color: var(--text-muted); }
+.sync-stamp.ok { color: var(--green); }
+.sync-stamp.warn { color: var(--yellow); }
+.sync-stamp.stale { color: var(--red); }
