@@ -4281,27 +4281,37 @@ function findStoryPurchaseEntry(type, used) {
   });
 }
 
+function dedupeOptionsByValue(options) {
+  const seen = new Set();
+  return options.filter(option => {
+    const key = String(option.value).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getStoryOptionsForType(optionType, state) {
   // Toolkit's trait commands resolve by trait LABEL, not RimWorld defName — and
   // degreed traits share one defName ("Iron-willed"/"Steadfast" are both Nerves),
   // so defName values made those options identical and unresolvable. Send the label.
   if (optionType === 'traitOptions') {
-    return getArray(state?.traitOptions).map(trait => ({
+    return dedupeOptionsByValue(getArray(state?.traitOptions).map(trait => ({
       value: trait?.label || trait?.defName || trait,
       label: trait?.label || trait?.defName || trait
-    })).filter(option => option.value);
+    })).filter(option => option.value));
   }
   if (optionType === 'currentTraits') {
-    return getArray(state?.traits).map(trait => ({
+    return dedupeOptionsByValue(getArray(state?.traits).map(trait => ({
       value: trait?.label || trait?.defName || trait,
       label: trait?.label || trait?.defName || trait
-    })).filter(option => option.value);
+    })).filter(option => option.value));
   }
   if (optionType === 'skills') {
-    return getArray(state?.skills).filter(skill => !skill?.disabled).map(skill => ({
+    return dedupeOptionsByValue(getArray(state?.skills).filter(skill => !skill?.disabled).map(skill => ({
       value: skill?.name || skill?.def || skill?.label,
       label: skill?.label || skill?.name || skill?.def
-    })).filter(option => option.value);
+    })).filter(option => option.value));
   }
   return [];
 }
