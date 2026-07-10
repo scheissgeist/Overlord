@@ -29,8 +29,6 @@ namespace Overlord
         private float lastUpdateTime;
         private const float ViewAspect = 16f / 9f;
 
-        // Round-robin: only render one viewer per update cycle
-        private int currentViewerIndex;
         private readonly Dictionary<string, float> lastFrameTimeByViewer = new Dictionary<string, float>();
 
         private readonly Dictionary<string, int> frameCounter = new Dictionary<string, int>();
@@ -221,12 +219,12 @@ namespace Overlord
 
             // Prefer viewers that are most overdue.
             var due = activeSessions
-                .Select((s, idx) =>
+                .Select(s =>
                 {
                     float last;
                     if (!lastFrameTimeByViewer.TryGetValue(s.username, out last))
                         last = 0f;
-                    return new { Session = s, Index = idx, Overdue = now - last };
+                    return new { Session = s, Overdue = now - last };
                 })
                 .Where(x => x.Overdue >= effectiveInterval)
                 .OrderByDescending(x => x.Overdue)
@@ -240,30 +238,47 @@ namespace Overlord
 
             lastUpdateTime = now;
 
-            for (int i = 0; i < due.Count && rendered < framesThisUpdate; i++)
+            // Build frame params for every due viewer, then group compatible views —
+            // multi-viewer streams cluster on the same base, so one expensive
+            // map-mesh render can serve several viewers via GPU crops at native
+            // resolution. A group consumes ONE unit of the per-pump render budget
+            // because the map render is the dominant cost, not the crops.
+            var dueParams = new List<ViewerFrameParams>(due.Count);
+            for (int i = 0; i < due.Count; i++)
             {
+                var p = BuildFrameParams(due[i].Session, activeSessions.Count);
+                if (p != null)
+                    dueParams.Add(p);
+            }
+
+            var groups = GroupCompatibleViews(dueParams);
+            foreach (var group in groups)
+            {
+                if (rendered >= framesThisUpdate)
+                    break;
+
                 if (sendQueue.Count + pendingReadbacks > Math.Max(2, activeSessions.Count * 2))
                 {
                     lock (statsLock) { statsSkipped++; }
                     break;
                 }
 
-                var session = due[i].Session;
-                currentViewerIndex = (due[i].Index + 1) % activeSessions.Count;
-
-                if (!frameCounter.ContainsKey(session.username))
-                    frameCounter[session.username] = 0;
-                frameCounter[session.username]++;
-                lastFrameTimeByViewer[session.username] = now;
+                foreach (var m in group)
+                {
+                    if (!frameCounter.ContainsKey(m.session.username))
+                        frameCounter[m.session.username] = 0;
+                    frameCounter[m.session.username]++;
+                    lastFrameTimeByViewer[m.session.username] = now;
+                }
 
                 try
                 {
-                    RenderForViewer(session, activeSessions.Count);
+                    RenderGroup(group);
                     rendered++;
                 }
                 catch (Exception ex)
                 {
-                    LogUtil.Warn($"Map render error for {session.username}: {ex.Message}");
+                    LogUtil.Warn($"Map render error (group of {group.Count}): {ex.Message}");
                     initFailCount++;
                     if (initFailCount > 5)
                     {
@@ -552,13 +567,27 @@ namespace Overlord
             // into other cameras or visible UI when several viewer frames are active.
         }
 
-        private void RenderForViewer(ViewerSession session, int activeViewerCount)
+        private sealed class ViewerFrameParams
         {
-            var renderWatch = Stopwatch.StartNew();
+            public ViewerSession session;
+            public Pawn pawn;
+            public Map map;
+            public Vector3 center;
+            public float radiusX;
+            public float radiusZ;
+            public float aspect;
+            public float zoom;
+            public int width;
+            public int height;
+            public int quality;
+        }
+
+        private ViewerFrameParams BuildFrameParams(ViewerSession session, int activeViewerCount)
+        {
             var pawn = session.assignedPawn;
-            var map = pawn.Map;
+            var map = pawn?.Map;
             if (map == null || !pawn.Spawned)
-                return;
+                return null;
 
             float cameraZoom = Mathf.Clamp(session.cameraZoom <= 0f ? 1f : session.cameraZoom, 0.45f, 5f);
             float viewerAspect = session.viewportAspect > 0f
@@ -588,16 +617,180 @@ namespace Overlord
                     Mathf.Clamp(session.cameraCenterZ, 0f, map.Size.z - 1f));
             }
 
-            var rt = RenderMapArea(map, cameraCenter, radiusZ, viewerAspect, frameWidth, frameHeight);
-            if (rt == null)
-                return;
+            return new ViewerFrameParams
+            {
+                session = session,
+                pawn = pawn,
+                map = map,
+                center = cameraCenter,
+                radiusX = radiusX,
+                radiusZ = radiusZ,
+                aspect = viewerAspect,
+                zoom = cameraZoom,
+                width = frameWidth,
+                height = frameHeight,
+                quality = frameQuality
+            };
+        }
 
+        private const int MaxUnionRenderHeight = 1440;
+        private const int MaxUnionRenderWidth = 2560;
+        private const float MaxUnionRadiusFactor = 2.2f;
+
+        /// <summary>
+        /// Groups due viewers whose view rects overlap enough that a single map-mesh
+        /// render can serve every member with a crop at native-or-better resolution.
+        /// Members that would force an oversized union render (far-apart pawns,
+        /// zoomed-in viewers) stay in their own group — grouping never trades
+        /// visual quality, only redundant renders.
+        /// </summary>
+        private static List<List<ViewerFrameParams>> GroupCompatibleViews(List<ViewerFrameParams> dueParams)
+        {
+            var groups = new List<List<ViewerFrameParams>>();
+            var used = new bool[dueParams.Count];
+            for (int i = 0; i < dueParams.Count; i++)
+            {
+                if (used[i]) continue;
+                used[i] = true;
+                var group = new List<ViewerFrameParams> { dueParams[i] };
+                for (int j = i + 1; j < dueParams.Count; j++)
+                {
+                    if (used[j]) continue;
+                    if (!ReferenceEquals(dueParams[j].map, dueParams[i].map)) continue;
+                    group.Add(dueParams[j]);
+                    if (TryComputeUnion(group, out _, out _, out _, out _, out _))
+                        used[j] = true;
+                    else
+                        group.RemoveAt(group.Count - 1);
+                }
+                groups.Add(group);
+            }
+            return groups;
+        }
+
+        private static bool TryComputeUnion(List<ViewerFrameParams> group,
+            out Vector3 unionCenter, out float unionRadiusX, out float unionRadiusZ,
+            out int unionWidth, out int unionHeight)
+        {
+            unionCenter = default(Vector3);
+            unionRadiusX = 0f;
+            unionRadiusZ = 0f;
+            unionWidth = 0;
+            unionHeight = 0;
+
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minZ = float.MaxValue, maxZ = float.MinValue;
+            float maxMemberRadiusZ = 0f;
+            foreach (var m in group)
+            {
+                minX = Math.Min(minX, m.center.x - m.radiusX);
+                maxX = Math.Max(maxX, m.center.x + m.radiusX);
+                minZ = Math.Min(minZ, m.center.z - m.radiusZ);
+                maxZ = Math.Max(maxZ, m.center.z + m.radiusZ);
+                maxMemberRadiusZ = Math.Max(maxMemberRadiusZ, m.radiusZ);
+            }
+
+            unionRadiusX = (maxX - minX) / 2f;
+            unionRadiusZ = (maxZ - minZ) / 2f;
+            if (unionRadiusX <= 0f || unionRadiusZ <= 0f)
+                return false;
+
+            // One shared render must not cover a huge map area — mapDrawer cost
+            // scales with the view rect.
+            if (unionRadiusZ > maxMemberRadiusZ * MaxUnionRadiusFactor)
+                return false;
+
+            // The union render must give every member a crop of at least its native
+            // frame size in BOTH axes, else the member's feed would upscale (blurry).
+            float neededHeight = 0f;
+            float neededWidth = 0f;
+            foreach (var m in group)
+            {
+                neededHeight = Math.Max(neededHeight, m.height * (unionRadiusZ / m.radiusZ));
+                neededWidth = Math.Max(neededWidth, m.width * (unionRadiusX / m.radiusX));
+            }
+            float unionAspect = unionRadiusX / unionRadiusZ;
+            int h = Mathf.CeilToInt(Math.Max(neededHeight, neededWidth / unionAspect));
+            if (h > MaxUnionRenderHeight)
+                return false;
+            int w = Mathf.CeilToInt(h * unionAspect);
+            if (w > MaxUnionRenderWidth)
+                return false;
+
+            unionCenter = new Vector3((minX + maxX) / 2f, group[0].center.y, (minZ + maxZ) / 2f);
+            unionWidth = w;
+            unionHeight = h;
+            return true;
+        }
+
+        private void RenderGroup(List<ViewerFrameParams> group)
+        {
+            if (group.Count == 1)
+            {
+                var p = group[0];
+                var singleWatch = Stopwatch.StartNew();
+                var singleRt = RenderMapArea(p.map, p.center, p.radiusZ, p.aspect, p.width, p.height);
+                if (singleRt == null)
+                    return;
+                FinishViewerFrame(p, singleRt, singleWatch);
+                initFailCount = 0;
+                return;
+            }
+
+            if (!TryComputeUnion(group, out Vector3 unionCenter, out float unionRadiusX, out float unionRadiusZ,
+                    out int unionWidth, out int unionHeight))
+            {
+                // Grouping already validated this; defensive fallback to singles.
+                foreach (var m in group)
+                    RenderGroup(new List<ViewerFrameParams> { m });
+                return;
+            }
+
+            var renderWatch = Stopwatch.StartNew();
+            float unionAspect = unionRadiusX / unionRadiusZ;
+            var unionRt = RenderMapArea(group[0].map, unionCenter, unionRadiusZ, unionAspect, unionWidth, unionHeight);
+            if (unionRt == null)
+                return;
+            renderWatch.Stop();
+
+            float unionMinX = unionCenter.x - unionRadiusX;
+            float unionMinZ = unionCenter.z - unionRadiusZ;
+            float unionWorldW = unionRadiusX * 2f;
+            float unionWorldH = unionRadiusZ * 2f;
+
+            try
+            {
+                for (int i = 0; i < group.Count; i++)
+                {
+                    var m = group[i];
+                    var viewerRt = RenderTexture.GetTemporary(m.width, m.height, 0, RenderTextureFormat.ARGB32);
+                    var scale = new Vector2(m.radiusX * 2f / unionWorldW, m.radiusZ * 2f / unionWorldH);
+                    var offset = new Vector2(
+                        (m.center.x - m.radiusX - unionMinX) / unionWorldW,
+                        (m.center.z - m.radiusZ - unionMinZ) / unionWorldH);
+                    Graphics.Blit(unionRt, viewerRt, scale, offset);
+
+                    // The map-mesh render cost is shared; attribute it to the first
+                    // member's stats and near-zero to the rest.
+                    FinishViewerFrame(m, viewerRt, i == 0 ? renderWatch : Stopwatch.StartNew());
+                }
+            }
+            finally
+            {
+                RenderTexture.ReleaseTemporary(unionRt);
+            }
+
+            initFailCount = 0;
+        }
+
+        private void FinishViewerFrame(ViewerFrameParams p, RenderTexture rt, Stopwatch renderWatch)
+        {
             // Overlay ops read live game state — collect on the main thread at capture
             // time; rasterization happens wherever the pixels end up (worker or here).
             List<MapOverlayPainter.DrawOp> ops;
             try
             {
-                ops = MapOverlayPainter.CollectOps(pawn, cameraCenter.x, cameraCenter.z, radiusX, radiusZ, frameWidth, frameHeight);
+                ops = MapOverlayPainter.CollectOps(p.pawn, p.center.x, p.center.z, p.radiusX, p.radiusZ, p.width, p.height);
             }
             catch
             {
@@ -607,22 +800,21 @@ namespace Overlord
             var metadata = new Dictionary<string, object>
             {
                 ["type"] = StateProtocol.MapFrame,
-                ["target"] = session.username,
-                ["centerX"] = cameraCenter.x,
-                ["centerZ"] = cameraCenter.z,
-                ["radiusX"] = radiusX,
-                ["radiusZ"] = radiusZ,
-                ["sourceWidth"] = frameWidth,
-                ["sourceHeight"] = frameHeight,
-                ["quality"] = frameQuality,
+                ["target"] = p.session.username,
+                ["centerX"] = p.center.x,
+                ["centerZ"] = p.center.z,
+                ["radiusX"] = p.radiusX,
+                ["radiusZ"] = p.radiusZ,
+                ["sourceWidth"] = p.width,
+                ["sourceHeight"] = p.height,
+                ["quality"] = p.quality,
                 ["cameraMode"] = "pawn",
-                ["zoom"] = cameraZoom,
-                ["mapWidth"] = map.Size.x,
-                ["mapHeight"] = map.Size.z
+                ["zoom"] = p.zoom,
+                ["mapWidth"] = p.map.Size.x,
+                ["mapHeight"] = p.map.Size.z
             };
 
-            DispatchFrame(rt, frameWidth, frameHeight, frameQuality, ops, metadata, session.username, renderWatch, "pawn");
-            initFailCount = 0;
+            DispatchFrame(rt, p.width, p.height, p.quality, ops, metadata, p.session.username, renderWatch, "pawn");
         }
 
         /// <summary>
