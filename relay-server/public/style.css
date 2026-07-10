@@ -2075,6 +2075,22 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   gap: 12px;
 }
 
+/* Complete equipped list — the payload-truth display; spans both columns. */
+.gear-worn-all {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 10px;
+}
+.gear-worn-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.gear-worn-row .gear-sheet-count { color: var(--text-muted); }
+
 .gear-rig {
   display: grid;
   grid-template-columns: 1fr 1fr;

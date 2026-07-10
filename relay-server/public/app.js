@@ -3242,7 +3242,7 @@ function handlePawnDied(msg) {
 
   const deathFlash = document.createElement('div');
   deathFlash.style.cssText = 'position:fixed;inset:0;background:rgba(110,20,20,0.42);z-index:99;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;transition:opacity 1.6s';
-  deathFlash.innerHTML = `<div style="font-size:20px;font-weight:700;color:#fff;letter-spacing:0.06em;text-transform:uppercase">Colonist lost</div><div style="font-size:18px;font-weight:700;color:#fff">${name} has died</div>`;
+  deathFlash.innerHTML = `<div style="font-size:20px;font-weight:700;color:#fff;letter-spacing:0.06em;text-transform:uppercase">Colonist lost</div><div style="font-size:18px;font-weight:700;color:#fff">${escapeHtml(name)} has died</div>`;
   document.body.appendChild(deathFlash);
 
   setTimeout(() => { deathFlash.style.opacity = '0'; }, 1500);
@@ -5506,9 +5506,9 @@ function handleVoteUpdate(msg) {
   updateDrawerPreview(msg.question || 'Vote active', 'Events');
   const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
   el.innerHTML = `<div class="vote-box">
-    <div class="vote-q">${msg.question || 'Vote'}</div>
+    <div class="vote-q">${escapeHtml(msg.question || 'Vote')}</div>
     ${(msg.options || []).map((o, i) => `<div class="vote-opt" onclick="castVote(${i})">
-      <span>${o.label}</span>
+      <span>${escapeHtml(o.label ?? '')}</span>
       <div class="vote-bar-bg"><div class="vote-bar" style="width:${(o.votes||0)/total*100}%"></div></div>
       <span>${o.votes || 0}</span>
     </div>`).join('')}
