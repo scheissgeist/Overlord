@@ -4293,18 +4293,21 @@ function dedupeOptionsByValue(options) {
 }
 
 function getStoryOptionsForType(optionType, state) {
-  // Toolkit's trait commands resolve by trait LABEL, not RimWorld defName — and
-  // degreed traits share one defName ("Iron-willed"/"Steadfast" are both Nerves),
-  // so defName values made those options identical and unresolvable. Send the label.
+  // Authoritative option keys: "defName:degree" — the mod resolves them against
+  // the game's own defs at purchase time (degreed traits share a defName, and
+  // labels were a matching heuristic). Label-only fallback for legacy payloads.
+  const traitValue = trait => (trait?.defName != null
+    ? `${trait.defName}:${Number.isFinite(trait?.degree) ? trait.degree : 0}`
+    : (trait?.label || trait));
   if (optionType === 'traitOptions') {
     return dedupeOptionsByValue(getArray(state?.traitOptions).map(trait => ({
-      value: trait?.label || trait?.defName || trait,
+      value: traitValue(trait),
       label: trait?.label || trait?.defName || trait
     })).filter(option => option.value));
   }
   if (optionType === 'currentTraits') {
     return dedupeOptionsByValue(getArray(state?.traits).map(trait => ({
-      value: trait?.label || trait?.defName || trait,
+      value: traitValue(trait),
       label: trait?.label || trait?.defName || trait
     })).filter(option => option.value));
   }

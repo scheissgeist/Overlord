@@ -362,13 +362,45 @@ namespace Overlord
             "trait", "removetrait", "replacetrait", "settraits"
         };
 
+        /// <summary>
+        /// Resolves "defName:degree" trait arguments to the trait's degree label via
+        /// the game's defs. Returns the input unchanged when it isn't that form or
+        /// the def/degree can't be found (legacy label arguments keep working).
+        /// </summary>
+        private static string ResolveTraitArgument(string argument)
+        {
+            int sep = argument.LastIndexOf(':');
+            if (sep <= 0 || sep == argument.Length - 1)
+                return argument;
+
+            string defName = argument.Substring(0, sep);
+            if (!int.TryParse(argument.Substring(sep + 1), out int degree))
+                return argument;
+
+            var traitDef = DefDatabase<TraitDef>.GetNamedSilentFail(defName);
+            var degreeData = traitDef?.degreeDatas?.FirstOrDefault(d => d != null && d.degree == degree);
+            if (degreeData == null)
+                return argument;
+
+            string label = degreeData.label;
+            if (string.IsNullOrEmpty(label))
+                label = traitDef.label ?? traitDef.defName;
+            return label;
+        }
+
         private static string BuildPurchaseCommand(string sku, PurchaseInfo info, int quantity, string argument)
         {
             if (string.Equals(info.kind, "item", StringComparison.OrdinalIgnoreCase))
                 return "!buy " + sku + (quantity > 1 ? " " + quantity : "");
 
             if (!string.IsNullOrEmpty(argument) && TraitArgumentSkus.Contains(sku.ToLowerInvariant()))
-                argument = argument.Replace(" ", "");
+            {
+                // Authoritative form from the web UI: "defName:degree". Resolve to the
+                // degree label from the game's own defs — the single source of truth —
+                // then strip spaces per Toolkit chat syntax. Legacy plain-label
+                // arguments (old clients) pass through unchanged.
+                argument = ResolveTraitArgument(argument).Replace(" ", "");
+            }
 
             return string.IsNullOrEmpty(argument)
                 ? "!buy " + sku
