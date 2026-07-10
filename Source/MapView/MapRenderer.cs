@@ -256,7 +256,14 @@ namespace Overlord
             // path (one map render, GPU crops). On the sync fallback each member costs
             // a ReadPixels stall + main-thread encode, so grouping would smuggle the
             // exact multi-encode frame spike the budget cap exists to prevent.
-            bool groupingAllowed = asyncSupported && !asyncPipelineBroken;
+            // DISABLED 2026-07-09: Graphics.Blit-written RTs have the OPPOSITE
+            // vertical layout to camera-rendered RTs on D3D, so grouped members'
+            // readbacks decoded upside-down (live report: clustered expedition pawns
+            // all grouped -> flipped maps; solo-rendered home viewers fine). Do not
+            // re-enable until the crop path is orientation-verified offline —
+            // planned replacement: CPU row-crop from a single union readback, which
+            // matches the solo path's orientation by construction.
+            bool groupingAllowed = false;
             var groups = groupingAllowed
                 ? GroupCompatibleViews(dueParams)
                 : dueParams.Select(p => new List<ViewerFrameParams> { p }).ToList();
