@@ -827,21 +827,23 @@ function markCommandArmed(action, message) {
   setCommandFeedback(action, 'armed', message);
 }
 
-let commandResponseTimer = null;
+const commandResponseTimers = new Map();
 
 function markCommandSent(action, message) {
   lastCommandAction = action;
   setCommandFeedback(action, 'sent', message);
   // Honest lifecycle: a command that never gets a host result must not sit in
-  // 'sent' forever — that silence is why viewers double-tap.
-  clearTimeout(commandResponseTimer);
-  commandResponseTimer = setTimeout(() => {
+  // 'sent' forever — that silence is why viewers double-tap. One timer PER
+  // action so a result for command A can't disarm command B's timeout.
+  clearTimeout(commandResponseTimers.get(action));
+  commandResponseTimers.set(action, setTimeout(() => {
+    commandResponseTimers.delete(action);
+    setCommandFeedback(action, 'failed', 'No response from host — try again');
     if (lastCommandAction === action) {
-      setCommandFeedback(action, 'failed', 'No response from host — try again');
       lastCommandAction = null;
       clearSubtitleFeedback();
     }
-  }, 5000);
+  }, 5000));
   if (pawnSubtitle && message) {
     const prev = pawnSubtitle.dataset.prevText ?? pawnSubtitle.textContent;
     pawnSubtitle.dataset.prevText = prev;
@@ -856,9 +858,10 @@ function clearSubtitleFeedback() {
 }
 
 function markCommandResult(action, ok, message) {
-  clearTimeout(commandResponseTimer);
   const resolvedAction = action || lastCommandAction;
   if (!resolvedAction) return;
+  clearTimeout(commandResponseTimers.get(resolvedAction));
+  commandResponseTimers.delete(resolvedAction);
   setCommandFeedback(resolvedAction, ok === false ? 'failed' : 'accepted', message);
   if (resolvedAction === lastCommandAction) lastCommandAction = null;
 }
@@ -5895,11 +5898,22 @@ setInterval(() => {
 // ─── Lobby spectator view ────────────────────────────────────────────────────
 const lobbySpectate = $('lobby-spectate');
 let lobbySpectateCtx = null;
+let lastSpectateFrameAt = 0;
+setInterval(() => {
+  // A "live" colony view must not silently freeze: hide the canvas when no
+  // spectate frame has arrived for a while (host pipeline change, disconnect).
+  if (lobbySpectate && !lobbySpectate.classList.contains('hidden') &&
+      Date.now() - lastSpectateFrameAt > 6000) {
+    lobbySpectate.classList.add('hidden');
+  }
+}, 2000);
+
 function drawSpectateFrame(src, objectUrl) {
   if (!lobbySpectate || !screenLobby?.classList.contains('active')) {
     if (objectUrl) releaseLiveFrameObjectUrl(objectUrl);
     return;
   }
+  lastSpectateFrameAt = Date.now();
   const img = new Image();
   img.onload = () => {
     try {

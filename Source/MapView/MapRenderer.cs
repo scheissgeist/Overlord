@@ -184,12 +184,13 @@ namespace Overlord
             if (sendQueue.Count + pendingReadbacks > 4)
                 return;
 
-            bool anyLobbyViewer = false;
+            var lobbyTargets = new List<string>();
             foreach (var s in viewers.AllSessions)
             {
-                if (s != null && s.isConnected && !s.HasPawn) { anyLobbyViewer = true; break; }
+                if (s != null && s.isConnected && !s.HasPawn && !string.IsNullOrEmpty(s.username))
+                    lobbyTargets.Add(s.username);
             }
-            if (!anyLobbyViewer)
+            if (lobbyTargets.Count == 0)
                 return;
 
             var map = Find.CurrentMap;
@@ -246,20 +247,28 @@ namespace Overlord
                 ["mapHeight"] = map.Size.z
             };
 
-            DispatchFrame(rt, specW, specH, specQuality, new List<MapOverlayPainter.DrawOp>(), metadata, null, watch, "spectate");
+            // Targeted per lobby viewer: assigned viewers download nothing, old
+            // cached clients never see broadcast spectate frames, and tactical-map
+            // audiences aren't re-exposed to JPEG traffic. Lobby counts are small.
+            DispatchFrame(rt, specW, specH, specQuality, new List<MapOverlayPainter.DrawOp>(), metadata, null, watch, "spectate", lobbyTargets);
         }
 
         private void RenderDueFrames(ViewerManager viewers)
         {
             RefreshSettings();
-            MaybeRenderSpectatorFrame(viewers);
 
             var activeSessions = viewers.AllSessions
                 .Where(s => s != null && s.isConnected && s.HasPawn && s.assignedPawn.Map != null && s.assignedPawn.Spawned)
                 .ToList();
 
             if (activeSessions.Count == 0)
+            {
+                // Nobody assigned — the pump is idle, so a spectate render (for
+                // lobby-only audiences, e.g. stream start) can never stack with
+                // group renders in the same frame.
+                MaybeRenderSpectatorFrame(viewers);
                 return;
+            }
 
             if (OverlordMod.Settings?.allowViewerTacticalMap == true &&
                 OverlordMod.Settings?.mirrorHostCameraToViewers != true)
@@ -320,6 +329,9 @@ namespace Overlord
 
             if (due.Count == 0)
             {
+                // Idle pump — no group renders this frame, so the spectate render
+                // never exceeds the per-pump render budget (review finding).
+                MaybeRenderSpectatorFrame(viewers);
                 MaybeLogStats(activeSessions.Count, sendQueue.Count, effectiveInterval);
                 return;
             }
@@ -978,9 +990,10 @@ namespace Overlord
 
             sendQueue.Enqueue(() =>
             {
-                bool first = true;
-                foreach (var crop in crops)
+                for (int c = 0; c < crops.Count; c++)
                 {
+                    var crop = crops[c];
+                    byte[] jpeg;
                     try
                     {
                         var pixels = new byte[crop.width * crop.height * 4];
@@ -1002,21 +1015,30 @@ namespace Overlord
                             MapOverlayPainter.FlipRowsInPlace(pixels, crop.width, crop.height);
 
                         var encodeWatch = Stopwatch.StartNew();
-                        byte[] jpeg = ImageConversion.EncodeArrayToJPG(
+                        jpeg = ImageConversion.EncodeArrayToJPG(
                             pixels, GraphicsFormat.R8G8B8A8_UNorm, (uint)crop.width, (uint)crop.height, 0, crop.quality);
                         encodeWatch.Stop();
 
-                        RecordFrameStats(first ? renderMs : 0, encodeWatch.ElapsedMilliseconds, jpeg.Length,
+                        RecordFrameStats(c == 0 ? renderMs : 0, encodeWatch.ElapsedMilliseconds, jpeg.Length,
                             crop.width, crop.height, crop.quality, "pawn");
-                        first = false;
-                        SendMapFrame(crop.metadata, jpeg, crop.target);
                     }
                     catch (Exception ex)
                     {
+                        // Rasterize/encode failure latches the fallback; count the
+                        // group's undelivered crops so the drop is visible in stats.
                         asyncPipelineBroken = true;
+                        lock (statsLock) { statsSkipped += crops.Count - c; }
                         LogUtil.Warn($"Union crop encode failed — reverting to main-thread capture: {ex.Message}");
                         return;
                     }
+
+                    // Send failures (relay blip) must NOT latch the pipeline —
+                    // same invariant as the solo path.
+                    try
+                    {
+                        SendMapFrame(crop.metadata, jpeg, crop.target);
+                    }
+                    catch { }
                 }
             });
         }
@@ -1063,7 +1085,8 @@ namespace Overlord
         /// </summary>
         private void DispatchFrame(RenderTexture rt, int width, int height, int quality,
             List<MapOverlayPainter.DrawOp> ops, Dictionary<string, object> metadata,
-            string embeddedTarget, Stopwatch renderWatch, string cameraMode)
+            string embeddedTarget, Stopwatch renderWatch, string cameraMode,
+            List<string> fanoutTargets = null)
         {
             if (asyncSupported && !asyncPipelineBroken)
             {
@@ -1074,7 +1097,7 @@ namespace Overlord
                 {
                     pendingReadbacks++;
                     AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, req =>
-                        OnReadbackComplete(req, rt, width, height, quality, ops, metadata, embeddedTarget, renderMs, cameraMode, topDown));
+                        OnReadbackComplete(req, rt, width, height, quality, ops, metadata, embeddedTarget, renderMs, cameraMode, topDown, fanoutTargets));
                 }
                 catch (Exception ex)
                 {
@@ -1094,7 +1117,8 @@ namespace Overlord
         // Unity invokes readback callbacks on the main thread during the player loop.
         private void OnReadbackComplete(AsyncGPUReadbackRequest req, RenderTexture rt, int width, int height, int quality,
             List<MapOverlayPainter.DrawOp> ops, Dictionary<string, object> metadata,
-            string embeddedTarget, long renderMs, string cameraMode, bool topDown)
+            string embeddedTarget, long renderMs, string cameraMode, bool topDown,
+            List<string> fanoutTargets = null)
         {
             pendingReadbacks--;
             RenderTexture.ReleaseTemporary(rt);
@@ -1162,7 +1186,20 @@ namespace Overlord
                 // pipeline-broken flag — the legacy path swallows them too.
                 try
                 {
-                    SendMapFrame(metadata, jpeg, embeddedTarget);
+                    if (fanoutTargets != null)
+                    {
+                        // One encode, many recipients (spectator frames): clone the
+                        // metadata with each target so routing stays per-viewer.
+                        foreach (var target in fanoutTargets)
+                        {
+                            var targeted = new Dictionary<string, object>(metadata) { ["target"] = target };
+                            SendMapFrame(targeted, jpeg, target);
+                        }
+                    }
+                    else
+                    {
+                        SendMapFrame(metadata, jpeg, embeddedTarget);
+                    }
                 }
                 catch { }
             });

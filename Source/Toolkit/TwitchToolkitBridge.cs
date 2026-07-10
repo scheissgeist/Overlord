@@ -378,13 +378,15 @@ namespace Overlord
                 return argument;
 
             var traitDef = DefDatabase<TraitDef>.GetNamedSilentFail(defName);
-            var degreeData = traitDef?.degreeDatas?.FirstOrDefault(d => d != null && d.degree == degree);
-            if (degreeData == null)
-                return argument;
+            if (traitDef == null)
+                return argument; // never looked like one of ours — legacy passthrough
 
-            string label = degreeData.label;
+            var degreeData = traitDef.degreeDatas?.FirstOrDefault(d => d != null && d.degree == degree);
+            string label = degreeData?.label;
             if (string.IsNullOrEmpty(label))
                 label = traitDef.label ?? traitDef.defName;
+            // Structurally key-shaped and the def exists: NEVER emit the raw key —
+            // "SomeTrait:0" is guaranteed unresolvable by Toolkit's label matching.
             return label;
         }
 

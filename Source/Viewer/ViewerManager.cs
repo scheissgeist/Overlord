@@ -596,6 +596,12 @@ namespace Overlord
             // Snapshot to avoid modification during enumeration
             var sessionSnapshot = sessions.Values.ToList();
 
+            // One increment per CYCLE (not per pawn) — fires a sweep of all
+            // assigned pawns every ~5s regardless of viewer count.
+            bool repairSweepDue = ++repairSweepCounter >= RepairSweepEveryCycles;
+            if (repairSweepDue)
+                repairSweepCounter = 0;
+
             foreach (var session in sessionSnapshot)
             {
                 // Time-based ticket earn (applies whether or not viewer has a pawn)
@@ -630,14 +636,13 @@ namespace Overlord
                 // finished the order — otherwise they stand at attention forever.
                 PawnCommandRouter.MaybeAutoUndraft(pawn);
 
-                // Continuous self-heal: tonight a pawn got equipment-tracker-corrupted
-                // MID-session (suppressed tick = uncontrollable for hours, silently).
-                // The scan is two-items cheap; run it every ~5s per assigned pawn.
-                if (++repairSweepCounter >= RepairSweepEveryCycles)
-                {
-                    repairSweepCounter = 0;
+                // Continuous self-heal: a pawn can get equipment-tracker-corrupted
+                // MID-session (suppressed tick = uncontrollable, silently). The scan
+                // is two-items cheap; sweep EVERY assigned pawn when the cycle counter
+                // fires (a per-pawn increment starved fixed subsets whenever
+                // gcd(interval, pawnCount) > 1 — review finding).
+                if (repairSweepDue)
                     PawnCommandRouter.RepairEquipmentTracker(pawn);
-                }
 
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";
