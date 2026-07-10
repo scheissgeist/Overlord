@@ -117,6 +117,20 @@ namespace Overlord
             mapRenderer = new MapRenderer();
             mapRenderer.Start();
 
+            // Heal equipment trackers corrupted by the old apparel-as-Equip bug
+            // (null slots suppress the pawn's tick — uncontrollable pawns) so an
+            // affected save self-repairs on load instead of needing dev-mode surgery.
+            try
+            {
+                var colonists = Find.CurrentMap?.mapPawns?.FreeColonists;
+                if (colonists != null)
+                {
+                    foreach (var colonist in colonists)
+                        PawnCommandRouter.RepairEquipmentTracker(colonist);
+                }
+            }
+            catch { }
+
             RimWorldCompat.LogCapabilitiesOnce();
             LogUtil.Log("Overlord initialized");
         }

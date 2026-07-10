@@ -742,9 +742,61 @@ namespace Overlord
                 return ErrorResult($"Cannot take gear from {holder.LabelShort ?? "another colonist"}");
             }
 
-            var job = JobMaker.MakeJob(JobDefOf.Equip, thing);
+            // JobDefOf.Equip is the WEAPON job — it puts the item into the pawn's
+            // equipment tracker. Using it for apparel stuffed hats into the weapon
+            // tracker: they piled up unworn ("collecting hats") and corrupted the
+            // tracker (EquipmentTrackerTick NREs -> uncontrollable pawns, PostLoadInit
+            // failures on save load). Apparel takes the Wear job.
+            Job job;
+            if (thing is Apparel)
+                job = JobMaker.MakeJob(JobDefOf.Wear, thing);
+            else if (thing.def.IsWeapon && thing is ThingWithComps)
+                job = JobMaker.MakeJob(JobDefOf.Equip, thing);
+            else
+                return ErrorResult($"{thing.LabelShort ?? "Item"} cannot be equipped");
+
             pawn.jobs.TryTakeOrderedJob(job);
-            return SuccessResult($"Equipping {thing.LabelShort ?? "item"}");
+            return SuccessResult($"{(thing is Apparel ? "Wearing" : "Equipping")} {thing.LabelShort ?? "item"}");
+        }
+
+        /// <summary>
+        /// Repairs a pawn whose equipment tracker holds invalid entries — null slots
+        /// (save corruption; NREs every EquipmentTrackerTick and suppresses the pawn's
+        /// tick, making it uncontrollable) and Apparel stuffed in by the old equip
+        /// command. Nulls are removed; apparel is dropped at the pawn's feet so it can
+        /// be worn properly. Safe to call repeatedly; never throws.
+        /// </summary>
+        public static void RepairEquipmentTracker(Pawn pawn)
+        {
+            try
+            {
+                var owner = pawn?.equipment?.GetDirectlyHeldThings();
+                if (owner == null)
+                    return;
+
+                int removed = owner.RemoveAll(t => t == null);
+                if (removed > 0)
+                    LogUtil.Warn($"Repaired {pawn.LabelShort}: removed {removed} null equipment entr{(removed == 1 ? "y" : "ies")}");
+
+                if (pawn.Spawned && pawn.Map != null)
+                {
+                    var stuckApparel = new List<Thing>();
+                    for (int i = 0; i < owner.Count; i++)
+                    {
+                        if (owner[i] is Apparel)
+                            stuckApparel.Add(owner[i]);
+                    }
+                    foreach (var item in stuckApparel)
+                    {
+                        if (owner.TryDrop(item, pawn.Position, pawn.Map, ThingPlaceMode.Near, out _))
+                            LogUtil.Warn($"Repaired {pawn.LabelShort}: ejected {item.LabelShort} from equipment tracker");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogUtil.Warn($"Equipment repair failed for {pawn?.LabelShort}: {ex.Message}");
+            }
         }
 
         private static Dictionary<string, object> ExecuteDrop(Pawn pawn, string json)

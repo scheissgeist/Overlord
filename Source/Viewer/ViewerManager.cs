@@ -185,6 +185,9 @@ namespace Overlord
             session.assignedPawn = pawn;
             session.lastStateHash = 0; // Force full state send
             session.ResetTacticalMapStream();
+            // A viewer is about to control this pawn — clear any equipment-tracker
+            // corruption (null slots / stuck apparel) before their commands hit it.
+            PawnCommandRouter.RepairEquipmentTracker(pawn);
             pawnToViewer[pawn.thingIDNumber] = username;
             pendingClaims.Remove(username);
             foreach (var claim in pendingClaims.Values.Where(c => c.pawnId == pawn.thingIDNumber).ToList())
