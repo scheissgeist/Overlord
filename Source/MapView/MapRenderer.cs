@@ -256,14 +256,12 @@ namespace Overlord
             // path (one map render, GPU crops). On the sync fallback each member costs
             // a ReadPixels stall + main-thread encode, so grouping would smuggle the
             // exact multi-encode frame spike the budget cap exists to prevent.
-            // DISABLED 2026-07-09: Graphics.Blit-written RTs have the OPPOSITE
-            // vertical layout to camera-rendered RTs on D3D, so grouped members'
-            // readbacks decoded upside-down (live report: clustered expedition pawns
-            // all grouped -> flipped maps; solo-rendered home viewers fine). Do not
-            // re-enable until the crop path is orientation-verified offline —
-            // planned replacement: CPU row-crop from a single union readback, which
-            // matches the solo path's orientation by construction.
-            bool groupingAllowed = false;
+            // Grouping re-enabled 2026-07-09 (late): the Blit crops that decoded
+            // upside-down on D3D are replaced by CPU row-crops from a single union
+            // readback, which preserve the union buffer's row order — orientation is
+            // identical to the (production-soaked) solo path by construction. Also
+            // one readback per GROUP now, not per member. Async path only.
+            bool groupingAllowed = asyncSupported && !asyncPipelineBroken;
             var groups = groupingAllowed
                 ? GroupCompatibleViews(dueParams)
                 : dueParams.Select(p => new List<ViewerFrameParams> { p }).ToList();
@@ -764,41 +762,176 @@ namespace Overlord
                 return;
             }
 
+            // One render + ONE readback for the whole group; per-member crops are
+            // CPU row-copies on the worker. Crops preserve the union buffer's row
+            // order, so orientation is identical to the solo path by construction —
+            // this is the replacement for the Graphics.Blit crops that decoded
+            // upside-down on D3D (Blit-written RTs have the opposite layout).
             var renderWatch = Stopwatch.StartNew();
             float unionAspect = unionRadiusX / unionRadiusZ;
             var unionRt = RenderMapArea(group[0].map, unionCenter, unionRadiusZ, unionAspect, unionWidth, unionHeight);
             if (unionRt == null)
                 return;
             renderWatch.Stop();
+            long renderMs = renderWatch.ElapsedMilliseconds;
 
             float unionMinX = unionCenter.x - unionRadiusX;
             float unionMinZ = unionCenter.z - unionRadiusZ;
             float unionWorldW = unionRadiusX * 2f;
             float unionWorldH = unionRadiusZ * 2f;
 
+            // Main-thread phase: crop geometry + overlay ops + metadata (game reads).
+            var crops = new List<MemberCrop>(group.Count);
+            foreach (var m in group)
+            {
+                int cw = Mathf.Clamp(Mathf.RoundToInt(m.radiusX * 2f / unionWorldW * unionWidth), 16, unionWidth);
+                int ch = Mathf.Clamp(Mathf.RoundToInt(m.radiusZ * 2f / unionWorldH * unionHeight), 16, unionHeight);
+                int cx = Mathf.Clamp(Mathf.RoundToInt((m.center.x - m.radiusX - unionMinX) / unionWorldW * unionWidth), 0, unionWidth - cw);
+                int cy = Mathf.Clamp(Mathf.RoundToInt((m.center.z - m.radiusZ - unionMinZ) / unionWorldH * unionHeight), 0, unionHeight - ch);
+
+                List<MapOverlayPainter.DrawOp> ops;
+                try
+                {
+                    ops = MapOverlayPainter.CollectOps(m.pawn, m.center.x, m.center.z, m.radiusX, m.radiusZ, cw, ch);
+                }
+                catch
+                {
+                    ops = new List<MapOverlayPainter.DrawOp>();
+                }
+
+                var metadata = new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.MapFrame,
+                    ["target"] = m.session.username,
+                    ["centerX"] = m.center.x,
+                    ["centerZ"] = m.center.z,
+                    ["radiusX"] = m.radiusX,
+                    ["radiusZ"] = m.radiusZ,
+                    ["sourceWidth"] = cw,
+                    ["sourceHeight"] = ch,
+                    ["quality"] = m.quality,
+                    ["cameraMode"] = "pawn",
+                    ["zoom"] = m.zoom,
+                    ["mapWidth"] = m.map.Size.x,
+                    ["mapHeight"] = m.map.Size.z
+                };
+
+                crops.Add(new MemberCrop
+                {
+                    x = cx, yBottom = cy, width = cw, height = ch,
+                    quality = m.quality, ops = ops, metadata = metadata,
+                    target = m.session.username
+                });
+            }
+
+            bool topDown = gpuTopDown;
             try
             {
-                for (int i = 0; i < group.Count; i++)
-                {
-                    var m = group[i];
-                    var viewerRt = RenderTexture.GetTemporary(m.width, m.height, 0, RenderTextureFormat.ARGB32);
-                    var scale = new Vector2(m.radiusX * 2f / unionWorldW, m.radiusZ * 2f / unionWorldH);
-                    var offset = new Vector2(
-                        (m.center.x - m.radiusX - unionMinX) / unionWorldW,
-                        (m.center.z - m.radiusZ - unionMinZ) / unionWorldH);
-                    Graphics.Blit(unionRt, viewerRt, scale, offset);
-
-                    // The map-mesh render cost is shared; attribute it to the first
-                    // member's stats and near-zero to the rest.
-                    FinishViewerFrame(m, viewerRt, i == 0 ? renderWatch : Stopwatch.StartNew());
-                }
+                pendingReadbacks++;
+                AsyncGPUReadback.Request(unionRt, 0, TextureFormat.RGBA32, req =>
+                    OnUnionReadbackComplete(req, unionRt, unionWidth, unionHeight, crops, renderMs, topDown));
             }
-            finally
+            catch (Exception ex)
             {
+                pendingReadbacks--;
                 RenderTexture.ReleaseTemporary(unionRt);
+                asyncPipelineBroken = true;
+                LogUtil.Warn($"Union readback request failed — reverting to main-thread capture: {ex.Message}");
+                return;
             }
 
             initFailCount = 0;
+        }
+
+        private sealed class MemberCrop
+        {
+            public int x;
+            public int yBottom;   // crop origin measured from the world-bottom row
+            public int width;
+            public int height;
+            public int quality;
+            public List<MapOverlayPainter.DrawOp> ops;
+            public Dictionary<string, object> metadata;
+            public string target;
+        }
+
+        // Main thread (readback callbacks run in the player loop).
+        private void OnUnionReadbackComplete(AsyncGPUReadbackRequest req, RenderTexture rt, int unionWidth, int unionHeight,
+            List<MemberCrop> crops, long renderMs, bool topDown)
+        {
+            pendingReadbacks--;
+            RenderTexture.ReleaseTemporary(rt);
+
+            if (!initialized)
+                return;
+
+            if (req.hasError)
+            {
+                lock (statsLock) { statsSkipped += crops.Count; }
+                consecutiveReadbackErrors++;
+                if (consecutiveReadbackErrors >= 8 && !asyncPipelineBroken)
+                {
+                    asyncPipelineBroken = true;
+                    LogUtil.Warn("Async readbacks repeatedly erroring — reverting to main-thread capture");
+                }
+                return;
+            }
+            consecutiveReadbackErrors = 0;
+
+            byte[] unionPixels;
+            try
+            {
+                unionPixels = req.GetData<byte>().ToArray();
+            }
+            catch (Exception ex)
+            {
+                LogUtil.Warn($"Union readback copy failed: {ex.Message}");
+                return;
+            }
+
+            sendQueue.Enqueue(() =>
+            {
+                bool first = true;
+                foreach (var crop in crops)
+                {
+                    try
+                    {
+                        var pixels = new byte[crop.width * crop.height * 4];
+                        int unionStride = unionWidth * 4;
+                        int cropStride = crop.width * 4;
+                        // Preserve union row ORDER: for a top-down union buffer, the
+                        // crop's first stored row is its visually-topmost row, i.e.
+                        // union row (H - yBottom - height); bottom-up starts at yBottom.
+                        int startRow = topDown ? (unionHeight - crop.yBottom - crop.height) : crop.yBottom;
+                        for (int r = 0; r < crop.height; r++)
+                        {
+                            Buffer.BlockCopy(unionPixels,
+                                (startRow + r) * unionStride + crop.x * 4,
+                                pixels, r * cropStride, cropStride);
+                        }
+
+                        MapOverlayPainter.RasterizeToBuffer(pixels, crop.width, crop.height, topDown, crop.ops);
+                        if (topDown)
+                            MapOverlayPainter.FlipRowsInPlace(pixels, crop.width, crop.height);
+
+                        var encodeWatch = Stopwatch.StartNew();
+                        byte[] jpeg = ImageConversion.EncodeArrayToJPG(
+                            pixels, GraphicsFormat.R8G8B8A8_UNorm, (uint)crop.width, (uint)crop.height, 0, crop.quality);
+                        encodeWatch.Stop();
+
+                        RecordFrameStats(first ? renderMs : 0, encodeWatch.ElapsedMilliseconds, jpeg.Length,
+                            crop.width, crop.height, crop.quality, "pawn");
+                        first = false;
+                        SendMapFrame(crop.metadata, jpeg, crop.target);
+                    }
+                    catch (Exception ex)
+                    {
+                        asyncPipelineBroken = true;
+                        LogUtil.Warn($"Union crop encode failed — reverting to main-thread capture: {ex.Message}");
+                        return;
+                    }
+                }
+            });
         }
 
         private void FinishViewerFrame(ViewerFrameParams p, RenderTexture rt, Stopwatch renderWatch)
