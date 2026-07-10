@@ -52,3 +52,4 @@ relay-server/fly.toml
 dist/
 *.zip
 data/workshop_stats.csv
+docs/AI_CHANNEL.md  # live multi-agent coordination — local ops, never public
