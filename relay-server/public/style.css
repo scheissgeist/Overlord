@@ -4409,3 +4409,6 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Honest no-data states for vitals (payload-truth rule) */
+.dp-muted, .qs-muted { color: var(--text-muted); }

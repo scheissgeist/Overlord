@@ -539,10 +539,12 @@ function updateDrawerPreview(text, label) {
 function renderDrawerPreview() {
   if (!drawerPreview) return;
   if (pawnState && bottomPanel?.classList.contains('collapsed')) {
-    const hp = pawnState.health?.summaryHp ?? 100;
-    const mood = pawnState.needs?.Mood ?? pawnState.needs?.mood ?? 50;
-    const hpCls = hp < 50 ? 'red' : hp < 75 ? 'yellow' : 'green';
-    const moodCls = mood < 30 ? 'red' : mood < 50 ? 'yellow' : 'green';
+    const hpRaw = pawnState.health?.summaryHp;
+    const moodRaw2 = pawnState.needs?.Mood ?? pawnState.needs?.mood;
+    const hp = Number.isFinite(hpRaw) ? hpRaw : '—';
+    const mood = Number.isFinite(moodRaw2) ? moodRaw2 : '—';
+    const hpCls = !Number.isFinite(hpRaw) ? 'muted' : hp < 50 ? 'red' : hp < 75 ? 'yellow' : 'green';
+    const moodCls = !Number.isFinite(moodRaw2) ? 'muted' : mood < 30 ? 'red' : mood < 50 ? 'yellow' : 'green';
     const job = pawnState.currentJob || 'Idle';
     drawerPreview.innerHTML =
       `<span class="dp-vitals"><span class="dp-${hpCls}">HP ${hp}%</span> · <span class="dp-${moodCls}">Mood ${mood}%</span></span>` +
@@ -1945,15 +1947,22 @@ function handlePawnState(msg) {
     }
   }
 
-  const hp = s.health ? (s.health.summaryHp ?? 100) : 100;
-  const prevHp = previousState?._lastHp ?? 100;
-  if (hp < prevHp - 5) playSound('damage');
-  s._lastHp = hp;
-  const mood = s.needs ? (s.needs.Mood ?? s.needs.mood ?? 50) : 50;
+  // Missing payload fields render as an explicit "no data" dash — never a
+  // fabricated healthy-looking default (payload-truth rule).
+  const hp = Number.isFinite(s.health?.summaryHp) ? s.health.summaryHp : null;
+  const prevHp = previousState?._lastHp;
+  if (hp != null && Number.isFinite(prevHp) && hp < prevHp - 5) playSound('damage');
+  s._lastHp = hp != null ? hp : prevHp;
+  const moodRaw = s.needs?.Mood ?? s.needs?.mood;
+  const mood = Number.isFinite(moodRaw) ? moodRaw : null;
   const hpColor = hp < 50 ? 'var(--red)' : hp < 75 ? 'var(--yellow)' : 'var(--green)';
   const moodColor = mood < 30 ? 'var(--red)' : mood < 50 ? 'var(--yellow)' : 'var(--green)';
-  pawnHealthEl.innerHTML = `<span style="color:${hpColor}">${hp}%</span> <span style="color:var(--text-muted);font-weight:400">HP</span>`;
-  pawnMoodEl.innerHTML = `<span style="color:${moodColor}">${mood}%</span> <span style="color:var(--text-muted);font-weight:400">Mood</span>`;
+  pawnHealthEl.innerHTML = hp != null
+    ? `<span style="color:${hpColor}">${hp}%</span> <span style="color:var(--text-muted);font-weight:400">HP</span>`
+    : `<span style="color:var(--text-muted)">— HP</span>`;
+  pawnMoodEl.innerHTML = mood != null
+    ? `<span style="color:${moodColor}">${mood}%</span> <span style="color:var(--text-muted);font-weight:400">Mood</span>`
+    : `<span style="color:var(--text-muted)">— Mood</span>`;
 
   if (s.portrait) {
     const dataUrl = `data:image/png;base64,${s.portrait}`;
@@ -2021,16 +2030,18 @@ function renderNeeds(needs) {
   defs.forEach(({ id, key, label }) => {
     const el = $(id);
     if (!el) return;
-    let pct = needs[key] ?? needs[key.toLowerCase()] ?? 0;
-    if (pct > 0 && pct <= 1) pct = Math.round(pct * 100);
-    pct = Math.round(pct);
-    const cls = pct < 25 ? 'crit' : pct < 50 ? 'warn' : '';
+    const raw = needs[key] ?? needs[key.toLowerCase()];
+    const hasVal = Number.isFinite(raw);
+    // Serializer sends integer percents — no fraction heuristic (it rendered a
+    // genuine 1% as a full bar). Missing needs show a dash, not a red 0%.
+    const pct = hasVal ? Math.round(raw) : 0;
+    const cls = !hasVal ? '' : pct < 25 ? 'crit' : pct < 50 ? 'warn' : '';
     el.innerHTML = `<span class="need-label">${label}</span>
       <div class="need-bar-bg">
-        <div class="need-bar-fill ${cls}" style="width:${pct}%"></div>
-        <span class="need-val">${pct}%</span>
+        <div class="need-bar-fill ${cls}" style="width:${hasVal ? pct : 0}%"></div>
+        <span class="need-val">${hasVal ? pct + '%' : '—'}</span>
       </div>`;
-    el.title = `${label}: ${pct}%`;
+    el.title = hasVal ? `${label}: ${pct}%` : `${label}: no data`;
   });
 }
 
@@ -4090,10 +4101,12 @@ function renderQuickCommandPage() {
   const respawnDisabled = respawnPortalId == null ? 'disabled' : '';
   const drafted = !!pawnState?.drafted;
   const job = pawnState?.currentJob || 'Idle';
-  const hp = pawnState?.health?.summaryHp ?? 100;
-  const mood = pawnState?.needs?.Mood ?? pawnState?.needs?.mood ?? 50;
-  const hpCls = hp < 50 ? 'red' : hp < 75 ? 'yellow' : 'green';
-  const moodCls = mood < 30 ? 'red' : mood < 50 ? 'yellow' : 'green';
+  const hpRaw = pawnState?.health?.summaryHp;
+  const moodRaw = pawnState?.needs?.Mood ?? pawnState?.needs?.mood;
+  const hp = Number.isFinite(hpRaw) ? hpRaw : '—';
+  const mood = Number.isFinite(moodRaw) ? moodRaw : '—';
+  const hpCls = !Number.isFinite(hpRaw) ? 'muted' : hp < 50 ? 'red' : hp < 75 ? 'yellow' : 'green';
+  const moodCls = !Number.isFinite(moodRaw) ? 'muted' : mood < 30 ? 'red' : mood < 50 ? 'yellow' : 'green';
 
   return `<div class="command-page order-sheet-page">
     <div class="command-page-title">Quick orders</div>
