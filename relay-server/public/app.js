@@ -778,7 +778,10 @@ function applyCommandAvailability() {
   });
 
   renderEventButtons();
-  renderCommandCenter();
+  // Guarded wrapper: skips the destructive rebuild while a select/input is in
+  // use and when the window is hidden. This runs on EVERY pawn_state (~6Hz) —
+  // the unguarded rebuild here was what killed open dropdowns mid-choice.
+  renderCommandCenterFromState();
 }
 
 function getCommandButton(action) {
