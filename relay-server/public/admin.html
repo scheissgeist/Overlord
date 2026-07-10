@@ -77,7 +77,8 @@
     .selected-label { font-size: 12px; color: var(--muted); margin: 6px 0 2px; min-height: 18px; }
 
     @media (max-width: 600px) { .assign-grid { grid-template-columns: 1fr; } }
-  </style>
+        .log-err { color: var(--red, #e06c5a); }
+    </style>
 </head>
 <body>
   <div id="app">
@@ -294,9 +295,12 @@
               break;
 
             case 'action_result':
-            case 'command_result':
-              log(`${msg.ok === false ? 'Failed' : 'OK'}: ${msg.message || ''}`);
+            case 'command_result': {
+              const who = msg.username ? `${msg.username}: ` : '';
+              if (msg.ok === false) log(`FAILED ${who}${msg.action ? msg.action + ' — ' : ''}${msg.message || ''}`, 'err');
+              else log(`OK ${who}${msg.message || ''}`);
               break;
+            }
 
             case 'ops_log':
               renderOpsEntry(msg.entry);
@@ -307,6 +311,7 @@
 
       adminWs.onclose = () => {
         if (seq !== adminConnectSeq) return;
+        $('host-status').innerHTML = '<span class="dot off"></span>Admin link down — showing stale data, reconnecting…';
         log('WebSocket disconnected - reconnecting...');
         adminReconnectTimer = setTimeout(connectAdminWS, 3000);
       };
@@ -320,7 +325,12 @@
         $('viewer-count').textContent = data.viewers.length;
         $('uptime').textContent = formatUptime(data.uptime);
         renderViewers(data.viewers);
-      } catch {}
+        const note = document.querySelector('.refresh-note');
+        if (note) note.textContent = 'Status updated ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        const note = document.querySelector('.refresh-note');
+        if (note) note.textContent = 'Status poll failing (' + (e?.message || 'auth?') + ') — data is stale';
+      }
     }
 
     async function loadOpsLogs() {
@@ -527,10 +537,10 @@
       return h > 0 ? `${h}h ${m}m` : `${m}m`;
     }
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-    function log(text) {
+    function log(text, kind) {
       const el = $('event-log');
       const entry = document.createElement('div');
-      entry.className = 'log-entry';
+      entry.className = kind === 'err' ? 'log-entry log-err' : 'log-entry';
       entry.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
       el.appendChild(entry);
       while (el.children.length > 100) el.removeChild(el.firstChild);
