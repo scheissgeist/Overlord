@@ -5679,9 +5679,40 @@ mapCanvas.addEventListener('pointermove', updateLiveFramePan);
 mapCanvas.addEventListener('pointerup', endLiveFramePan);
 mapCanvas.addEventListener('pointercancel', endLiveFramePan);
 
+// Scroll-pans the live frame by CSS-pixel deltas. Scroll semantics: the view
+// moves in the scroll direction (opposite of grab-drag). World Z is up, so
+// scrolling down moves the view center to lower Z.
+function panLiveFrameByPixels(pxX, pxY) {
+  if (!liveFrameMeta || !liveFrameDrawRect) return;
+  const center = getLiveFramePanCenter();
+  if (!center) return;
+  const rect = mapCanvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0 || liveFrameDrawRect.width <= 0 || liveFrameDrawRect.height <= 0) return;
+  const cellDx = (pxX / rect.width * mapCanvas.width) / liveFrameDrawRect.width * liveFrameMeta.radiusX * 2;
+  const cellDz = (pxY / rect.height * mapCanvas.height) / liveFrameDrawRect.height * liveFrameMeta.radiusZ * 2;
+  const nextCenter = clampLiveFrameCenter({ x: center.x + cellDx, z: center.z - cellDz });
+  if (!nextCenter) return;
+  if (followPawnMode) {
+    followPawnMode = false;
+    try { localStorage.setItem(FOLLOW_PAWN_KEY, '0'); } catch (_) {}
+    updateFollowPawnToggle();
+  }
+  scheduleServerCameraZoom(true, { center: nextCenter });
+}
+
 mapCanvas.addEventListener('wheel', (e) => {
   if (!liveFrameMeta || hasTileData || (tileMap && tileMap.active)) return;
   e.preventDefault();
+  const absX = Math.abs(e.deltaX);
+  const absY = Math.abs(e.deltaY);
+  // Trackpad pinch arrives as ctrl+wheel: always zoom.
+  if (!e.ctrlKey) {
+    // Horizontal scroll (or shift+scroll) pans; previously deltaX was ignored
+    // and a pure-horizontal tick fell through to deltaY==0 "zoom out".
+    if (absX > absY) { panLiveFrameByPixels(e.deltaX, 0); return; }
+    if (e.shiftKey && absY > 0) { panLiveFrameByPixels(e.deltaY, 0); return; }
+  }
+  if (absY === 0) return;
   const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
   setLiveFrameZoom(liveFrameZoom * factor);
 }, { passive: false });
