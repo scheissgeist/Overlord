@@ -210,7 +210,28 @@ namespace Overlord
                     case StateProtocol.Unassign:       if (IsAdminMessage(json)) HandleUnassign(json);     break;
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
                     case "chat":                       HandleChat(json);         break;
-                    case "request_colonist_list":       viewerManager?.SendColonistList(JsonHelper.ExtractLastString(json, "username")); break;
+                    case "request_colonist_list":
+                        viewerManager?.SendColonistList(JsonHelper.ExtractLastString(json, "username"));
+                        // Admin connect sends this with source=admin: replay pending
+                        // claims so a freshly opened admin page doesn't show "no
+                        // claims" while viewers wait. Game state is the source of
+                        // truth; admin.html upserts, so replays are idempotent.
+                        if (JsonHelper.ExtractLastString(json, "source") == "admin" && viewerManager != null)
+                        {
+                            foreach (var claim in viewerManager.PendingClaims)
+                            {
+                                relayClient?.Broadcast(new Dictionary<string, object>
+                                {
+                                    ["type"] = StateProtocol.ClaimRequest,
+                                    ["username"] = claim.username,
+                                    ["displayName"] = claim.displayName,
+                                    ["pawnId"] = claim.pawnId,
+                                    ["pawnName"] = claim.pawnName,
+                                    ["adminOnly"] = true
+                                });
+                            }
+                        }
+                        break;
                 }
             }
             catch (Exception ex)

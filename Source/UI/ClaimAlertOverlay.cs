@@ -30,6 +30,10 @@ namespace Overlord
         private static int highlightUntilTick;
         private static string lastWaitingUsername;
         private static int waitingHighlightUntilTick;
+        private static int waitingSnoozedUntilTick;
+        private static int lastBellTick;
+        private const int WaitingSnoozeTicks = 7200; // ~2 min at 1x
+        private const int BellCooldownTicks = 600;   // ~10s at 1x
 
         public static void NotifyClaimRequest(PendingClaim claim)
         {
@@ -69,9 +73,10 @@ namespace Overlord
             if (!handleInput)
                 return;
 
+            // FIFO: the viewer who asked first gets decided first.
             var claims = viewers.PendingClaims
                 .Where(c => c != null)
-                .OrderByDescending(c => c.requestedTick)
+                .OrderBy(c => c.requestedTick)
                 .ToList();
             if (claims.Count > 0)
             {
@@ -83,6 +88,11 @@ namespace Overlord
                 DrawClaimContents(claimRect.ContractedBy(14f), comp, viewers, claim, claims.Count, drawVisuals);
                 return;
             }
+
+            // Streamer can snooze the (non-actionable) waiting toast; claim toasts
+            // above are actionable and always show.
+            if ((Find.TickManager?.TicksGame ?? 0) < waitingSnoozedUntilTick)
+                return;
 
             var waiting = viewers.AllSessions
                 .Where(s => s != null && s.isConnected && !s.HasPawn && viewers.GetPendingClaim(s.username) == null)
@@ -153,18 +163,18 @@ namespace Overlord
                 string viewer = session.displayName ?? session.username ?? "viewer";
                 Widgets.Label(new Rect(rect.x, rect.y + 26f, rect.width, 24f), $"{viewer} needs a colonist");
 
-                GUI.color = MutedColor;
-                Widgets.Label(new Rect(rect.x, rect.y + 55f, rect.width - 18f, 22f), "Open assignments to give them a pawn.");
-                GUI.color = Color.white;
-
                 Color oldColor = GUI.color;
                 GUI.color = BrassSoftColor;
                 Widgets.DrawLineHorizontal(rect.x, buttonY - 10f, rect.width);
                 GUI.color = oldColor;
             }
 
+            const float hideW = 78f;
             if (BrassButton(new Rect(buttonX, buttonY, openW, buttonH), "Open", drawVisuals, primary: true))
                 OpenOverlordAssignments();
+
+            if (BrassButton(new Rect(buttonX - hideW - 8f, buttonY, hideW, buttonH), "Hide", drawVisuals))
+                waitingSnoozedUntilTick = (Find.TickManager?.TicksGame ?? 0) + WaitingSnoozeTicks;
 
             GUI.color = Color.white;
             Text.Font = GameFont.Small;
@@ -174,10 +184,11 @@ namespace Overlord
         {
             var pawnObj = viewers.FindPawnById(claim.pawnId);
             float gap = 8f;
-            float approveW = 118f;
-            float openW = 78f;
-            float jumpW = pawnObj != null ? 72f : 0f;
-            float totalW = approveW + gap + openW + (pawnObj != null ? gap + jumpW : 0f);
+            float approveW = 100f;
+            float rejectW = 78f;
+            float openW = 66f;
+            float jumpW = pawnObj != null ? 62f : 0f;
+            float totalW = approveW + gap + rejectW + gap + openW + (pawnObj != null ? gap + jumpW : 0f);
             float buttonH = 30f;
             float buttonY = rect.yMax - buttonH;
             float buttonX = rect.xMax - totalW;
@@ -201,10 +212,6 @@ namespace Overlord
                 string pawn = claim.pawnName ?? "colonist";
                 Widgets.Label(new Rect(rect.x, rect.y + 26f, rect.width, 24f), $"{viewer} wants {pawn}");
 
-                GUI.color = MutedColor;
-                Widgets.Label(new Rect(rect.x, rect.y + 55f, rect.width - 18f, 22f), "Approve the request, open assignments, or jump to the pawn.");
-                GUI.color = Color.white;
-
                 Color oldColor = GUI.color;
                 GUI.color = BrassSoftColor;
                 Widgets.DrawLineHorizontal(rect.x, buttonY - 10f, rect.width);
@@ -214,10 +221,16 @@ namespace Overlord
             if (BrassButton(new Rect(buttonX, buttonY, approveW, buttonH), "Approve", drawVisuals, primary: true))
                 ApproveClaim(comp, viewers, claim);
 
-            if (BrassButton(new Rect(buttonX + approveW + gap, buttonY, openW, buttonH), "Open", drawVisuals))
+            if (BrassButton(new Rect(buttonX + approveW + gap, buttonY, rejectW, buttonH), "Reject", drawVisuals))
+            {
+                viewers.RejectClaim(claim.username);
+                viewers.SendColonistList();
+            }
+
+            if (BrassButton(new Rect(buttonX + approveW + gap + rejectW + gap, buttonY, openW, buttonH), "Open", drawVisuals))
                 OpenOverlordAssignments();
 
-            if (pawnObj != null && BrassButton(new Rect(buttonX + approveW + gap + openW + gap, buttonY, jumpW, buttonH), "Jump", drawVisuals))
+            if (pawnObj != null && BrassButton(new Rect(buttonX + approveW + gap + rejectW + gap + openW + gap, buttonY, jumpW, buttonH), "Jump", drawVisuals))
                 CameraJumper.TryJumpAndSelect(pawnObj);
 
             GUI.color = Color.white;
@@ -255,6 +268,13 @@ namespace Overlord
 
         private static void PlayAlertSound()
         {
+            // Cooldown: a claim burst (raid of new viewers) must not bell-storm
+            // the stream audio.
+            int now = Find.TickManager?.TicksGame ?? 0;
+            if (now - lastBellTick < BellCooldownTicks)
+                return;
+            lastBellTick = now;
+
             try
             {
                 SoundDef.Named("TinyBell").PlayOneShotOnCamera();

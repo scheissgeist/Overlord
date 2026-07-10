@@ -440,21 +440,18 @@ namespace Overlord
             var nameRect = new Rect(row.x + 8f, row.y + 4f, row.width - 100f, 20f);
             Widgets.Label(nameRect, pawn.LabelShort);
 
-            // Status line: HP · current job (or owner name if assigned)
+            // Status line: HP · job on EVERY row — the pawns viewers control are
+            // exactly the ones the streamer most needs to health-check at a glance.
+            // Assigned rows prefix the owner name.
             string statusLine;
             Color statusColor;
-            if (owner != null)
-            {
-                statusLine  = owner.displayName ?? owner.username;
-                statusColor = MutedColor;
-            }
-            else
             {
                 int hp   = pawn.health?.summaryHealth != null ? Mathf.RoundToInt(pawn.health.summaryHealth.SummaryHealthPercent * 100f) : 100;
                 string job = pawn.jobs?.curJob?.def?.reportString ?? pawn.CurJobDef?.label ?? "idle";
                 // Trim "GotoLocation" and similar internal names
                 if (job.StartsWith("Goto") || job == "wait" || job == "Wait") job = "idle";
-                statusLine  = $"{hp}% HP  ·  {job}";
+                string ownerPrefix = owner != null ? (owner.displayName ?? owner.username) + "  ·  " : "";
+                statusLine  = $"{ownerPrefix}{hp}%  ·  {job}";
                 statusColor = hp < 50 ? OfflineColor : hp < 75 ? WaitingColor : MutedColor;
             }
 
