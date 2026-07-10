@@ -16,8 +16,8 @@ namespace Overlord
     ///     on the MAIN thread at capture time. Produces a list of primitive draw ops.
     ///  2. RasterizeToBuffer — pure pixel math into a raw RGBA32 buffer; safe on ANY
     ///     thread. Used by the async-readback pipeline's encode worker.
-    /// Paint(Texture2D...) remains as the main-thread fallback path (ReadPixels route)
-    /// and shares the same op collection + draw math.
+    /// RasterizeToTexture is the main-thread fallback path (ReadPixels route) and
+    /// shares the same op collection + draw math.
     /// </summary>
     public static class MapOverlayPainter
     {

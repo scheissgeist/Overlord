@@ -355,10 +355,20 @@ namespace Overlord
             return false;
         }
 
+        // Trait-family commands match ToolkitUtils trait names, whose chat syntax
+        // strips spaces from labels ("night owl" -> "nightowl"). Hyphens survive.
+        private static readonly HashSet<string> TraitArgumentSkus = new HashSet<string>
+        {
+            "trait", "removetrait", "replacetrait", "settraits"
+        };
+
         private static string BuildPurchaseCommand(string sku, PurchaseInfo info, int quantity, string argument)
         {
             if (string.Equals(info.kind, "item", StringComparison.OrdinalIgnoreCase))
                 return "!buy " + sku + (quantity > 1 ? " " + quantity : "");
+
+            if (!string.IsNullOrEmpty(argument) && TraitArgumentSkus.Contains(sku.ToLowerInvariant()))
+                argument = argument.Replace(" ", "");
 
             return string.IsNullOrEmpty(argument)
                 ? "!buy " + sku

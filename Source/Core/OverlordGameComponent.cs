@@ -180,6 +180,10 @@ namespace Overlord
             portraitQueue.Clear();
             pendingPortraitKeys.Clear();
             portraitCache.Clear();
+            // Static per-pawn state must not leak across save loads — thingIDNumbers
+            // are reused between saves.
+            PawnCommandRouter.ClearAutoDraftState();
+            PawnStateSerializer.ClearSignatureCaches();
 
             initialized = false;
             Instance = null;
@@ -338,6 +342,8 @@ namespace Overlord
             viewerManager?.SendGameInfoNow(username);
             if (session == null || !session.HasPawn) return;
 
+            // Fresh slow-tier hash so lastStateHash matches the serialized payload.
+            PawnStateSerializer.InvalidateSignatureCache(session.assignedPawn);
             var stateJson = PawnStateSerializer.Serialize(session.assignedPawn);
             session.lastStateHash = PawnStateSerializer.ComputeStateSignature(session.assignedPawn);
             viewerManager.SendPermissions(username);

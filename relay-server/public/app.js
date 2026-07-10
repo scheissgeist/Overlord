@@ -4260,15 +4260,18 @@ function findStoryPurchaseEntry(type, used) {
 }
 
 function getStoryOptionsForType(optionType, state) {
+  // Toolkit's trait commands resolve by trait LABEL, not RimWorld defName — and
+  // degreed traits share one defName ("Iron-willed"/"Steadfast" are both Nerves),
+  // so defName values made those options identical and unresolvable. Send the label.
   if (optionType === 'traitOptions') {
     return getArray(state?.traitOptions).map(trait => ({
-      value: trait?.defName || trait?.label || trait,
+      value: trait?.label || trait?.defName || trait,
       label: trait?.label || trait?.defName || trait
     })).filter(option => option.value);
   }
   if (optionType === 'currentTraits') {
     return getArray(state?.traits).map(trait => ({
-      value: trait?.defName || trait?.label || trait,
+      value: trait?.label || trait?.defName || trait,
       label: trait?.label || trait?.defName || trait
     })).filter(option => option.value);
   }

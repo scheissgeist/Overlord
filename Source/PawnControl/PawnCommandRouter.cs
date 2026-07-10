@@ -14,6 +14,78 @@ namespace Overlord
     /// </summary>
     public static class PawnCommandRouter
     {
+        // ── Auto-undraft ────────────────────────────────────────────────────────
+        // Move/attack commands auto-draft the pawn so the ordered job can't be
+        // interrupted, but nothing ever undrafted them — a drafted pawn finishes the
+        // order and then stands at attention forever (drafted pawns take no work
+        // jobs). Track pawns WE drafted; once such a pawn has been idle in
+        // Wait_Combat with an empty job queue for a few sync cycles, undraft it so
+        // it resumes normal life. An explicit viewer Draft/Undraft command takes
+        // manual control and clears the flag.
+        private static readonly HashSet<int> autoDraftedPawns = new HashSet<int>();
+        private static readonly Dictionary<int, int> autoDraftIdleCycles = new Dictionary<int, int>();
+        private const int AutoUndraftIdleCycles = 12; // ~2s at the ~6/s sync cadence
+
+        private static void MarkAutoDrafted(Pawn pawn)
+        {
+            autoDraftedPawns.Add(pawn.thingIDNumber);
+            autoDraftIdleCycles.Remove(pawn.thingIDNumber);
+        }
+
+        private static void ClearAutoDraft(Pawn pawn)
+        {
+            autoDraftedPawns.Remove(pawn.thingIDNumber);
+            autoDraftIdleCycles.Remove(pawn.thingIDNumber);
+        }
+
+        public static void ClearAutoDraftState()
+        {
+            autoDraftedPawns.Clear();
+            autoDraftIdleCycles.Clear();
+        }
+
+        /// <summary>
+        /// Called once per sync cycle per assigned pawn (ViewerManager.Tick). Undrafts
+        /// a pawn that a viewer command auto-drafted once it has clearly finished the
+        /// ordered action (standing in Wait_Combat, nothing queued) for ~2 seconds.
+        /// The delay keeps a pawn drafted through combat chains (attack → next target).
+        /// </summary>
+        public static void MaybeAutoUndraft(Pawn pawn)
+        {
+            if (pawn == null)
+                return;
+
+            int id = pawn.thingIDNumber;
+            if (!autoDraftedPawns.Contains(id))
+                return;
+
+            if (pawn.Dead || pawn.Destroyed || pawn.drafter == null || !pawn.Drafted)
+            {
+                ClearAutoDraft(pawn);
+                return;
+            }
+
+            bool idle = pawn.jobs?.curJob?.def == JobDefOf.Wait_Combat &&
+                        (pawn.jobs.jobQueue == null || pawn.jobs.jobQueue.Count == 0);
+            if (!idle)
+            {
+                autoDraftIdleCycles.Remove(id);
+                return;
+            }
+
+            autoDraftIdleCycles.TryGetValue(id, out int cycles);
+            cycles++;
+            if (cycles < AutoUndraftIdleCycles)
+            {
+                autoDraftIdleCycles[id] = cycles;
+                return;
+            }
+
+            pawn.drafter.Drafted = false;
+            ClearAutoDraft(pawn);
+            LogUtil.Log($"Auto-undrafted {pawn.LabelShort} (command order finished)");
+        }
+
         /// <summary>
         /// Route a command JSON to the assigned pawn.
         /// Returns a result dict to send back to the viewer.
@@ -438,6 +510,8 @@ namespace Overlord
                 return ErrorResult("Pawn cannot be drafted");
 
             pawn.drafter.Drafted = drafted;
+            // Explicit draft/undraft = viewer took manual control; stop auto-undrafting.
+            ClearAutoDraft(pawn);
             return SuccessResult(drafted ? "Drafted" : "Undrafted");
         }
 
@@ -476,9 +550,13 @@ namespace Overlord
             if (!TargetCellAllowed(pawn, cell, out string areaMessage))
                 return ErrorResult(areaMessage);
 
-            // Auto-draft if not drafted
+            // Auto-draft if not drafted — and remember WE did it, so the pawn is
+            // undrafted again once the order finishes (see MaybeAutoUndraft).
             if (pawn.drafter != null && !pawn.Drafted)
+            {
                 pawn.drafter.Drafted = true;
+                MarkAutoDrafted(pawn);
+            }
 
             var job = JobMaker.MakeJob(JobDefOf.Goto, cell);
             job.playerForced = true;
@@ -556,9 +634,12 @@ namespace Overlord
             if (target.Spawned && !TargetCellAllowed(pawn, target.Position, out string targetAreaMessage))
                 return ErrorResult(targetAreaMessage);
 
-            // Auto-draft
+            // Auto-draft — tracked for auto-undraft once combat/orders end.
             if (pawn.drafter != null && !pawn.Drafted)
+            {
                 pawn.drafter.Drafted = true;
+                MarkAutoDrafted(pawn);
+            }
 
             // Choose melee or ranged based on equipment
             Job job;

@@ -43,6 +43,16 @@ namespace Overlord
             slowSampleTimeCache.Remove(pawn.thingIDNumber);
         }
 
+        /// <summary>
+        /// Full reset — call on game shutdown. thingIDNumbers are reused across save
+        /// loads, so a stale cross-save entry could mask a real change for up to 2s.
+        /// </summary>
+        public static void ClearSignatureCaches()
+        {
+            slowHashCache.Clear();
+            slowSampleTimeCache.Clear();
+        }
+
         private static int GetSlowSubHash(Pawn pawn)
         {
             int id = pawn.thingIDNumber;
@@ -175,9 +185,20 @@ namespace Overlord
                     }
                 }
 
-                // Nearby loose weapons/apparel (viewer gear-pickup list). Bounded
-                // ThingRequestGroup walk — see EnumerateNearbyEquipmentCandidates.
-                AddNearbyEquipmentFingerprint(ref hash, pawn);
+                // Nearby loose weapons/apparel (viewer gear-pickup list). Hash the
+                // SAME filtered list Serialize() sends (IsForbidden + reachability +
+                // Take(24)) so forbid/reachability flips change the signature —
+                // bounded by the 2s slow-tier cadence instead of running per-cycle.
+                if (pawn.Map != null)
+                {
+                    foreach (var item in GetNearbyEquipment(pawn))
+                    {
+                        if (!item.TryGetValue("id", out object id) || !item.TryGetValue("defName", out object defName))
+                            continue;
+                        hash = hash * 31 + Convert.ToInt32(id);
+                        AddStringHash(ref hash, defName?.ToString());
+                    }
+                }
 
                 if (pawn.story != null)
                 {
@@ -699,29 +720,12 @@ namespace Overlord
                 var thing = apparel[i];
                 if (thing?.def == null || !thing.Spawned || thing.Destroyed)
                     continue;
+                // A def in BOTH groups (wearable weapons) was already yielded above.
+                if (thing.def.IsWeapon)
+                    continue;
                 if ((thing.Position - origin).LengthHorizontalSquared > radiusSq)
                     continue;
                 yield return thing;
-            }
-        }
-
-        /// <summary>
-        /// Cheap change-fingerprint of nearby loose equipment for ComputeStateSignature.
-        /// Hashes only thingIDNumber + def shortHash for each nearby weapon/apparel — no
-        /// IsForbidden, no CanReserveAndReach pathfinding, no sort, no dictionary build.
-        /// A change here (item picked up, dropped, or destroyed nearby) still flips the hash,
-        /// so the full reachability-filtered GetNearbyEquipment in Serialize() still fires.
-        /// </summary>
-        private static void AddNearbyEquipmentFingerprint(ref int hash, Pawn pawn)
-        {
-            Map map = pawn?.Map;
-            if (map == null)
-                return;
-
-            foreach (Thing thing in EnumerateNearbyEquipmentCandidates(pawn, map))
-            {
-                hash = hash * 31 + thing.thingIDNumber;
-                hash = hash * 31 + thing.def.shortHash;
             }
         }
 

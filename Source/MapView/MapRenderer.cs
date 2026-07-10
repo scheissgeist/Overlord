@@ -54,6 +54,7 @@ namespace Overlord
         private bool gpuTopDown;                  // D3D readback rows are top-down
         private volatile bool asyncPipelineBroken;
         private int pendingReadbacks;             // main-thread only (callbacks on main thread)
+        private int consecutiveReadbackErrors;    // main-thread only
         private readonly object statsLock = new object();
         private float lastStatsLogTime;
         private int statsFrames;
@@ -251,7 +252,15 @@ namespace Overlord
                     dueParams.Add(p);
             }
 
-            var groups = GroupCompatibleViews(dueParams);
+            // Grouping's "one budget unit per group" premise only holds on the async
+            // path (one map render, GPU crops). On the sync fallback each member costs
+            // a ReadPixels stall + main-thread encode, so grouping would smuggle the
+            // exact multi-encode frame spike the budget cap exists to prevent.
+            bool groupingAllowed = asyncSupported && !asyncPipelineBroken;
+            var groups = groupingAllowed
+                ? GroupCompatibleViews(dueParams)
+                : dueParams.Select(p => new List<ViewerFrameParams> { p }).ToList();
+
             foreach (var group in groups)
             {
                 if (rendered >= framesThisUpdate)
@@ -263,18 +272,20 @@ namespace Overlord
                     break;
                 }
 
-                foreach (var m in group)
-                {
-                    if (!frameCounter.ContainsKey(m.session.username))
-                        frameCounter[m.session.username] = 0;
-                    frameCounter[m.session.username]++;
-                    lastFrameTimeByViewer[m.session.username] = now;
-                }
-
                 try
                 {
                     RenderGroup(group);
                     rendered++;
+                    // Stamp members as served only after the render actually ran, so a
+                    // transient failure retries next pump instead of waiting a full
+                    // interval for the whole group.
+                    foreach (var m in group)
+                    {
+                        if (!frameCounter.ContainsKey(m.session.username))
+                            frameCounter[m.session.username] = 0;
+                        frameCounter[m.session.username]++;
+                        lastFrameTimeByViewer[m.session.username] = now;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -831,10 +842,22 @@ namespace Overlord
             {
                 renderWatch.Stop();
                 long renderMs = renderWatch.ElapsedMilliseconds;
-                pendingReadbacks++;
                 bool topDown = gpuTopDown;
-                AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, req =>
-                    OnReadbackComplete(req, rt, width, height, quality, ops, metadata, embeddedTarget, renderMs, cameraMode, topDown));
+                try
+                {
+                    pendingReadbacks++;
+                    AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, req =>
+                        OnReadbackComplete(req, rt, width, height, quality, ops, metadata, embeddedTarget, renderMs, cameraMode, topDown));
+                }
+                catch (Exception ex)
+                {
+                    // A throwing Request leaks the counter and the RT if unhandled —
+                    // and means async readback doesn't actually work here. Revert.
+                    pendingReadbacks--;
+                    RenderTexture.ReleaseTemporary(rt);
+                    asyncPipelineBroken = true;
+                    LogUtil.Warn($"AsyncGPUReadback.Request failed — reverting to main-thread capture: {ex.Message}");
+                }
                 return;
             }
 
@@ -855,8 +878,18 @@ namespace Overlord
             if (req.hasError)
             {
                 lock (statsLock) { statsSkipped++; }
+                // A driver that consistently errors readbacks would otherwise drop
+                // every frame silently, forever. Latch to the legacy path after a
+                // streak; one-off errors just skip a frame.
+                consecutiveReadbackErrors++;
+                if (consecutiveReadbackErrors >= 8 && !asyncPipelineBroken)
+                {
+                    asyncPipelineBroken = true;
+                    LogUtil.Warn("Async readbacks repeatedly erroring — reverting to main-thread capture");
+                }
                 return;
             }
+            consecutiveReadbackErrors = 0;
 
             byte[] pixels;
             try
@@ -871,28 +904,40 @@ namespace Overlord
 
             sendQueue.Enqueue(() =>
             {
+                byte[] jpeg;
                 try
                 {
                     MapOverlayPainter.RasterizeToBuffer(pixels, width, height, topDown, ops);
-                    if (!topDown)
+                    // Unity's image encoders consume Texture2D raw-data convention
+                    // (row 0 = BOTTOM). D3D readbacks arrive top-down and must be
+                    // flipped; GL readbacks are already bottom-up.
+                    if (topDown)
                         MapOverlayPainter.FlipRowsInPlace(pixels, width, height);
 
                     var encodeWatch = Stopwatch.StartNew();
-                    byte[] jpeg = ImageConversion.EncodeArrayToJPG(
+                    jpeg = ImageConversion.EncodeArrayToJPG(
                         pixels, GraphicsFormat.R8G8B8A8_UNorm, (uint)width, (uint)height, 0, quality);
                     encodeWatch.Stop();
 
                     RecordFrameStats(renderMs, encodeWatch.ElapsedMilliseconds, jpeg.Length, width, height, quality, cameraMode);
-                    SendMapFrame(metadata, jpeg, embeddedTarget);
                 }
                 catch (Exception ex)
                 {
                     // EncodeArrayToJPG off the main thread is the one unproven Unity call
-                    // in this pipeline. Any failure permanently reverts to the legacy
-                    // main-thread path; the current frame is dropped.
+                    // in this pipeline. An encode/rasterize failure permanently reverts
+                    // to the legacy main-thread path; the current frame is dropped.
                     asyncPipelineBroken = true;
                     LogUtil.Warn($"Async frame encode failed — reverting to main-thread capture: {ex.Message}");
+                    return;
                 }
+
+                // Send failures (relay blip mid-reconnect) must NOT latch the
+                // pipeline-broken flag — the legacy path swallows them too.
+                try
+                {
+                    SendMapFrame(metadata, jpeg, embeddedTarget);
+                }
+                catch { }
             });
         }
 

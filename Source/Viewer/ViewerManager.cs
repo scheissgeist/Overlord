@@ -621,6 +621,10 @@ namespace Overlord
 
                 var pawn = session.assignedPawn;
 
+                // Undraft pawns that a move/attack command auto-drafted once they've
+                // finished the order — otherwise they stand at attention forever.
+                PawnCommandRouter.MaybeAutoUndraft(pawn);
+
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";
                 if (!string.IsNullOrEmpty(jobLabel) && jobLabel != session.lastJobLabel)
@@ -658,6 +662,11 @@ namespace Overlord
                 int signature = PawnStateSerializer.ComputeStateSignature(pawn);
                 if (signature != session.lastStateHash)
                 {
+                    // Recompute the slow tier FRESH before serializing so the stored
+                    // hash matches the exact payload sent — a cached slow hash paired
+                    // with live-serialized bytes can otherwise miss a revert.
+                    PawnStateSerializer.InvalidateSignatureCache(pawn);
+                    signature = PawnStateSerializer.ComputeStateSignature(pawn);
                     var stateJson = PawnStateSerializer.Serialize(pawn);
                     session.lastStateHash = signature;
                     var msg = new Dictionary<string, object>
