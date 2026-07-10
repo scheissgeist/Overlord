@@ -40,7 +40,9 @@ namespace Overlord
         // CPU-bound. Viewers don't need 18 state updates/sec.
         private const float StateSyncIntervalSeconds = 0.167f;
         private const int ResourceReadoutSyncCycles = 6; // ~1s at sync cadence
+        private const int RepairSweepEveryCycles = 30;   // ~5s at sync cadence
         private float lastSyncRealtime;
+        private int repairSweepCounter;
         private int resourceReadoutCycleCounter;
         private int lastResourceReadoutHash;
 
@@ -627,6 +629,15 @@ namespace Overlord
                 // Undraft pawns that a move/attack command auto-drafted once they've
                 // finished the order — otherwise they stand at attention forever.
                 PawnCommandRouter.MaybeAutoUndraft(pawn);
+
+                // Continuous self-heal: tonight a pawn got equipment-tracker-corrupted
+                // MID-session (suppressed tick = uncontrollable for hours, silently).
+                // The scan is two-items cheap; run it every ~5s per assigned pawn.
+                if (++repairSweepCounter >= RepairSweepEveryCycles)
+                {
+                    repairSweepCounter = 0;
+                    PawnCommandRouter.RepairEquipmentTracker(pawn);
+                }
 
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";
