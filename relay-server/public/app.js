@@ -2206,6 +2206,12 @@ function renderGear(s) {
   };
 
   el.innerHTML = `<div class="gear-layout">
+    <div class="gear-worn-all">
+      <div class="gear-nearby-title">Wearing now (${items.length})</div>
+      ${items.length
+        ? items.map(item => `<div class="gear-worn-row">${escapeHtml(item.label || item.defName || '')}${Number.isFinite(item.hp) ? ` <span class="gear-sheet-count">${item.hp}%</span>` : ''}</div>`).join('')
+        : '<div class="quiet-empty slim">Nothing equipped</div>'}
+    </div>
     <div class="gear-rig" aria-label="Equipment slots">
       ${GEAR_SLOT_DEFS.map(def => renderGearSlot(def, slotItems.get(def.key))).join('')}
     </div>
