@@ -827,9 +827,21 @@ function markCommandArmed(action, message) {
   setCommandFeedback(action, 'armed', message);
 }
 
+let commandResponseTimer = null;
+
 function markCommandSent(action, message) {
   lastCommandAction = action;
   setCommandFeedback(action, 'sent', message);
+  // Honest lifecycle: a command that never gets a host result must not sit in
+  // 'sent' forever — that silence is why viewers double-tap.
+  clearTimeout(commandResponseTimer);
+  commandResponseTimer = setTimeout(() => {
+    if (lastCommandAction === action) {
+      setCommandFeedback(action, 'failed', 'No response from host — try again');
+      lastCommandAction = null;
+      clearSubtitleFeedback();
+    }
+  }, 5000);
   if (pawnSubtitle && message) {
     const prev = pawnSubtitle.dataset.prevText ?? pawnSubtitle.textContent;
     pawnSubtitle.dataset.prevText = prev;
@@ -844,6 +856,7 @@ function clearSubtitleFeedback() {
 }
 
 function markCommandResult(action, ok, message) {
+  clearTimeout(commandResponseTimer);
   const resolvedAction = action || lastCommandAction;
   if (!resolvedAction) return;
   setCommandFeedback(resolvedAction, ok === false ? 'failed' : 'accepted', message);
