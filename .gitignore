@@ -51,3 +51,4 @@ relay-server/fly.toml
 # Release staging
 dist/
 *.zip
+data/workshop_stats.csv
