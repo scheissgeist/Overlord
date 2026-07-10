@@ -4418,3 +4418,14 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 .sync-stamp.ok { color: var(--green); }
 .sync-stamp.warn { color: var(--yellow); }
 .sync-stamp.stale { color: var(--red); }
+
+/* Lobby spectator view — waiting viewers watch the colony live */
+.lobby-spectate {
+  display: block;
+  width: min(100%, 820px);
+  aspect-ratio: 16 / 9;
+  margin: 10px auto 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #101010;
+}

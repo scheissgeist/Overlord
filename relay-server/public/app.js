@@ -3020,6 +3020,12 @@ function drawLiveFrameImage(img) {
 function handleMapFrame(msg) {
   const imageSrc = msg.binaryImageUrl || (msg.data ? `data:image/jpeg;base64,${msg.data}` : '');
   if (!imageSrc) return;
+  // Spectator frames are broadcast to everyone; only the lobby renders them.
+  // They must never touch the pawn-map state (zoom/meta) below.
+  if (msg.cameraMode === 'spectate') {
+    drawSpectateFrame(imageSrc, msg.binaryImageUrl || null);
+    return;
+  }
   if (!mapCtx) mapCtx = mapCanvas.getContext('2d');
   const frameStartedAt = performance.now();
   const objectUrl = msg.binaryImageUrl || null;
@@ -5884,3 +5890,26 @@ setInterval(() => {
   syncStamp.className = 'sync-stamp ' + band;
   syncStamp.textContent = age < 2 ? 'synced' : `synced ${age < 10 ? age.toFixed(1) : Math.round(age)}s ago`;
 }, 1000);
+
+
+// ─── Lobby spectator view ────────────────────────────────────────────────────
+const lobbySpectate = $('lobby-spectate');
+let lobbySpectateCtx = null;
+function drawSpectateFrame(src, objectUrl) {
+  if (!lobbySpectate || !screenLobby?.classList.contains('active')) {
+    if (objectUrl) releaseLiveFrameObjectUrl(objectUrl);
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    try {
+      lobbySpectate.classList.remove('hidden');
+      if (!lobbySpectateCtx) lobbySpectateCtx = lobbySpectate.getContext('2d');
+      lobbySpectateCtx.drawImage(img, 0, 0, lobbySpectate.width, lobbySpectate.height);
+    } finally {
+      if (objectUrl) releaseLiveFrameObjectUrl(objectUrl);
+    }
+  };
+  img.onerror = () => { if (objectUrl) releaseLiveFrameObjectUrl(objectUrl); };
+  img.src = src;
+}

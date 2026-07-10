@@ -163,9 +163,96 @@ namespace Overlord
             }
         }
 
+        private float lastSpectatorFrameTime;
+        private const float SpectatorIntervalSec = 0.5f;
+
+        /// <summary>
+        /// Broadcasts a colony-overview frame for viewers waiting in the lobby.
+        /// Sent un-targeted (one host→relay upload regardless of audience size)
+        /// with cameraMode="spectate"; clients in the lobby render it, assigned
+        /// viewers discard it. Waiting viewers watch the colony live instead of
+        /// staring at a queue message.
+        /// </summary>
+        private void MaybeRenderSpectatorFrame(ViewerManager viewers)
+        {
+            if (!asyncSupported || asyncPipelineBroken)
+                return;
+            if (OverlordMod.Settings?.mirrorHostCameraToViewers == true)
+                return; // that mode already broadcasts a shared view
+            if (Time.time - lastSpectatorFrameTime < SpectatorIntervalSec)
+                return;
+            if (sendQueue.Count + pendingReadbacks > 4)
+                return;
+
+            bool anyLobbyViewer = false;
+            foreach (var s in viewers.AllSessions)
+            {
+                if (s != null && s.isConnected && !s.HasPawn) { anyLobbyViewer = true; break; }
+            }
+            if (!anyLobbyViewer)
+                return;
+
+            var map = Find.CurrentMap;
+            if (map == null)
+                return;
+
+            // Frame the colony: colonist bounding box with margin, sane clamps.
+            const float aspect = 16f / 9f;
+            float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+            int count = 0;
+            foreach (var colonist in map.mapPawns.FreeColonists)
+            {
+                if (colonist == null || !colonist.Spawned) continue;
+                var pos = colonist.DrawPos;
+                minX = Math.Min(minX, pos.x); maxX = Math.Max(maxX, pos.x);
+                minZ = Math.Min(minZ, pos.z); maxZ = Math.Max(maxZ, pos.z);
+                count++;
+            }
+
+            Vector3 center;
+            float radiusZ;
+            if (count == 0)
+            {
+                center = new Vector3(map.Size.x / 2f, 0f, map.Size.z / 2f);
+                radiusZ = 40f;
+            }
+            else
+            {
+                center = new Vector3((minX + maxX) / 2f, 0f, (minZ + maxZ) / 2f);
+                radiusZ = Mathf.Clamp(Mathf.Max((maxZ - minZ) / 2f, ((maxX - minX) / 2f) / aspect) + 10f, 24f, 48f);
+            }
+
+            lastSpectatorFrameTime = Time.time;
+
+            const int specW = 960, specH = 540, specQuality = 55;
+            var watch = Stopwatch.StartNew();
+            var rt = RenderMapArea(map, center, radiusZ, aspect, specW, specH);
+            if (rt == null)
+                return;
+
+            var metadata = new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.MapFrame,
+                ["centerX"] = center.x,
+                ["centerZ"] = center.z,
+                ["radiusX"] = radiusZ * aspect,
+                ["radiusZ"] = radiusZ,
+                ["sourceWidth"] = specW,
+                ["sourceHeight"] = specH,
+                ["quality"] = specQuality,
+                ["cameraMode"] = "spectate",
+                ["zoom"] = 1f,
+                ["mapWidth"] = map.Size.x,
+                ["mapHeight"] = map.Size.z
+            };
+
+            DispatchFrame(rt, specW, specH, specQuality, new List<MapOverlayPainter.DrawOp>(), metadata, null, watch, "spectate");
+        }
+
         private void RenderDueFrames(ViewerManager viewers)
         {
             RefreshSettings();
+            MaybeRenderSpectatorFrame(viewers);
 
             var activeSessions = viewers.AllSessions
                 .Where(s => s != null && s.isConnected && s.HasPawn && s.assignedPawn.Map != null && s.assignedPawn.Spawned)
