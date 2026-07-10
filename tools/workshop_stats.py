@@ -70,7 +70,17 @@ def _date(html: str, label: str):
 def parse(html: str) -> dict:
     tm = re.search(r'<div class="workshopItemTitle">\s*([^<]+?)\s*</div>', html)
     title = tm.group(1).strip() if tm else None
-    removed = "has been removed from the community" in html.lower()
+    # Steam ships the ban notice HIDDEN on EVERY item page and reveals it via JS
+    # only if the item is actually banned:
+    #   <div class="bannedNotification" id="bannedNotification" style="display: none">
+    # A naive substring match on "removed from the community" is a FALSE POSITIVE
+    # on every live item (verified 2026-07-10: item 3760983440 is live, the string
+    # was present but display:none). Only flag removed when the block is VISIBLE.
+    bm = re.search(r'id="bannedNotification"[^>]*style="([^"]*)"', html, re.IGNORECASE)
+    banned_style = bm.group(1).lower() if bm else ""
+    removed = ("bannednotification" in html.lower()
+               and "display: none" not in banned_style
+               and "display:none" not in banned_style)
     return {
         "title": title,
         "unique_visitors": _num(html, "Unique Visitors"),
