@@ -641,8 +641,26 @@ namespace Overlord
                 // is two-items cheap; sweep EVERY assigned pawn when the cycle counter
                 // fires (a per-pawn increment starved fixed subsets whenever
                 // gcd(interval, pawnCount) > 1 — review finding).
-                if (repairSweepDue)
-                    PawnCommandRouter.RepairEquipmentTracker(pawn);
+                bool justRepaired = repairSweepDue && PawnCommandRouter.RepairEquipmentTracker(pawn);
+
+                // Watchdog for inert pawns from ANY cause (the general case the
+                // known-cause repair can't cover). Keys on job PROGRESS, not job
+                // presence — a tick-suppressed pawn freezes a non-null job. Raises
+                // a one-shot streamer alert and flags the assignment board.
+                if (justRepaired)
+                {
+                    // Just healed the known cause — give a fresh progress window.
+                    session.stuckSinceTick = -1;
+                    session.stuckAlertRaised = false;
+                }
+                else if (PawnHealthMonitor.Evaluate(session, pawn, now))
+                {
+                    int stuckSecs = (now - session.stuckSinceTick) / 60;
+                    LogUtil.Warn($"[Overlord] {session.displayName ?? session.username}'s pawn {pawn.LabelShort} appears stuck (no progress {stuckSecs}s)");
+                    Messages.Message(
+                        $"[Overlord] {pawn.LabelShort} ({session.displayName ?? session.username}) may be stuck — not moving",
+                        pawn, MessageTypeDefOf.CautionInput, historical: false);
+                }
 
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";

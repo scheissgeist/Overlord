@@ -42,6 +42,29 @@ namespace Overlord
         public string lastJobLabel;
         public float  lastHealthPct;
 
+        // Watchdog progress-tracking (all transient, recomputed live, never saved).
+        // The detector flags a pawn whose JOB IS NOT ADVANCING — same job id + same
+        // cell, not moving — because the founding incident (corrupted equipment
+        // tracker) freezes a non-null job rather than nulling it. Presence of a job
+        // is not health; progress is.
+        [System.NonSerialized]
+        public int watchdogLastJobId = -1;
+        [System.NonSerialized]
+        public IntVec3 watchdogLastCell = IntVec3.Invalid;
+        // ticksLeftThisToil last sample — a working driver (crafting at a bench,
+        // researching) decrements this every tick while stationary; a tick-frozen
+        // driver holds it constant. This distinguishes "busy but not moving" from
+        // "frozen", so a legitimate long stationary job never false-trips.
+        [System.NonSerialized]
+        public int watchdogLastToilTicks = int.MinValue;
+        // Tick when the pawn first stopped making progress, or -1 when healthy.
+        [System.NonSerialized]
+        public int stuckSinceTick = -1;
+        // True once the streamer has been alerted about the current stuck episode,
+        // so the message fires once per episode, not every cycle.
+        [System.NonSerialized]
+        public bool stuckAlertRaised = false;
+
         // Rate limiting: game tick of last accepted command
         public int lastCommandTick = -999;
 

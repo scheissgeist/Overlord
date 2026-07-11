@@ -445,14 +445,25 @@ namespace Overlord
             // Assigned rows prefix the owner name.
             string statusLine;
             Color statusColor;
+            bool stuck = owner != null && owner.stuckAlertRaised;
             {
                 int hp   = pawn.health?.summaryHealth != null ? Mathf.RoundToInt(pawn.health.summaryHealth.SummaryHealthPercent * 100f) : 100;
                 string job = pawn.jobs?.curJob?.def?.reportString ?? pawn.CurJobDef?.label ?? "idle";
                 // Trim "GotoLocation" and similar internal names
                 if (job.StartsWith("Goto") || job == "wait" || job == "Wait") job = "idle";
                 string ownerPrefix = owner != null ? (owner.displayName ?? owner.username) + "  ·  " : "";
-                statusLine  = $"{ownerPrefix}{hp}%  ·  {job}";
-                statusColor = hp < 50 ? OfflineColor : hp < 75 ? WaitingColor : MutedColor;
+                if (stuck)
+                {
+                    // A viewer-controlled pawn that has gone inert — the streamer's
+                    // signal to intervene so no one sits on a dead pawn.
+                    statusLine  = $"{ownerPrefix}STUCK — no job";
+                    statusColor = OfflineColor;
+                }
+                else
+                {
+                    statusLine  = $"{ownerPrefix}{hp}%  ·  {job}";
+                    statusColor = hp < 50 ? OfflineColor : hp < 75 ? WaitingColor : MutedColor;
+                }
             }
 
             var statusRect = new Rect(row.x + 8f, row.y + 25f, row.width - 100f, 18f);

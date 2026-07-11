@@ -766,17 +766,21 @@ namespace Overlord
         /// command. Nulls are removed; apparel is dropped at the pawn's feet so it can
         /// be worn properly. Safe to call repeatedly; never throws.
         /// </summary>
-        public static void RepairEquipmentTracker(Pawn pawn)
+        public static bool RepairEquipmentTracker(Pawn pawn)
         {
+            bool repaired = false;
             try
             {
                 var owner = pawn?.equipment?.GetDirectlyHeldThings();
                 if (owner == null)
-                    return;
+                    return false;
 
                 int removed = owner.RemoveAll(t => t == null);
                 if (removed > 0)
+                {
+                    repaired = true;
                     LogUtil.Warn($"Repaired {pawn.LabelShort}: removed {removed} null equipment entr{(removed == 1 ? "y" : "ies")}");
+                }
 
                 if (pawn.Spawned && pawn.Map != null)
                 {
@@ -789,7 +793,10 @@ namespace Overlord
                     foreach (var item in stuckApparel)
                     {
                         if (owner.TryDrop(item, pawn.Position, pawn.Map, ThingPlaceMode.Near, out _))
+                        {
+                            repaired = true;
                             LogUtil.Warn($"Repaired {pawn.LabelShort}: ejected {item.LabelShort} from equipment tracker");
+                        }
                     }
                 }
             }
@@ -797,6 +804,7 @@ namespace Overlord
             {
                 LogUtil.Warn($"Equipment repair failed for {pawn?.LabelShort}: {ex.Message}");
             }
+            return repaired;
         }
 
         private static Dictionary<string, object> ExecuteDrop(Pawn pawn, string json)
