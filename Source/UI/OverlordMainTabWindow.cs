@@ -17,9 +17,10 @@ namespace Overlord
         private static readonly Color HeaderFill    = new Color(0.06f,  0.075f, 0.085f, 0.98f);
         private static readonly Color SelectedFill  = new Color(0.34f,  0.24f,  0.10f,  0.60f);
         private static readonly Color RowFill       = new Color(0.95f,  0.80f,  0.52f,  0.035f);
-        private static readonly Color BrassColor    = new Color(0.82f,  0.61f,  0.32f);
+        // Exact brand gold #d2a95d / bright #f0cf82 (BRAND_SYSTEM.md) — was a duller brass.
+        private static readonly Color BrassColor    = new Color(0.824f, 0.663f, 0.365f);
         private static readonly Color BrassDimColor = new Color(0.45f,  0.32f,  0.16f);
-        private static readonly Color BrassSoftColor= new Color(0.82f,  0.61f,  0.32f,  0.30f);
+        private static readonly Color BrassSoftColor= new Color(0.824f, 0.663f, 0.365f, 0.30f);
         private static readonly Color TextColor     = new Color(0.88f,  0.84f,  0.75f);
         private static readonly Color OnlineColor   = new Color(0.44f,  0.90f,  0.54f);
         private static readonly Color WaitingColor  = new Color(0.95f,  0.75f,  0.28f);
@@ -77,9 +78,36 @@ namespace Overlord
             DrawActionStrip(actionsRect, comp, vm);
         }
 
+        // Brand seal, loaded once. Silent-fail if the texture is missing so the tab
+        // never errors over cosmetics.
+        private static Texture2D sealTex;
+        private static bool sealResolved;
+        private static Texture2D Seal
+        {
+            get
+            {
+                if (!sealResolved)
+                {
+                    sealResolved = true;
+                    try { sealTex = ContentFinder<Texture2D>.Get("UI/Overlord", reportFailure: false); }
+                    catch { sealTex = null; }
+                }
+                return sealTex;
+            }
+        }
+
         private void DrawSummaryBar(Rect rect, OverlordGameComponent comp, ViewerManager vm, List<Pawn> colonists)
         {
             DrawPanel(rect, "Runtime");
+
+            // Star seal in the panel header corner — the brand mark on the streamer's
+            // most-used surface.
+            var seal = Seal;
+            if (seal != null)
+            {
+                var sealRect = new Rect(rect.xMax - 22f, rect.y + 3f, 18f, 18f);
+                GUI.DrawTexture(sealRect, seal, ScaleMode.ScaleToFit);
+            }
 
             var sessions = vm.AllSessions.ToList();
             int online        = vm.ConnectedCount;
