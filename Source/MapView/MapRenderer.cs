@@ -52,6 +52,36 @@ namespace Overlord
         // pipeline flips to the legacy main-thread ReadPixels+EncodeToJPG path.
         private bool asyncSupported;              // SystemInfo, resolved once on main thread
         private bool gpuTopDown;                  // D3D readback rows are top-down
+
+        // Orientation-proof probe: when <persistentDataPath>/overlord_dump_frames
+        // exists, the encode worker dumps up to MaxFrameDumps raw pre-encode
+        // buffers labeled current/other map — the ground-truth artifact for any
+        // future "inverted map" report instead of another mechanism theory.
+        private static string probeDir;           // captured on main thread in Start()
+        private static int framesDumped;
+        private const int MaxFrameDumps = 12;
+
+        private static void DumpFrameProbe(byte[] pixels, int width, int height, Dictionary<string, object> metadata)
+        {
+            try
+            {
+                if (probeDir == null || framesDumped >= MaxFrameDumps)
+                    return;
+                if (!System.IO.File.Exists(System.IO.Path.Combine(probeDir, "overlord_dump_frames")))
+                    return;
+
+                int n = Interlocked.Increment(ref framesDumped);
+                if (n > MaxFrameDumps)
+                    return;
+                object cur;
+                string curLabel = metadata != null && metadata.TryGetValue("mapIsCurrent", out cur) && cur is bool b
+                    ? (b ? "curmap" : "othermap") : "unknown";
+                string mode = metadata != null && metadata.TryGetValue("cameraMode", out object cm) ? cm as string : "?";
+                string path = System.IO.Path.Combine(probeDir, $"frame_{n:D2}_{mode}_{curLabel}_{width}x{height}.rgba");
+                System.IO.File.WriteAllBytes(path, pixels);
+            }
+            catch { }
+        }
         private volatile bool asyncPipelineBroken;
         private int pendingReadbacks;             // main-thread only (callbacks on main thread)
         private int consecutiveReadbackErrors;    // main-thread only
@@ -75,6 +105,7 @@ namespace Overlord
 
             asyncSupported = SystemInfo.supportsAsyncGPUReadback;
             gpuTopDown = SystemInfo.graphicsUVStartsAtTop;
+            try { probeDir = Application.persistentDataPath; } catch { probeDir = null; }
             asyncPipelineBroken = false;
             pendingReadbacks = 0;
             LogUtil.Log($"Map capture pipeline: asyncReadback={asyncSupported} uvTopDown={gpuTopDown}");
@@ -613,6 +644,14 @@ namespace Overlord
             CameraClearFlags savedClearFlags = gameCamera.clearFlags;
             Color savedBgColor = gameCamera.backgroundColor;
             RenderTexture savedActive = RenderTexture.active;
+            // Projection hygiene: a CUSTOM projection matrix (camera mods like
+            // Camera+ set one; their hooks also fire DURING Camera.Render and see
+            // our temporarily-swapped CurrentMap) survives orthographic property
+            // changes and can flip captures of non-current maps — the recurring
+            // "caravan viewers see an inverted map" report. Snapshot the matrix,
+            // reset to a clean one derived from our explicit ortho fields, and
+            // restore the original afterwards.
+            Matrix4x4 savedProjection = gameCamera.projectionMatrix;
 
             var rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             rt.antiAliasing = 1;
@@ -629,6 +668,7 @@ namespace Overlord
                 gameCamera.targetTexture = rt;
                 gameCamera.clearFlags = CameraClearFlags.SolidColor;
                 gameCamera.backgroundColor = new Color(0.08f, 0.08f, 0.08f, 1f);
+                gameCamera.ResetProjectionMatrix();
 
                 CellRect viewRect = BuildViewRect(center, radiusZ, aspect, map);
                 using (RimWorldCompat.TemporarilySetCurrentMap(map))
@@ -650,6 +690,7 @@ namespace Overlord
                 gameCamera.targetTexture = savedTarget;
                 gameCamera.clearFlags = savedClearFlags;
                 gameCamera.backgroundColor = savedBgColor;
+                gameCamera.projectionMatrix = savedProjection;
             }
 
             return rt;
@@ -912,7 +953,8 @@ namespace Overlord
                     ["cameraMode"] = "pawn",
                     ["zoom"] = m.zoom,
                     ["mapWidth"] = m.map.Size.x,
-                    ["mapHeight"] = m.map.Size.z
+                    ["mapHeight"] = m.map.Size.z,
+                    ["mapIsCurrent"] = ReferenceEquals(m.map, Find.CurrentMap)
                 };
 
                 crops.Add(new MemberCrop
@@ -1014,6 +1056,8 @@ namespace Overlord
                         if (topDown)
                             MapOverlayPainter.FlipRowsInPlace(pixels, crop.width, crop.height);
 
+                        DumpFrameProbe(pixels, crop.width, crop.height, crop.metadata);
+
                         var encodeWatch = Stopwatch.StartNew();
                         jpeg = ImageConversion.EncodeArrayToJPG(
                             pixels, GraphicsFormat.R8G8B8A8_UNorm, (uint)crop.width, (uint)crop.height, 0, crop.quality);
@@ -1071,7 +1115,8 @@ namespace Overlord
                 ["cameraMode"] = "pawn",
                 ["zoom"] = p.zoom,
                 ["mapWidth"] = p.map.Size.x,
-                ["mapHeight"] = p.map.Size.z
+                ["mapHeight"] = p.map.Size.z,
+                ["mapIsCurrent"] = ReferenceEquals(p.map, Find.CurrentMap)
             };
 
             DispatchFrame(rt, p.width, p.height, p.quality, ops, metadata, p.session.username, renderWatch, "pawn");
@@ -1164,6 +1209,8 @@ namespace Overlord
                     // flipped; GL readbacks are already bottom-up.
                     if (topDown)
                         MapOverlayPainter.FlipRowsInPlace(pixels, width, height);
+
+                    DumpFrameProbe(pixels, width, height, metadata);
 
                     var encodeWatch = Stopwatch.StartNew();
                     jpeg = ImageConversion.EncodeArrayToJPG(
