@@ -21,7 +21,7 @@
   --gold-dim: rgba(162, 126, 70, 0.28);
   --gold-mid: rgba(210, 169, 93, 0.5);
   --shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
-  --radius: 0px;     /* RimWorld is square edges */
+  --radius: 0px;     /* DO NOT CHANGE — RimWorld square edges is a brand constant (BRAND_SYSTEM.md) */
 
   /* Parchment surface (right tab pane / world pill) */
   --parchment: #e8d4a8;
@@ -45,10 +45,13 @@
   --bar-fill:  #3a2a1a;
   --passion-flame: #e8a32b;
 
-  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  /* Type system (BRAND_SYSTEM.md). Fixes the #1 slop tell: display/name were all
+     IBM Plex Sans (generic). Display/wordmark = heavy Egyptian slab matching the
+     Preview; UI/data = IBM Plex Mono for the overseer's-ledger/console register. */
+  --font-ui: "IBM Plex Mono", ui-monospace, "Consolas", monospace;
   --font-mono: "JetBrains Mono", ui-monospace, "Consolas", monospace;
-  --font-display: "IBM Plex Sans", system-ui, sans-serif;
-  --font-name: "IBM Plex Sans", system-ui, sans-serif;
+  --font-display: "Roboto Slab", "Rockwell", Georgia, serif;
+  --font-name: "Roboto Slab", "Rockwell", Georgia, serif;
 
   --hud-bg: rgba(7, 9, 8, 0.84);
   --hud-border: rgba(162, 126, 70, 0.34);
