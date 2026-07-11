@@ -1910,6 +1910,28 @@ function handleColonistList(msg) {
 }
 
 // ─── Pawn state ───────────────────────────────────────────────────────────────
+// ─── Per-panel render diff gate ──────────────────────────────────────────────
+// The pawn_state message arrives ~6Hz. Rebuilding a panel's innerHTML on every
+// tick is what let a 6Hz rebuild close an open <select> mid-choice and burned
+// DOM work on unchanged data. panelChanged(key, slice) returns false when the
+// panel's input is byte-identical to the last render, so the caller can skip the
+// rebuild entirely. Keyed per panel; slices are the exact sub-object each panel
+// consumes, so an unrelated field changing (e.g. position) never busts a panel
+// (e.g. skills) that didn't change.
+const _panelSigs = Object.create(null);
+function panelChanged(key, slice) {
+  let sig;
+  try { sig = JSON.stringify(slice ?? null); } catch { return true; }
+  if (_panelSigs[key] === sig) return false;
+  _panelSigs[key] = sig;
+  return true;
+}
+// Force the next render of a panel (e.g. after a tab becomes visible and its
+// container was empty) — clears the stored signature.
+function invalidatePanel(key) { delete _panelSigs[key]; }
+// Clear all panel signatures (on pawn switch) so every panel fully re-renders.
+function _clearAllPanelSigs() { for (const k in _panelSigs) delete _panelSigs[k]; }
+
 function handlePawnState(msg) {
   lastPawnStateAt = Date.now();
   let s = msg.state;
@@ -1919,6 +1941,9 @@ function handlePawnState(msg) {
   const previousState = pawnState;
   const wasNull = previousState === null;
   markHostOnline('pawn_state');
+  // Pawn switched (reassignment / claim): clear every panel signature so the new
+  // pawn always fully renders, even if a slice happens to equal the old pawn's.
+  if (previousState && previousState.id !== s.id) _clearAllPanelSigs();
   pawnState = s;
   if (appearanceDraftPawnId !== s.id) {
     appearanceDraftPawnId = s.id;
@@ -2041,6 +2066,7 @@ function handlePawnPortrait(msg) {
 
 function renderNeeds(needs) {
   if (!needs) return;
+  if (!panelChanged('needs', needs)) return;
   const defs = [
     { id: 'need-food', key: 'Food',  label: 'Food' },
     { id: 'need-rest', key: 'Rest',  label: 'Rest' },
@@ -2089,6 +2115,8 @@ function renderBioSummary(state) {
     el.innerHTML = '';
     return;
   }
+  // Reads story + skills — gate on both so a needs/position tick doesn't rebuild.
+  if (!panelChanged('bio', { story: state.story, skills: state.skills })) return;
 
   const story = state.story || {};
   const goodAt = summarizeGoodAt(state.skills, 4);
@@ -2121,6 +2149,8 @@ function renderSkills(skills) {
   const el = $('skills-list');
   const summary = $('skills-summary');
   if (!el) return;
+  // Skip the rebuild when the skills slice is unchanged (6Hz de-thrash).
+  if (!panelChanged('skills', skills)) return;
   if (!Array.isArray(skills)) {
     el.innerHTML = '';
     if (summary) summary.innerHTML = '';
@@ -2167,6 +2197,7 @@ function renderSkillCard(skill) {
 function renderTraits(traits) {
   const el = $('traits-list');
   if (!el) return;
+  if (!panelChanged('traits', traits)) return;
   if (!Array.isArray(traits) || traits.length === 0) {
     el.innerHTML = '';
     return;
@@ -2179,6 +2210,7 @@ function renderTraits(traits) {
 function renderThoughts(thoughts) {
   const el = $('thoughts-list');
   if (!el) return;
+  if (!panelChanged('thoughts', thoughts)) return;
   if (!Array.isArray(thoughts) || thoughts.length === 0) {
     el.innerHTML = '';
     return;
@@ -2212,6 +2244,16 @@ function renderThoughts(thoughts) {
 function renderGear(s) {
   const el = $('gear-list');
   if (!el) return;
+  // Gate on the exact inputs this panel reads: the gear data slices PLUS the two
+  // pieces of UI state that change what's shown (selected slot, sort mode). The
+  // slot-tab / sort click handlers mutate those and call renderGear again with an
+  // unchanged pawnState — so they MUST be in the key or clicking a slot would be a
+  // no-op. Missing a slice here would hide gear (the exact bug this panel had), so
+  // the key is deliberately the full set, not a subset.
+  if (s && !panelChanged('gear', {
+        weapon: s.weapon, apparel: s.apparel, inventory: s.inventory,
+        nearby: s.nearbyEquipment, slot: activeGearSlot, sort: gearSortMode
+      })) return;
   const items = buildGearItems(s);
   const nearby = buildNearbyGearItems(s);
 
@@ -3267,6 +3309,13 @@ function handleToolkitState(msg) {
 
 function handlePermissions(msg) {
   viewerPermissions = msg;
+  // Gear button enabled-state derives from permissions (getActionBlockedReason),
+  // which isn't in the gear gate key — bust it so the next render reflects the
+  // new permissions, then re-render if the gear tab is showing current data.
+  invalidatePanel('gear');
+  // Don't rebuild the gear panel out from under an open dropdown — defer to the
+  // next state tick (the invalidation above guarantees it rebuilds then).
+  if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
   applyCommandAvailability();
 }
 
@@ -3601,6 +3650,7 @@ function appendChatLog(text) {
 function renderCapacities(caps) {
   const el = $('capacities-list');
   if (!el) return;
+  if (!panelChanged('capacities', caps)) return;
   if (!Array.isArray(caps) || caps.length === 0) {
     el.innerHTML = '';
     return;
@@ -3629,6 +3679,7 @@ function renderCapacities(caps) {
 function renderHealth(health) {
   const el = $('health-list');
   if (!el) return;
+  if (!panelChanged('health', health)) return;
   if (!health) { el.innerHTML = ''; return; }
 
   const summaryHp = Number(health.summaryHp ?? 100);
