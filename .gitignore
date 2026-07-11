@@ -54,3 +54,6 @@ dist/
 data/workshop_stats.csv
 # live multi-agent coordination — local ops, never public
 docs/AI_CHANNEL.md
+
+# stray generated image at repo root — never commit to public tree
+Generated_image.png
