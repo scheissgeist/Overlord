@@ -25,6 +25,9 @@ Copy-Item -Recurse (Join-Path $root 'Assemblies') (Join-Path $stage 'Assemblies'
 if (Test-Path (Join-Path $root 'Defs')) {
     Copy-Item -Recurse (Join-Path $root 'Defs') (Join-Path $stage 'Defs')
 }
+if (Test-Path (Join-Path $root 'Textures')) {
+    Copy-Item -Recurse (Join-Path $root 'Textures') (Join-Path $stage 'Textures')
+}
 $webuiSrc = Join-Path $root 'relay-server\public'
 if (-not (Test-Path $webuiSrc)) { throw "Missing viewer UI at $webuiSrc" }
 Copy-Item -Recurse $webuiSrc (Join-Path $stage 'WebUI')

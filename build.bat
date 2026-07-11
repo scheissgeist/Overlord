@@ -15,6 +15,7 @@ if exist "%RIMWORLD_MODS%" (
     xcopy /E /I /Y "About" "%RIMWORLD_MODS%\Overlord\About"
     xcopy /E /I /Y "Assemblies" "%RIMWORLD_MODS%\Overlord\Assemblies"
     if exist "Defs" xcopy /E /I /Y "Defs" "%RIMWORLD_MODS%\Overlord\Defs"
+    if exist "Textures" xcopy /E /I /Y "Textures" "%RIMWORLD_MODS%\Overlord\Textures"
     if exist "relay-server\public" xcopy /E /I /Y "relay-server\public" "%RIMWORLD_MODS%\Overlord\WebUI"
     echo Installed to %RIMWORLD_MODS%\Overlord
 ) else (

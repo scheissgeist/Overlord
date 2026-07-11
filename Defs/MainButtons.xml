@@ -5,6 +5,9 @@
     <label>Overlord</label>
     <order>200</order>
     <buttonVisible>true</buttonVisible>
+    <!-- Loose texture under any Textures/ root, no extension. Replaces the
+         default puzzle-piece. Swap Textures/UI/Overlord.png for final brand art. -->
+    <iconPath>UI/Overlord</iconPath>
     <tabWindowClass>Overlord.OverlordMainTabWindow</tabWindowClass>
   </MainButtonDef>
 </Defs>
