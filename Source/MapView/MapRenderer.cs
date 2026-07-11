@@ -53,6 +53,36 @@ namespace Overlord
         private bool asyncSupported;              // SystemInfo, resolved once on main thread
         private bool gpuTopDown;                  // D3D readback rows are top-down
 
+        // ── Adaptive bandwidth pressure (main-thread only) ──────────────────────
+        // Viewer COUNT is the wrong axis for load: 8 wide-viewport viewers backed the
+        // send queue up worse than 15 narrow ones (2026-07-10 telemetry). The real
+        // signal is queue depth — how many encoded frames are waiting to go out. This
+        // 0..1 value rises when the pipe is backed up and decays when it drains; it
+        // pushes quality down and interval up ON TOP of the count-based floors, so a
+        // congested feed degrades gracefully instead of stalling. Sampled once per
+        // pump from the pre-render queue depth.
+        private float bandwidthPressure;
+        private float lastPressureSampleTime;
+
+        private void SampleBandwidthPressure(int inFlight, int activeViewerCount)
+        {
+            float now = Time.time;
+            float dt = now - lastPressureSampleTime;
+            lastPressureSampleTime = now;
+            if (dt <= 0f || dt > 1f) dt = 0.1f; // clamp first-sample / long-gap spikes
+
+            // Healthy depth scales with audience (each viewer legitimately has ~1-2
+            // frames in flight). Above that, the pipe is falling behind.
+            float healthy = Math.Max(2, activeViewerCount);
+            float overshoot = (inFlight - healthy) / Math.Max(4f, healthy); // 0 at healthy, 1 at ~2x
+            float target = Mathf.Clamp01(overshoot);
+
+            // Asymmetric: react fast to congestion, recover slowly (avoids quality
+            // oscillation that reads as flicker).
+            float rate = target > bandwidthPressure ? 6f : 1.5f;
+            bandwidthPressure = Mathf.Clamp01(bandwidthPressure + (target - bandwidthPressure) * Mathf.Clamp01(rate * dt));
+        }
+
         // Orientation-proof probe: when <persistentDataPath>/overlord_dump_frames
         // exists, the encode worker dumps up to MaxFrameDumps raw pre-encode
         // buffers labeled current/other map — the ground-truth artifact for any
@@ -307,10 +337,13 @@ namespace Overlord
                 return;
             }
 
-            float effectiveInterval = GetEffectiveInterval(activeSessions.Count);
             // Backpressure counts frames still in flight on the GPU (async readbacks)
             // as well as frames waiting on the encode/send worker.
             int queueDepth = sendQueue.Count + pendingReadbacks;
+            // Update the adaptive controller from the true in-flight depth BEFORE
+            // computing this pump's interval/quality, so both react to live congestion.
+            SampleBandwidthPressure(queueDepth, activeSessions.Count);
+            float effectiveInterval = GetEffectiveInterval(activeSessions.Count);
             if (queueDepth > Math.Max(2, activeSessions.Count * 2))
             {
                 lock (statsLock) { statsSkipped++; }
@@ -483,6 +516,9 @@ namespace Overlord
                 minimum = 0.10f;
             else if (activeViewerCount > 2)
                 minimum = 0.09f;
+            // Congestion also stretches the interval up to +60ms — fewer frames/sec
+            // per viewer when the pipe can't keep up. Recovers as pressure decays.
+            minimum += bandwidthPressure * 0.06f;
             return Mathf.Max(updateInterval, minimum);
         }
 
@@ -531,6 +567,9 @@ namespace Overlord
             else if (activeViewerCount > 8)   quality = Math.Min(quality, 70);
             else if (activeViewerCount > 4)   quality = Math.Min(quality, 76);
             else if (activeViewerCount > 2)   quality = Math.Min(quality, 80);
+            // Under measured congestion, shed up to 18 quality points before the
+            // hard floor — smaller frames drain the queue instead of stalling it.
+            quality -= Mathf.RoundToInt(bandwidthPressure * 18f);
             return Mathf.Clamp(quality, 45, 88);
         }
 
@@ -582,7 +621,7 @@ namespace Overlord
             }
 
             LogUtil.Log(
-                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} sendQueue={queueDepth}"
+                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} sendQueue={queueDepth} pressure={bandwidthPressure:F2}"
             );
 
             var msg = new Dictionary<string, object>
