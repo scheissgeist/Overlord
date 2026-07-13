@@ -5,9 +5,9 @@
     <label>Overlord</label>
     <order>200</order>
     <buttonVisible>true</buttonVisible>
-    <!-- Loose texture under any Textures/ root, no extension. Replaces the
-         default puzzle-piece. Swap Textures/UI/Overlord.png for final brand art. -->
-    <iconPath>UI/Overlord</iconPath>
+    <!-- No iconPath: the default MainButtonWorker_Toggle renders the <label>
+         text ("Overlord"). The star seal lives in the tab's own header + the
+         Workshop art instead of on the bottom button (Sean's call 2026-07-13). -->
     <tabWindowClass>Overlord.OverlordMainTabWindow</tabWindowClass>
   </MainButtonDef>
 </Defs>
