@@ -714,7 +714,11 @@ namespace Overlord
                 using (MapRenderContext.Begin(viewRect, closeZoom: true))
                 {
                     QueueMapDrawCommands(map);
-                    gameCamera.Render();
+                    // Activate the camera override ONLY around the off-screen Render()
+                    // so it can never leak into the live presented frame.
+                    MapRenderContext.MarkCaptureActive(true);
+                    try { gameCamera.Render(); }
+                    finally { MapRenderContext.MarkCaptureActive(false); }
                 }
             }
             finally
