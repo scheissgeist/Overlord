@@ -55,6 +55,7 @@ namespace Overlord
         public const string CmdPreviewAppearance = "preview_appearance";
         public const string CmdEquip = "equip";
         public const string CmdDrop = "drop";
+        public const string CmdDyeApparel = "dye_apparel";
         public const string CmdRespawn = "respawn";
         public const string CmdHostileResponse = "set_hostile_response";
         public const string CmdClaimColonist = "claim_colonist";

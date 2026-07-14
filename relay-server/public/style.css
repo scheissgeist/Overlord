@@ -4432,3 +4432,23 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   border-radius: 3px;
   background: #101010;
 }
+
+/* Apparel dye — per-item swatch palette in the worn list */
+.gear-worn-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.worn-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.worn-swatch { width: 11px; height: 11px; border: 1px solid var(--border); flex: none; }
+.worn-dye-btn {
+  font: inherit; font-size: 11px; color: var(--accent);
+  background: transparent; border: 1px solid var(--gold-dim);
+  padding: 1px 8px; cursor: pointer; flex: none;
+}
+.worn-dye-btn:hover { border-color: var(--accent); }
+.worn-dye-palette {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 6px 2px 8px; border-bottom: 1px solid var(--border-soft);
+}
+.worn-dye-swatch {
+  width: 20px; height: 20px; border: 1px solid var(--border);
+  padding: 0; cursor: pointer;
+}
+.worn-dye-swatch:hover { border-color: var(--accent); }

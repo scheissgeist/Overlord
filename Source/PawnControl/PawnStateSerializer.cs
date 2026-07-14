@@ -393,13 +393,20 @@ namespace Overlord
                 foreach (var a in pawn.apparel.WornApparel)
                 {
                     if (a?.def == null) continue;
-                    apparel.Add(new Dictionary<string, object>
+                    var colorable = a.TryGetComp<CompColorable>();
+                    var entry = new Dictionary<string, object>
                     {
+                        ["id"] = a.thingIDNumber,
                         ["label"] = a.LabelCap ?? a.def.defName,
                         ["defName"] = a.def.defName,
                         ["slotKey"] = GearSlotKeyForDef(a.def),
-                        ["hp"] = (int)((float)a.HitPoints / a.MaxHitPoints * 100)
-                    });
+                        ["hp"] = (int)((float)a.HitPoints / a.MaxHitPoints * 100),
+                        ["dyeable"] = colorable != null
+                    };
+                    // Current draw color as hex so the UI can show a swatch.
+                    var c = a.DrawColor;
+                    entry["color"] = $"#{(int)(c.r * 255):X2}{(int)(c.g * 255):X2}{(int)(c.b * 255):X2}";
+                    apparel.Add(entry);
                 }
                 dict["apparel"] = apparel;
             }

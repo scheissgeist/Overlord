@@ -188,7 +188,9 @@ namespace Overlord
                 ["storyPurchaseArguments"] = true,
                 ["toolkitLoaded"] = TwitchToolkitBridge.IsToolkitLoaded,
                 ["toolkitUtilsLoaded"] = TwitchToolkitBridge.IsToolkitUtilsLoaded,
-                ["toolkitChatConnected"] = TwitchToolkitBridge.IsChatConnected
+                ["toolkitChatConnected"] = TwitchToolkitBridge.IsChatConnected,
+                // Fixed dye swatch palette for the viewer gear panel.
+                ["dyePalette"] = PawnCommandRouter.BuildDyePaletteMessage()
             };
         }
 

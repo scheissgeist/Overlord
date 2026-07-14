@@ -230,6 +230,9 @@ namespace Overlord
                 case StateProtocol.CmdDrop:
                     return ExecuteDrop(pawn, json);
 
+                case StateProtocol.CmdDyeApparel:
+                    return ExecuteDyeApparel(session, pawn, json);
+
                 case StateProtocol.CmdHostileResponse:
                     return ExecuteHostileResponse(pawn, json);
 
@@ -832,6 +835,84 @@ namespace Overlord
             Apparel droppedApparel;
             pawn.apparel.TryDrop(apparel, out droppedApparel, pawn.Position, true);
             return SuccessResult($"Dropped {apparel.LabelShort ?? slot}");
+        }
+
+        // Curated dye palette sent to viewers. NOT RimWorld's ColorDefs (vanilla has
+        // effectively none for dyeing — the game uses a free color picker); this is a
+        // deliberate bounded set of canon-feeling apparel colors (earthy tones, muted
+        // primaries, neutrals) so viewer dyeing stays tasteful and not neon slop.
+        // Keyed by a stable id the web UI sends back.
+        public static readonly (string id, string label, float r, float g, float b)[] DyePalette =
+        {
+            ("crimson",   "Crimson",    0.55f, 0.12f, 0.12f),
+            ("rust",      "Rust",       0.62f, 0.31f, 0.16f),
+            ("amber",     "Amber",      0.82f, 0.55f, 0.18f),
+            ("gold",      "Gold",       0.82f, 0.66f, 0.36f),
+            ("olive",     "Olive",      0.42f, 0.44f, 0.20f),
+            ("forest",    "Forest",     0.20f, 0.38f, 0.22f),
+            ("teal",      "Teal",       0.16f, 0.44f, 0.44f),
+            ("navy",      "Navy",       0.16f, 0.22f, 0.42f),
+            ("royal",     "Royal Blue", 0.24f, 0.34f, 0.66f),
+            ("violet",    "Violet",     0.40f, 0.24f, 0.50f),
+            ("plum",      "Plum",       0.42f, 0.20f, 0.34f),
+            ("rose",      "Rose",       0.78f, 0.42f, 0.48f),
+            ("sand",      "Sand",       0.80f, 0.72f, 0.52f),
+            ("brown",     "Brown",      0.36f, 0.25f, 0.16f),
+            ("charcoal",  "Charcoal",   0.16f, 0.16f, 0.17f),
+            ("slate",     "Slate",      0.40f, 0.43f, 0.47f),
+            ("bone",      "Bone",       0.86f, 0.83f, 0.74f),
+            ("white",     "White",      0.92f, 0.92f, 0.90f),
+            ("black",     "Black",      0.08f, 0.08f, 0.09f),
+        };
+
+        public static List<object> BuildDyePaletteMessage()
+        {
+            var list = new List<object>();
+            foreach (var c in DyePalette)
+                list.Add(new Dictionary<string, object>
+                {
+                    ["id"] = c.id,
+                    ["label"] = c.label,
+                    ["hex"] = $"#{(int)(c.r * 255):X2}{(int)(c.g * 255):X2}{(int)(c.b * 255):X2}"
+                });
+            return list;
+        }
+
+        private static Dictionary<string, object> ExecuteDyeApparel(ViewerSession session, Pawn pawn, string json)
+        {
+            if (session?.permissions?.appearance != true)
+                return ErrorResult("Dyeing is disabled by the streamer");
+            if (pawn?.apparel == null)
+                return ErrorResult("No apparel to dye");
+
+            int itemId = JsonHelper.ExtractInt(json, "itemId", -1);
+            string colorId = JsonHelper.ExtractString(json, "colorId");
+            if (itemId < 0 || string.IsNullOrEmpty(colorId))
+                return ErrorResult("Pick an item and a color");
+
+            var swatch = DyePalette.FirstOrDefault(c => c.id == colorId);
+            if (swatch.id == null)
+                return ErrorResult("Unknown color");
+
+            var apparel = pawn.apparel.WornApparel.FirstOrDefault(a => a.thingIDNumber == itemId);
+            if (apparel == null)
+                return ErrorResult("That item isn't worn");
+
+            var colorable = apparel.TryGetComp<CompColorable>();
+            if (colorable == null)
+                return ErrorResult($"{apparel.LabelShort} can't be dyed");
+
+            colorable.SetColor(new Color(swatch.r, swatch.g, swatch.b));
+            // Refresh the pawn's drawn graphics + the viewer's portrait/state.
+            pawn.Drawer?.renderer?.SetAllGraphicsDirty();
+            PortraitsCache.SetDirty(pawn);
+            Find.ColonistBar?.MarkColonistsDirty();
+            var comp = OverlordGameComponent.Instance;
+            comp?.InvalidatePawnPortrait(pawn);
+            if (!string.IsNullOrEmpty(session.username))
+                comp?.HandleRequestStatePublic(session.username);
+
+            return SuccessResult($"Dyed {apparel.LabelShort} {swatch.label}");
         }
 
         private static Dictionary<string, object> ExecuteSpawnColonist(string username, string json, ViewerManager vm)

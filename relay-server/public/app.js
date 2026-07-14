@@ -2282,7 +2282,7 @@ function renderGear(s) {
     <div class="gear-worn-all">
       <div class="gear-nearby-title">Wearing now (${items.length})</div>
       ${items.length
-        ? items.map(item => `<div class="gear-worn-row">${escapeHtml(item.label || item.defName || '')}${Number.isFinite(item.hp) ? ` <span class="gear-sheet-count">${item.hp}%</span>` : ''}</div>`).join('')
+        ? items.map(renderWornRow).join('')
         : '<div class="quiet-empty slim">Nothing equipped</div>'}
     </div>
     <div class="gear-rig" aria-label="Equipment slots">
@@ -2313,6 +2313,35 @@ function renderGear(s) {
     </div>
   </div>`;
   bindGearButtons(el);
+}
+
+// Dye: viewers recolor individual worn apparel from the host's fixed swatch
+// palette (hostCapabilities.dyePalette). Rate-limited server-side; only shown
+// when the streamer granted appearance permission and the item is dyeable.
+function dyeAllowed() {
+  return !getActionBlockedReason('set_appearance') && Array.isArray(hostCapabilities?.dyePalette);
+}
+
+function renderWornRow(item) {
+  const swatch = item.color
+    ? `<span class="worn-swatch" style="background:${escapeAttr(item.color)}"></span>` : '';
+  const hp = Number.isFinite(item.hp) ? ` <span class="gear-sheet-count">${item.hp}%</span>` : '';
+  const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
+  const dyeBtn = canDye
+    ? `<button class="worn-dye-btn" data-dye-toggle="${item.itemId}">Dye</button>` : '';
+  const palette = canDye ? `<div class="worn-dye-palette hidden" data-dye-palette="${item.itemId}">
+      ${hostCapabilities.dyePalette.map(c =>
+        `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}"
+           data-dye-apply="${item.itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('')}
+    </div>` : '';
+  return `<div class="gear-worn-row">
+      <span class="worn-name">${swatch}${escapeHtml(item.label || item.defName || '')}${hp}</span>${dyeBtn}
+    </div>${palette}`;
+}
+
+function sendDye(itemId, colorId) {
+  markCommandSent('dye_apparel', 'Dyeing…');
+  send({ type: 'command', action: 'dye_apparel', itemId: Number(itemId), colorId });
 }
 
 function buildGearItems(s) {
@@ -2350,7 +2379,10 @@ function buildGearItems(s) {
         action: 'drop',
         slot,
         button: 'Take off',
-        blocked: equipBlocked
+        blocked: equipBlocked,
+        itemId: typeof a === 'object' ? a.id : undefined,
+        color: typeof a === 'object' ? a.color : undefined,
+        dyeable: typeof a === 'object' ? a.dyeable === true : false
       });
     });
   }
@@ -2528,6 +2560,21 @@ function bindGearButtons(root) {
   root.querySelectorAll('[data-equip-thing-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       sendEquipAction(btn.dataset.equipThingId);
+    });
+  });
+  // Dye: toggle the swatch palette open/closed for one worn item.
+  root.querySelectorAll('[data-dye-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      markCommandInteraction(4000);
+      const id = btn.dataset.dyeToggle;
+      const pal = root.querySelector(`[data-dye-palette="${id}"]`);
+      if (pal) pal.classList.toggle('hidden');
+    });
+  });
+  // Dye: apply a swatch to that item.
+  root.querySelectorAll('[data-dye-apply]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sendDye(btn.dataset.dyeApply, btn.dataset.dyeColor);
     });
   });
 }
