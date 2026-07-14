@@ -22,6 +22,11 @@ namespace Overlord
         public bool allowViewerTacticalMap = false;
         public bool allowViewerResourceReadout = false;
 
+        // Troubleshooting: pause ALL live map capture (viewer frames + spectator).
+        // Viewers keep pawn control; they just lose the live map. Lets the streamer
+        // isolate capture-pipeline issues in seconds without disabling the mod.
+        public bool disableMapCapture = false;
+
         // Permissions defaults
         public bool allowDraft = true;
         public bool allowMove = true;
@@ -57,6 +62,7 @@ namespace Overlord
             Scribe_Values.Look(ref mirrorHostCameraToViewers, "mirrorHostCameraToViewers", false);
             Scribe_Values.Look(ref liveCameraModeVersion, "liveCameraModeVersion", 0);
             Scribe_Values.Look(ref allowViewerTacticalMap, "allowViewerTacticalMap", false);
+            Scribe_Values.Look(ref disableMapCapture, "disableMapCapture", false);
             Scribe_Values.Look(ref allowViewerResourceReadout, "allowViewerResourceReadout", false);
             Scribe_Values.Look(ref allowDraft, "allowDraft", true);
             Scribe_Values.Look(ref allowMove, "allowMove", true);

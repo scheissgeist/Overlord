@@ -138,7 +138,15 @@ namespace Overlord
             try { probeDir = Application.persistentDataPath; } catch { probeDir = null; }
             asyncPipelineBroken = false;
             pendingReadbacks = 0;
-            LogUtil.Log($"Map capture pipeline: asyncReadback={asyncSupported} uvTopDown={gpuTopDown}");
+            string buildStamp = "unknown";
+            try
+            {
+                var loc = typeof(MapRenderer).Assembly.Location;
+                if (!string.IsNullOrEmpty(loc))
+                    buildStamp = System.IO.File.GetLastWriteTime(loc).ToString("yyyy-MM-dd HH:mm:ss");
+            }
+            catch { }
+            LogUtil.Log($"Map capture pipeline: asyncReadback={asyncSupported} uvTopDown={gpuTopDown} build={buildStamp} captureDisabled={OverlordMod.Settings?.disableMapCapture == true}");
 
             threadRunning = true;
             sendThread = new Thread(SendWorker)
@@ -317,6 +325,11 @@ namespace Overlord
         private void RenderDueFrames(ViewerManager viewers)
         {
             RefreshSettings();
+
+            // Troubleshooting kill-switch: no captures at all — no camera borrow, no
+            // map-draw commands, no shader-global writes. Total isolation lever.
+            if (OverlordMod.Settings?.disableMapCapture == true)
+                return;
 
             var activeSessions = viewers.AllSessions
                 .Where(s => s != null && s.isConnected && s.HasPawn && s.assignedPawn.Map != null && s.assignedPawn.Spawned)
@@ -719,6 +732,23 @@ namespace Overlord
                     MapRenderContext.MarkCaptureActive(true);
                     try { gameCamera.Render(); }
                     finally { MapRenderContext.MarkCaptureActive(false); }
+                }
+
+                // QueueMapDrawCommands set GLOBAL shader state (fall colors, water
+                // textures) for the CAPTURE map. RimWorld only re-sets those on
+                // map/season change — not per frame — so capturing a map other than
+                // the one on screen (caravan viewers) left the live map drawing with
+                // the wrong map's shader globals: the red/green terrain-noise report.
+                // Restore them for the map the streamer is actually looking at.
+                var liveMap = Find.CurrentMap;
+                if (liveMap != null && liveMap != map)
+                {
+                    try
+                    {
+                        PlantFallColors.SetFallShaderGlobals(liveMap);
+                        liveMap.waterInfo?.SetTextures();
+                    }
+                    catch { }
                 }
             }
             finally

@@ -84,6 +84,10 @@ namespace Overlord
             listing.Label("Live-safe keeps viewer events off, tactical map data private, area limits on, and camera traffic moderate. Sharp binary camera is for one or a few viewers. Smooth tactical map is the recommended low-lag control path (browser tilemap).");
             listing.GapLine();
 
+            listing.CheckboxLabeled("Pause live map capture (troubleshooting)", ref Settings.disableMapCapture,
+                "Stops all off-screen map rendering for viewers. Viewers keep full pawn control; they just lose the live map picture. Use to isolate graphics problems: if an issue disappears with this on, it's in the capture pipeline.");
+            listing.GapLine();
+
             listing.Label("Relay Server URL (leave blank for local-only mode):");
             Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
 
