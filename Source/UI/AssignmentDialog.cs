@@ -227,7 +227,7 @@ namespace Overlord
                             vm.SendColonistList();
                         }
                     }
-                    else if (vm.AssignPawn(selectedViewer, pawn))
+                    else if (vm.AssignPawnSwap(selectedViewer, pawn))
                     {
                         vm.SendColonistList();
                         OverlordGameComponent.Instance?.HandleRequestStatePublic(selectedViewer);

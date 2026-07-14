@@ -131,6 +131,54 @@ namespace Overlord
                 session.isConnected = false;
         }
 
+        /// <summary>
+        /// Assign, but if the target pawn is already controlled by ANOTHER viewer and
+        /// the assignee is ALSO controlling a pawn, SWAP the two pawns between them
+        /// instead of orphaning the displaced viewer. Fixes "I assigned the wrong
+        /// person" — the streamer just assigns the correct pairing and the other
+        /// viewer keeps a pawn (the one the assignee vacated).
+        /// </summary>
+        public bool AssignPawnSwap(string username, Pawn pawn)
+        {
+            username = NormalizeUsername(username);
+            if (username == null || pawn == null)
+                return false;
+
+            var session = GetSession(username);
+            var assigneeOldPawn = session?.assignedPawn;
+
+            // Who currently owns the target pawn (a different viewer)?
+            ViewerSession displaced = null;
+            if (pawnToViewer.TryGetValue(pawn.thingIDNumber, out string existingViewer)
+                && existingViewer != username)
+            {
+                var ds = GetSession(existingViewer);
+                if (ds != null && ds.assignedPawn == pawn)
+                    displaced = ds;
+            }
+
+            // Do the primary assignment (this clears both pawn's old owner and the
+            // assignee's old pawn internally).
+            if (!AssignPawn(username, pawn))
+                return false;
+
+            // Swap: hand the displaced viewer the pawn the assignee just vacated,
+            // so nobody is left with nothing. Only when the assignee actually had a
+            // (different) pawn to give up.
+            if (displaced != null && assigneeOldPawn != null && assigneeOldPawn != pawn
+                && !assigneeOldPawn.Dead && assigneeOldPawn.Spawned
+                && GetSessionForPawn(assigneeOldPawn) == null)
+            {
+                AssignPawn(displaced.username, assigneeOldPawn);
+                LogUtil.Log($"Swapped: {username}<->{displaced.username} on {pawn.LabelShort}/{assigneeOldPawn.LabelShort}");
+                ActionLog.Append(ActionLogKind.Assignment, displaced.username, "swap",
+                    $"Swapped onto {assigneeOldPawn.LabelShort}", assigneeOldPawn.thingIDNumber);
+            }
+
+            SendColonistList();
+            return true;
+        }
+
         public bool AssignPawn(string username, Pawn pawn)
         {
             username = NormalizeUsername(username);

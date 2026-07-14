@@ -1015,7 +1015,9 @@ namespace Overlord
         {
             if (string.IsNullOrEmpty(viewerUsername) || pawn == null) return;
 
-            if (vm.AssignPawn(viewerUsername, pawn))
+            // Streamer-driven assignment swaps rather than orphaning the other viewer
+            // when the target pawn is already controlled (fixes mis-assignment).
+            if (vm.AssignPawnSwap(viewerUsername, pawn))
             {
                 selectedViewer = viewerUsername;
                 selectedPawnId = pawn.thingIDNumber;
