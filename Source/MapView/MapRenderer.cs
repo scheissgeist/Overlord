@@ -83,6 +83,35 @@ namespace Overlord
             bandwidthPressure = Mathf.Clamp01(bandwidthPressure + (target - bandwidthPressure) * Mathf.Clamp01(rate * dt));
         }
 
+        // ── Dedicated capture camera ────────────────────────────────────────────
+        // Captures render through OUR OWN invisible camera, never the live game
+        // camera. The live camera's transform/ortho/target/projection are never
+        // touched, so no capture bug can corrupt the streamer's view or zoom — the
+        // entire borrow/restore class of failures is structurally gone.
+        private static Camera captureCamera;
+
+        private static Camera GetCaptureCamera(Camera template)
+        {
+            if (captureCamera != null)
+                return captureCamera;
+            var go = new GameObject("Overlord_CaptureCamera");
+            go.hideFlags = HideFlags.HideAndDontSave;
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            captureCamera = go.AddComponent<Camera>();
+            captureCamera.CopyFrom(template);   // culling mask, depth, clear settings
+            captureCamera.enabled = false;      // manual Render() only — never auto-renders
+            return captureCamera;
+        }
+
+        private static void DestroyCaptureCamera()
+        {
+            if (captureCamera != null)
+            {
+                UnityEngine.Object.Destroy(captureCamera.gameObject);
+                captureCamera = null;
+            }
+        }
+
         // Orientation-proof probe: when <persistentDataPath>/overlord_dump_frames
         // exists, the encode worker dumps up to MaxFrameDumps raw pre-encode
         // buffers labeled current/other map — the ground-truth artifact for any
@@ -173,6 +202,7 @@ namespace Overlord
             }
 
             currentViewers = null;
+            DestroyCaptureCamera();
             threadRunning = false;
             sendThread?.Join(2000);
             sendQueue.Clear(); // drop un-encoded frames from the ending session
@@ -682,68 +712,67 @@ namespace Overlord
         /// </summary>
         private static RenderTexture RenderMapArea(Map map, Vector3 center, float radiusZ, float aspect, int width, int height)
         {
-            var gameCamera = Find.Camera;
-            if (gameCamera == null || map == null)
+            var liveCamera = Find.Camera;
+            if (liveCamera == null || map == null)
                 return null;
 
             // Resolved BEFORE the TemporarilySetCurrentMap swap below: is this
             // capture of the map the streamer is actually looking at?
             bool sameAsLiveMap = map == Find.CurrentMap;
 
-            // Save main camera state
-            var savedPos = gameCamera.transform.position;
-            var savedRot = gameCamera.transform.rotation;
-            bool savedOrtho = gameCamera.orthographic;
-            float savedOrthoSize = gameCamera.orthographicSize;
-            float savedAspect = gameCamera.aspect;
-            RenderTexture savedTarget = gameCamera.targetTexture;
-            CameraClearFlags savedClearFlags = gameCamera.clearFlags;
-            Color savedBgColor = gameCamera.backgroundColor;
-            RenderTexture savedActive = RenderTexture.active;
-            // Projection hygiene: a CUSTOM projection matrix (camera mods like
-            // Camera+ set one; their hooks also fire DURING Camera.Render and see
-            // our temporarily-swapped CurrentMap) survives orthographic property
-            // changes and can flip captures of non-current maps — the recurring
-            // "caravan viewers see an inverted map" report. Snapshot the matrix,
-            // reset to a clean one derived from our explicit ortho fields, and
-            // restore the original afterwards.
-            Matrix4x4 savedProjection = gameCamera.projectionMatrix;
+            // Render through OUR dedicated camera. The live camera is used only as a
+            // template (culling mask, depth, HDR settings) and is NEVER mutated —
+            // the whole borrow/restore failure class (leaked transform/ortho/target/
+            // projection corrupting the streamer's view or zoom) is structurally gone.
+            var cam = GetCaptureCamera(liveCamera);
+            var savedActive = RenderTexture.active;
 
             var rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             rt.antiAliasing = 1;
 
             try
             {
-                // Reposition for the viewer's pawn, then explicitly queue the
-                // RimWorld map layers for that same off-screen view.
-                gameCamera.transform.position = new Vector3(center.x, 40f, center.z);
-                gameCamera.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
-                gameCamera.orthographic = true;
-                gameCamera.orthographicSize = radiusZ;
-                gameCamera.aspect = aspect;
-                gameCamera.targetTexture = rt;
-                gameCamera.clearFlags = CameraClearFlags.SolidColor;
-                gameCamera.backgroundColor = new Color(0.08f, 0.08f, 0.08f, 1f);
-                gameCamera.ResetProjectionMatrix();
+                cam.CopyFrom(liveCamera);       // keep culling/post settings current
+                cam.enabled = false;            // CopyFrom copies enabled; stay manual
+                cam.transform.position = new Vector3(center.x, 40f, center.z);
+                cam.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+                cam.orthographic = true;
+                cam.orthographicSize = radiusZ;
+                cam.aspect = aspect;
+                cam.targetTexture = rt;
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = new Color(0.08f, 0.08f, 0.08f, 1f);
+                // CopyFrom copies a custom projection matrix too (Camera+ sets one on
+                // the live camera) — reset so our ortho fields define the projection.
+                cam.ResetProjectionMatrix();
 
                 CellRect viewRect = BuildViewRect(center, radiusZ, aspect, map);
                 using (RimWorldCompat.TemporarilySetCurrentMap(map))
                 using (MapRenderContext.Begin(viewRect, closeZoom: true))
                 {
-                    QueueMapDrawCommands(map, sameAsLiveMap);
-                    // Activate the camera override ONLY around the off-screen Render()
-                    // so it can never leak into the live presented frame.
+                    // The override must span the DRAW COMMANDS too: DrawMapMesh selects
+                    // which terrain sections to draw by reading CurrentViewRect at call
+                    // time (gating it to Render()-only made viewer frames draw the
+                    // STREAMER's visible sections instead of the viewer's area). With a
+                    // dedicated camera there is no live camera state for the override
+                    // window to corrupt, and by end-of-frame the live cameras have
+                    // already rendered.
                     MapRenderContext.MarkCaptureActive(true);
-                    try { gameCamera.Render(); }
-                    finally { MapRenderContext.MarkCaptureActive(false); }
+                    try
+                    {
+                        QueueMapDrawCommands(map, sameAsLiveMap);
+                        cam.Render();
+                    }
+                    finally
+                    {
+                        MapRenderContext.MarkCaptureActive(false);
+                    }
                 }
 
                 // QueueMapDrawCommands set GLOBAL shader state (fall colors, water
-                // textures) for the CAPTURE map. RimWorld only re-sets those on
-                // map/season change — not per frame — so capturing a map other than
-                // the one on screen (caravan viewers) left the live map drawing with
-                // the wrong map's shader globals: the red/green terrain-noise report.
-                // Restore them for the map the streamer is actually looking at.
+                // textures) for the CAPTURE map on cross-map captures. RimWorld only
+                // re-sets those on map/season change, so restore them for the map the
+                // streamer is actually looking at.
                 var liveMap = Find.CurrentMap;
                 if (liveMap != null && liveMap != map)
                 {
@@ -757,17 +786,8 @@ namespace Overlord
             }
             finally
             {
-                // Always restore the main camera
                 RenderTexture.active = savedActive;
-                gameCamera.transform.position = savedPos;
-                gameCamera.transform.rotation = savedRot;
-                gameCamera.orthographic = savedOrtho;
-                gameCamera.orthographicSize = savedOrthoSize;
-                gameCamera.aspect = savedAspect;
-                gameCamera.targetTexture = savedTarget;
-                gameCamera.clearFlags = savedClearFlags;
-                gameCamera.backgroundColor = savedBgColor;
-                gameCamera.projectionMatrix = savedProjection;
+                cam.targetTexture = null; // never hold the temp RT across frames
             }
 
             return rt;
@@ -1436,20 +1456,24 @@ namespace Overlord
             var rt = RenderTexture.GetTemporary(frameWidth, frameHeight, 24, RenderTextureFormat.ARGB32);
             rt.antiAliasing = 1;
 
-            RenderTexture savedTarget = gameCamera.targetTexture;
-            float savedAspect = gameCamera.aspect;
+            // Same dedicated-camera rule as RenderMapArea: mirror the live view by
+            // COPYING the live camera, never mutating it.
+            var cam = GetCaptureCamera(gameCamera);
             RenderTexture savedActive = RenderTexture.active;
             try
             {
-                gameCamera.aspect = aspect;
-                gameCamera.targetTexture = rt;
-                gameCamera.Render();
+                cam.CopyFrom(gameCamera);
+                cam.enabled = false;
+                cam.transform.position = gameCamera.transform.position;
+                cam.transform.rotation = gameCamera.transform.rotation;
+                cam.aspect = aspect;
+                cam.targetTexture = rt;
+                cam.Render();
             }
             finally
             {
                 RenderTexture.active = savedActive;
-                gameCamera.aspect = savedAspect;
-                gameCamera.targetTexture = savedTarget;
+                cam.targetTexture = null;
             }
 
             float radiusZ = gameCamera.orthographic ? Mathf.Max(1f, gameCamera.orthographicSize) : Mathf.Clamp(frameHeight / 32f, 8f, 24f);
