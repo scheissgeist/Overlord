@@ -603,6 +603,25 @@ namespace Overlord
             return Mathf.Clamp(height, 360, 1440);
         }
 
+        /// <summary>
+        /// Max pixels per viewer frame. Readback bytes (w*h*4), encode time and upload
+        /// bandwidth all scale with this — it is the true cost knob. Budget shrinks as
+        /// the audience grows, and tightens further under measured send-queue pressure.
+        /// ~0.92M px ≈ the 1280x720 that ran smooth at 8 viewers.
+        /// </summary>
+        private int GetFramePixelBudget(int activeViewerCount)
+        {
+            int budget;
+            if (activeViewerCount > 12)      budget = 480_000;   // ~900x540
+            else if (activeViewerCount > 8)  budget = 700_000;   // ~1120x625
+            else if (activeViewerCount > 4)  budget = 950_000;   // ~1300x730
+            else if (activeViewerCount > 2)  budget = 1_300_000; // ~1520x855
+            else                             budget = 2_100_000; // solo/duo can be sharp
+            // Congestion shrinks the frame too, not just quality/interval.
+            budget = Mathf.RoundToInt(budget * Mathf.Lerp(1f, 0.55f, bandwidthPressure));
+            return Mathf.Max(240_000, budget);
+        }
+
         private int GetEffectiveJpegQuality(int activeViewerCount)
         {
             int quality = preferredJpegQuality;
@@ -639,13 +658,14 @@ namespace Overlord
             lastStatsLogTime = Time.time;
 
             int frames, skipped, width, height, quality;
-            long avgRender, avgEncode, avgKb;
+            long avgRender, avgEncode, avgKb, totalJpegBytes;
             string cameraMode;
             lock (statsLock)
             {
                 if (statsFrames == 0 && statsSkipped == 0)
                     return;
 
+                totalJpegBytes = statsJpegBytes;
                 frames = statsFrames;
                 skipped = statsSkipped;
                 width = statsLastRenderWidth;
@@ -663,8 +683,13 @@ namespace Overlord
                 statsJpegBytes = 0;
             }
 
+            // Upload + readback throughput — the costs avgRenderMs never captured and
+            // that actually saturate the host (JPEG bytes on the wire, RGBA off the GPU).
+            float elapsed = Mathf.Max(0.001f, StatsIntervalSec);
+            float upMBps = totalJpegBytes / (1024f * 1024f) / elapsed;
+            float readMBps = (float)frames * width * height * 4f / (1024f * 1024f) / elapsed;
             LogUtil.Log(
-                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} sendQueue={queueDepth} pressure={bandwidthPressure:F2}"
+                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} px={(width * height) / 1000}k budget={GetFramePixelBudget(activeViewerCount) / 1000}k quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} upMBps={upMBps:F1} readMBps={readMBps:F1} sendQueue={queueDepth} pressure={bandwidthPressure:F2}"
             );
 
             var msg = new Dictionary<string, object>
@@ -874,6 +899,22 @@ namespace Overlord
             {
                 frameWidth = maxFrameWidth;
                 frameHeight = Mathf.Clamp(Mathf.RoundToInt(frameWidth / viewerAspect), 360, 1440);
+            }
+
+            // PIXEL BUDGET — the real cost driver. Height and width were capped
+            // INDEPENDENTLY, so a wide viewport (ultrawide/maximised browser) sailed
+            // past both: 2053x974 = 2.0M px vs a normal 1282x721 = 0.92M px. Nothing
+            // noticed, because the per-frame costs that actually hurt — GPU readback
+            // bytes, encode time and UPLOAD bandwidth — scale with PIXELS, and none of
+            // them are in avgRenderMs (which is why the stats looked clean at 0ms while
+            // the host lagged). Cap total pixels, preserving aspect.
+            int pixelBudget = GetFramePixelBudget(activeViewerCount);
+            int pixels = frameWidth * frameHeight;
+            if (pixels > pixelBudget)
+            {
+                float scale = Mathf.Sqrt((float)pixelBudget / pixels);
+                frameWidth = Mathf.Max(320, Mathf.RoundToInt(frameWidth * scale));
+                frameHeight = Mathf.Max(240, Mathf.RoundToInt(frameHeight * scale));
             }
             int frameQuality = GetEffectiveJpegQuality(activeViewerCount);
 
