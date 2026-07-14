@@ -552,24 +552,44 @@ namespace Overlord
                 JumpToPawn(pawn);
             }
 
-            // Heal / Cure buttons — only shown when the pawn actually needs them,
-            // stacked leftward from the main action button so they never overlap.
-            float extraX = actionRect.x - 52f;
-            if (PawnNeedsHealing(pawn))
+            // Per-pawn care (Heal / Cure Cube Coma) lives in the Inspector, not on
+            // the row — the board stays a clean scannable list. Select a pawn to act.
+        }
+
+        /// <summary>
+        /// Draws the Heal / Cure Cube Coma buttons for a pawn in the Inspector, each
+        /// only when applicable. Returns the height consumed so callers can advance y.
+        /// </summary>
+        private float DrawPawnCareButtons(float x, float y, float width, Pawn pawn)
+        {
+            if (pawn == null || pawn.Dead) return 0f;
+            bool needsHeal = PawnNeedsHealing(pawn);
+            bool hasComa   = ReviveManager.HasCubeComa(pawn);
+            if (!needsHeal && !hasComa) return 0f;
+
+            float startY = y;
+            if (needsHeal && hasComa)
             {
-                var healRect = new Rect(extraX, row.y + 12f, 48f, 24f);
-                if (BrassButton(healRect, "Heal"))
+                float half = (width - 8f) / 2f;
+                if (BrassButton(new Rect(x, y, half, 28f), "Heal"))
                     ReviveManager.FullHeal(pawn);
-                TooltipHandler.TipRegion(healRect, "Fully heal this colonist (keeps bionics/implants)");
-                extraX -= 52f;
-            }
-            if (ReviveManager.HasCubeComa(pawn))
-            {
-                var cureRect = new Rect(extraX, row.y + 12f, 48f, 24f);
-                if (BrassButton(cureRect, "Cube"))
+                if (BrassButton(new Rect(x + half + 8f, y, half, 28f), "Cure Cube Coma"))
                     ReviveManager.CureCubeObsession(pawn);
-                TooltipHandler.TipRegion(cureRect, "Cure cube coma and clear the obsession");
+                y += 34f;
             }
+            else if (needsHeal)
+            {
+                if (BrassButton(new Rect(x, y, width, 28f), "Heal to Full"))
+                    ReviveManager.FullHeal(pawn);
+                y += 34f;
+            }
+            else
+            {
+                if (BrassButton(new Rect(x, y, width, 28f), "Cure Cube Coma"))
+                    ReviveManager.CureCubeObsession(pawn);
+                y += 34f;
+            }
+            return y - startY;
         }
 
         private static bool PawnNeedsHealing(Pawn pawn)
@@ -682,6 +702,9 @@ namespace Overlord
                 }
                 TooltipHandler.TipRegion(new Rect(0f, y, rect.width, 28f), "Force a full state update to this viewer's browser");
                 y += 34f;
+
+                // Care for this viewer's pawn (only shows when it needs it).
+                y += DrawPawnCareButtons(0f, y, rect.width, session.assignedPawn);
             }
             else
             {
@@ -799,6 +822,9 @@ namespace Overlord
             if (BrassButton(new Rect(0f, y, rect.width, 28f), "Jump to Pawn"))
                 JumpToPawn(pawn);
             y += 36f;
+
+            // Care for this colonist (Heal / Cure Cube Coma) — only when applicable.
+            y += DrawPawnCareButtons(0f, y, rect.width, pawn);
 
             if (!string.IsNullOrEmpty(selectedViewer) && vm.GetSession(selectedViewer) != null)
             {
