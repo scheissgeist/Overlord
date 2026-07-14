@@ -783,6 +783,11 @@ namespace Overlord
                 .ToList();
         }
 
+        // Slot an apparel def by RimWorld's STRUCTURED layer + body-part data, not by
+        // scraping words. The old substring approach mis-slotted anything that COVERED
+        // the legs — a duster/parka covers Torso+Arms+Legs, so "legs" matched and it
+        // landed under Legs instead of Outer (aSoapyoid's report). Layer is the real
+        // signal: Shell = outerwear regardless of what body parts it happens to cover.
         private static string GearSlotKeyForDef(ThingDef def)
         {
             if (def == null)
@@ -790,42 +795,43 @@ namespace Overlord
             if (def.IsWeapon)
                 return "weapon";
 
-            string text = ((def.defName ?? "") + " " + (def.label ?? "")).ToLowerInvariant();
             var apparel = def.apparel;
-            if (apparel?.bodyPartGroups != null)
-            {
-                foreach (BodyPartGroupDef group in apparel.bodyPartGroups)
-                    text += " " + (group?.defName ?? "") + " " + (group?.label ?? "");
-            }
-            if (apparel?.layers != null)
-            {
-                foreach (ApparelLayerDef layer in apparel.layers)
-                    text += " " + (layer?.defName ?? "") + " " + (layer?.label ?? "");
-            }
+            if (apparel == null)
+                return "other";
 
-            if (ContainsAny(text, "head", "upperhead", "fullhead", "eyes", "helmet", "hat", "hood", "cowboy"))
+            // Layer decides first — it's unambiguous for outerwear/headgear/belts.
+            var layers = apparel.layers;
+            bool HasLayer(string name) =>
+                layers != null && layers.Any(l => l != null && l.defName == name);
+
+            if (HasLayer("Overhead") || HasLayer("EyeCover"))
                 return "head";
-            if (ContainsAny(text, "hand", "hands", "glove", "gauntlet"))
+            if (HasLayer("Belt"))
+                return "outer"; // belts (shield/tox) — the UI has no separate belt slot
+            if (HasLayer("Shell"))
+                return "outer"; // duster, parka, flak jacket, power armor shell
+
+            // Remaining layers (Middle / OnSkin) need body-part context.
+            var parts = apparel.bodyPartGroups;
+            bool Covers(string group) =>
+                parts != null && parts.Any(p => p != null && p.defName == group);
+            bool CoversOnly(params string[] allowed) =>
+                parts != null && parts.Count > 0 &&
+                parts.All(p => p != null && allowed.Contains(p.defName));
+
+            if (Covers("UpperHead") || Covers("FullHead") || Covers("Eyes"))
+                return "head";
+            if (CoversOnly("Hands", "LeftHand", "RightHand"))
                 return "hands";
-            if (ContainsAny(text, "leg", "legs", "pant", "trouser", "skirt"))
+            // Legs ONLY (pants/leggings) — not a torso garment that also reaches legs.
+            if (CoversOnly("Legs", "Feet", "Waist"))
                 return "legs";
-            if (ContainsAny(text, "shell", "belt", "parka", "duster", "jacket", "coat", "outer", "armor", "armour", "vest"))
+            // A Middle-layer piece that reaches the arms/shoulders is a jacket/vest = outer.
+            if (HasLayer("Middle") && (Covers("Shoulders") || Covers("Arms")))
                 return "outer";
-            if (ContainsAny(text, "torso", "shirt", "t-shirt", "skin", "middle"))
+            if (Covers("Torso"))
                 return "torso";
             return "other";
-        }
-
-        private static bool ContainsAny(string text, params string[] needles)
-        {
-            if (string.IsNullOrEmpty(text))
-                return false;
-            foreach (string needle in needles)
-            {
-                if (!string.IsNullOrEmpty(needle) && text.Contains(needle))
-                    return true;
-            }
-            return false;
         }
 
         private static IEnumerable<WorkTypeDef> GetWorkTypesInGameOrder()
