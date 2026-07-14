@@ -193,6 +193,22 @@ namespace Overlord
                 });
             }
 
+            // Cube coma is a separate, item-uncurable Anomaly state that "Heal" leaves
+            // alone — only show a cure button when a colonist is actually in it.
+            int comaCount = colonists.Count(p => ReviveManager.HasCubeComa(p));
+            if (comaCount > 0)
+            {
+                buttons.Add(new ConsoleButton
+                {
+                    Label = compact ? $"Cube ({comaCount})" : $"Cure Cube Coma ({comaCount})",
+                    OnClick = () =>
+                    {
+                        int n = ReviveManager.CureAllCubeComa();
+                        Messages.Message($"[Overlord] Cured {n} colonist{(n == 1 ? "" : "s")} of cube coma.", MessageTypeDefOf.PositiveEvent, historical: false);
+                    }
+                });
+            }
+
             if (!string.IsNullOrEmpty(selectedViewer))
             {
                 string spawnLabel = compact ? "Spawn" : $"Spawn for {selectedViewer}";
@@ -536,14 +552,23 @@ namespace Overlord
                 JumpToPawn(pawn);
             }
 
-            // Heal button — only shown when the pawn actually needs it (no dead
-            // controls per the UI rules). Sits left of the main action button.
+            // Heal / Cure buttons — only shown when the pawn actually needs them,
+            // stacked leftward from the main action button so they never overlap.
+            float extraX = actionRect.x - 52f;
             if (PawnNeedsHealing(pawn))
             {
-                var healRect = new Rect(actionRect.x - 52f, row.y + 12f, 48f, 24f);
+                var healRect = new Rect(extraX, row.y + 12f, 48f, 24f);
                 if (BrassButton(healRect, "Heal"))
                     ReviveManager.FullHeal(pawn);
                 TooltipHandler.TipRegion(healRect, "Fully heal this colonist (keeps bionics/implants)");
+                extraX -= 52f;
+            }
+            if (ReviveManager.HasCubeComa(pawn))
+            {
+                var cureRect = new Rect(extraX, row.y + 12f, 48f, 24f);
+                if (BrassButton(cureRect, "Cube"))
+                    ReviveManager.CureCubeObsession(pawn);
+                TooltipHandler.TipRegion(cureRect, "Cure cube coma and clear the obsession");
             }
         }
 

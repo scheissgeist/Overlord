@@ -237,6 +237,83 @@ namespace Overlord
             return $"Healed {pawn.LabelShort}: {cured} condition{(cured == 1 ? "" : "s")} cleared.";
         }
 
+        // Anomaly cube-obsession hediffs. Looked up by name (not HediffDefOf) so a
+        // save without the Anomaly DLC never NREs — the defs simply don't exist and
+        // the cure no-ops. CubeComa is a timed DisappearsDisableable coma from being
+        // severed from the golden cube; removing it ends the coma and it does NOT
+        // re-trigger. CubeInterest is the stateful obsession — zero its severity
+        // (don't remove: keeps the cube's tracking intact) so the pawn is no longer
+        // obsessed and won't be pulled back into the coma cycle.
+        private static readonly string[] CubeBadHediffs = { "CubeComa", "CubeWithdrawal", "CubeRage" };
+
+        public static bool HasCubeComa(Pawn pawn)
+        {
+            var def = DefDatabase<HediffDef>.GetNamedSilentFail("CubeComa");
+            return def != null && pawn?.health?.hediffSet?.GetFirstHediffOfDef(def) != null;
+        }
+
+        public static string CureCubeObsession(Pawn pawn)
+        {
+            if (pawn == null) return "No pawn.";
+            if (pawn.health?.hediffSet == null) return $"{pawn.LabelShort} has no health tracker.";
+
+            int cleared = 0;
+            try
+            {
+                foreach (var name in CubeBadHediffs)
+                {
+                    var def = DefDatabase<HediffDef>.GetNamedSilentFail(name);
+                    if (def == null) continue;
+                    var h = pawn.health.hediffSet.GetFirstHediffOfDef(def);
+                    if (h != null) { pawn.health.RemoveHediff(h); cleared++; }
+                }
+
+                // Zero the obsession itself so coma can't recur — keep the hediff so
+                // the golden cube's link tracking stays valid.
+                var interestDef = DefDatabase<HediffDef>.GetNamedSilentFail("CubeInterest");
+                if (interestDef != null)
+                {
+                    var interest = pawn.health.hediffSet.GetFirstHediffOfDef(interestDef);
+                    if (interest != null && interest.Severity > 0.01f)
+                    {
+                        interest.Severity = 0f;
+                        cleared++;
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                LogUtil.Error($"CureCubeObsession failed for {pawn.LabelShort}: {ex.Message}");
+                return $"Cure failed: {ex.Message}";
+            }
+
+            if (cleared == 0)
+                return $"{pawn.LabelShort} has no cube coma / obsession.";
+
+            LogUtil.Log($"Host cured {pawn.LabelShort} of cube obsession ({cleared})");
+            ActionLog.Append(ActionLogKind.Assignment, "host", "cure_cube",
+                $"Cured {pawn.LabelShort} of cube coma", pawn.thingIDNumber);
+            Messages.Message($"[Overlord] Cured {pawn.LabelShort} of cube coma.", pawn, MessageTypeDefOf.PositiveEvent, historical: false);
+            return $"Cured {pawn.LabelShort} of cube coma.";
+        }
+
+        public static int CureAllCubeComa(Map map = null)
+        {
+            map = map ?? Find.CurrentMap;
+            var def = DefDatabase<HediffDef>.GetNamedSilentFail("CubeComa");
+            if (def == null || map?.mapPawns?.FreeColonists == null) return 0;
+            int n = 0;
+            foreach (var p in map.mapPawns.FreeColonists.ToList())
+            {
+                if (p?.health?.hediffSet?.GetFirstHediffOfDef(def) != null)
+                {
+                    CureCubeObsession(p);
+                    n++;
+                }
+            }
+            return n;
+        }
+
         public static string ReviveAllDeadColonists(Map map = null)
         {
             var dead = GetDeadColonists(map);
