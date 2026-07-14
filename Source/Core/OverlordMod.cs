@@ -86,6 +86,8 @@ namespace Overlord
 
             listing.CheckboxLabeled("Pause live map capture (troubleshooting)", ref Settings.disableMapCapture,
                 "Stops all off-screen map rendering for viewers. Viewers keep full pawn control; they just lose the live map picture. Use to isolate graphics problems: if an issue disappears with this on, it's in the capture pipeline.");
+            listing.Label($"Capture bisect level: {Settings.captureBisectLevel}  (0 = normal. Troubleshooting ladder: 1 = camera only, 2 = +terrain, 3 = +pawns, 4 = +weather. Raise until the bug appears — that level is the culprit.)");
+            Settings.captureBisectLevel = (int)listing.Slider(Settings.captureBisectLevel, 0f, 4f);
             listing.GapLine();
 
             listing.Label("Relay Server URL (leave blank for local-only mode):");

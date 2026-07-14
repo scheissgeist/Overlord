@@ -795,6 +795,13 @@ namespace Overlord
             // necessary. Every mutation the capture doesn't perform is corruption it
             // cannot cause. Cross-map captures (caravan viewers) still need them,
             // because nothing else updates a non-current map's drawer state.
+            // Bisect ladder (settings, live-read): 0=full, 1=camera+render only,
+            // 2=+terrain, 3=+pawns, 4=+conditions. Whichever level first reproduces
+            // a live-view bug names the culprit call — no theorizing required.
+            int bisect = OverlordMod.Settings?.captureBisectLevel ?? 0;
+            if (bisect == 1)
+                return; // render an empty frame: isolates the camera borrow itself
+
             if (!sameAsLiveMap)
             {
                 map.powerNetManager?.UpdatePowerNetsAndConnections_First();
@@ -805,7 +812,9 @@ namespace Overlord
             }
 
             map.mapDrawer?.DrawMapMesh();
+            if (bisect == 2) return;
             map.dynamicDrawManager?.DrawDynamicThings();
+            if (bisect == 3) return;
             map.gameConditionManager?.GameConditionManagerDraw(map);
             // Keep the capture draw set minimal. Edge clippers, designations, and
             // overlays have screen-space side effects that are more likely to leak
