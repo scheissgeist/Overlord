@@ -178,6 +178,21 @@ namespace Overlord
                 });
             }
 
+            if (colonists.Count > 0)
+            {
+                buttons.Add(new ConsoleButton
+                {
+                    Label = compact ? "Heal" : "Heal All Colonists",
+                    OnClick = () =>
+                    {
+                        Find.WindowStack.Add(Dialog_MessageBox.CreateConfirmation(
+                            $"Heal all {colonists.Count} living colonist{(colonists.Count == 1 ? "" : "s")} to full health? Injuries and illnesses are cleared; bionics and implants are kept.",
+                            () => HealAllColonists(colonists),
+                            false));
+                    }
+                });
+            }
+
             if (!string.IsNullOrEmpty(selectedViewer))
             {
                 string spawnLabel = compact ? "Spawn" : $"Spawn for {selectedViewer}";
@@ -520,6 +535,32 @@ namespace Overlord
             {
                 JumpToPawn(pawn);
             }
+
+            // Heal button — only shown when the pawn actually needs it (no dead
+            // controls per the UI rules). Sits left of the main action button.
+            if (PawnNeedsHealing(pawn))
+            {
+                var healRect = new Rect(actionRect.x - 52f, row.y + 12f, 48f, 24f);
+                if (BrassButton(healRect, "Heal"))
+                    ReviveManager.FullHeal(pawn);
+                TooltipHandler.TipRegion(healRect, "Fully heal this colonist (keeps bionics/implants)");
+            }
+        }
+
+        private static bool PawnNeedsHealing(Pawn pawn)
+        {
+            var hs = pawn?.health?.hediffSet;
+            if (hs == null) return false;
+            // Match what FullHeal actually clears — never show a Heal button that
+            // would no-op (e.g. anesthetized or need-collapsed pawns with no injury).
+            if (hs.GetMissingPartsCommonAncestors()?.Any() == true) return true;
+            foreach (var h in hs.hediffs)
+            {
+                if (h?.def == null) continue;
+                if (h is Hediff_Injury) return true;
+                if (h.def.isBad == true && h.def.everCurableByItem != false) return true;
+            }
+            return false;
         }
 
         private void DrawInspectorPane(Rect rect, OverlordGameComponent comp, ViewerManager vm, List<Pawn> colonists)
@@ -1113,6 +1154,20 @@ namespace Overlord
             DrawFineBorder(rect, selected ? BrassColor : BrassSoftColor);
             if (selected)
                 Widgets.DrawLineHorizontal(rect.x + 8f, rect.y + 1f, rect.width - 16f);
+        }
+
+        private void HealAllColonists(List<Pawn> colonists)
+        {
+            if (colonists == null) return;
+            int healed = 0;
+            foreach (var pawn in colonists)
+            {
+                if (pawn == null || pawn.Dead) continue;
+                string r = ReviveManager.FullHeal(pawn);
+                if (r != null && r.StartsWith("Healed")) healed++;
+            }
+            Messages.Message($"[Overlord] Healed {healed} colonist{(healed == 1 ? "" : "s")} to full health.",
+                MessageTypeDefOf.PositiveEvent, historical: false);
         }
 
         private void SpawnNewColonist(ViewerManager vm)

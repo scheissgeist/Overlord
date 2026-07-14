@@ -129,6 +129,10 @@ namespace Overlord
                         GenSpawn.Spawn(pawn, cell, map, Rot4.South, WipeMode.Vanish);
                 }
 
+                // "Back to life at full health": resurrection can leave the injuries
+                // and illnesses that killed the pawn — clear them.
+                try { FullHeal(pawn); } catch { }
+
                 vm?.ClearLastOwner(pawn.thingIDNumber);
 
                 string assignNote = "";
@@ -167,6 +171,70 @@ namespace Overlord
                 LogUtil.Error($"Revive failed for {pawn.LabelShort}: {ex.Message}");
                 return $"Revive failed: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Restores a living pawn to full health: heals injuries, cures diseases and
+        /// other harmful conditions, regrows missing body parts, and clears blood
+        /// loss. Deliberately NEVER removes non-harmful hediffs (bionics, implants,
+        /// beneficial states) or item-uncurable states (Anomaly metalhorror/inhumanized
+        /// are fought out, not wiped). Returns a short summary.
+        /// </summary>
+        public static string FullHeal(Pawn pawn)
+        {
+            if (pawn == null) return "No pawn.";
+            if (pawn.Dead) return $"{pawn.LabelShort} is dead — use revive.";
+            if (pawn.health?.hediffSet == null) return $"{pawn.LabelShort} has no health tracker.";
+
+            int cured = 0;
+            try
+            {
+                // Regrow missing parts first (restores all child parts too).
+                var missing = pawn.health.hediffSet.GetMissingPartsCommonAncestors()?.ToList();
+                if (missing != null)
+                {
+                    foreach (var part in missing)
+                    {
+                        if (part?.Part == null) continue;
+                        pawn.health.RestorePart(part.Part);
+                        cured++;
+                    }
+                }
+
+                // Remove injuries and harmful conditions. isBad excludes bionics and
+                // implants (they are beneficial), so upgrades are never stripped.
+                foreach (var hediff in pawn.health.hediffSet.hediffs.ToList())
+                {
+                    if (hediff?.def == null) continue;
+                    if (hediff is Hediff_Injury)
+                    {
+                        pawn.health.RemoveHediff(hediff);
+                        cured++;
+                        continue;
+                    }
+                    if (hediff.def.isBad != true) continue;         // keep bionics/beneficial
+                    // Don't strip states the game itself never lets you item-cure —
+                    // e.g. Anomaly's MetalhorrorImplant / Inhumanized default isBad=true
+                    // but are meant to be fought out, not wiped by a heal button.
+                    if (hediff.def.everCurableByItem == false) continue;
+                    pawn.health.RemoveHediff(hediff);
+                    cured++;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                LogUtil.Error($"FullHeal failed for {pawn.LabelShort}: {ex.Message}");
+                return $"Heal failed: {ex.Message}";
+            }
+
+            if (cured == 0)
+                return $"{pawn.LabelShort} is already healthy.";
+
+            LogUtil.Log($"Host healed {pawn.LabelShort}: {cured} condition{(cured == 1 ? "" : "s")} cleared");
+            ActionLog.Append(ActionLogKind.Assignment, "host", "heal",
+                $"Healed {pawn.LabelShort} ({cured} conditions)", pawn.thingIDNumber);
+            Messages.Message($"[Overlord] Healed {pawn.LabelShort}.", pawn, MessageTypeDefOf.PositiveEvent, historical: false);
+            return $"Healed {pawn.LabelShort}: {cured} condition{(cured == 1 ? "" : "s")} cleared.";
         }
 
         public static string ReviveAllDeadColonists(Map map = null)
