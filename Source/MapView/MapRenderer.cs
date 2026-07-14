@@ -686,6 +686,10 @@ namespace Overlord
             if (gameCamera == null || map == null)
                 return null;
 
+            // Resolved BEFORE the TemporarilySetCurrentMap swap below: is this
+            // capture of the map the streamer is actually looking at?
+            bool sameAsLiveMap = map == Find.CurrentMap;
+
             // Save main camera state
             var savedPos = gameCamera.transform.position;
             var savedRot = gameCamera.transform.rotation;
@@ -726,7 +730,7 @@ namespace Overlord
                 using (RimWorldCompat.TemporarilySetCurrentMap(map))
                 using (MapRenderContext.Begin(viewRect, closeZoom: true))
                 {
-                    QueueMapDrawCommands(map);
+                    QueueMapDrawCommands(map, sameAsLiveMap);
                     // Activate the camera override ONLY around the off-screen Render()
                     // so it can never leak into the live presented frame.
                     MapRenderContext.MarkCaptureActive(true);
@@ -778,16 +782,28 @@ namespace Overlord
             return new CellRect(minX, minZ, maxX - minX + 1, maxZ - minZ + 1).ClipInsideMap(map);
         }
 
-        private static void QueueMapDrawCommands(Map map)
+        private static void QueueMapDrawCommands(Map map, bool sameAsLiveMap)
         {
             if (map == null)
                 return;
 
-            map.powerNetManager?.UpdatePowerNetsAndConnections_First();
-            map.glowGrid?.GlowGridUpdate_First();
-            PlantFallColors.SetFallShaderGlobals(map);
-            map.waterInfo?.SetTextures();
-            map.mapDrawer?.MapMeshDrawerUpdate_First();
+            // PURE-DRAW captures for the streamer's own map. The kill-switch test
+            // (2026-07-13) proved the capture pipeline corrupts the live view; the
+            // mutating per-frame updates below were the remaining mutation surface.
+            // The game ALREADY runs all of them every frame for the current map —
+            // re-running them ~10x/s under our swapped camera/map context was never
+            // necessary. Every mutation the capture doesn't perform is corruption it
+            // cannot cause. Cross-map captures (caravan viewers) still need them,
+            // because nothing else updates a non-current map's drawer state.
+            if (!sameAsLiveMap)
+            {
+                map.powerNetManager?.UpdatePowerNetsAndConnections_First();
+                map.glowGrid?.GlowGridUpdate_First();
+                PlantFallColors.SetFallShaderGlobals(map);
+                map.waterInfo?.SetTextures();
+                map.mapDrawer?.MapMeshDrawerUpdate_First();
+            }
+
             map.mapDrawer?.DrawMapMesh();
             map.dynamicDrawManager?.DrawDynamicThings();
             map.gameConditionManager?.GameConditionManagerDraw(map);
