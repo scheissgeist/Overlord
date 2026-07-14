@@ -118,7 +118,20 @@ namespace Overlord
             isConnected = true;
         }
 
-        public bool HasPawn => assignedPawn != null && !assignedPawn.Dead && !assignedPawn.Destroyed && assignedPawn.Spawned;
+        // OwnsPawn = the viewer is still assigned a living colonist, even if it's
+        // temporarily OFF-MAP (carried while downed, in a caravan, in a drop pod /
+        // transport, captured, in a cryptosleep casket). Ownership is NOT lost —
+        // only the ability to act right now is. Governs whether the reassignment /
+        // "needs a colonist" claim pop-up should fire (it must NOT while merely off-map).
+        public bool OwnsPawn => assignedPawn != null && !assignedPawn.Dead && !assignedPawn.Destroyed;
+
+        // HasPawn = OwnsPawn AND the pawn is on the map right now, i.e. the viewer can
+        // actually be shown a live map and issue commands. Live-action gate.
+        public bool HasPawn => OwnsPawn && assignedPawn.Spawned;
+
+        // True when the owned pawn exists but is temporarily off-map — control resumes
+        // automatically when it respawns. Used to show "away" instead of "lost".
+        public bool PawnAwayTemporarily => OwnsPawn && !assignedPawn.Spawned;
 
         public void ResetTacticalMapStream()
         {

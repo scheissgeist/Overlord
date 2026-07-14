@@ -26,7 +26,7 @@ namespace Overlord
             var session = vm.GetSession(username);
             if (session == null) return "Viewer not connected.";
 
-            if (session.HasPawn) return "You already control a colonist.";
+            if (session.OwnsPawn) return "You already control a colonist.";
 
             if (vm.TryAssignExistingPawnForViewer(username, out Pawn existingPawn))
             {
@@ -106,7 +106,7 @@ namespace Overlord
 
             int now = Find.TickManager.TicksGame;
             return vm.AllSessions
-                .Where(s => !s.HasPawn && s.tickets > 0 &&
+                .Where(s => !s.OwnsPawn && s.tickets > 0 &&
                             (!cooldowns.TryGetValue(s.username, out int exp) || now >= exp))
                 .ToList();
         }

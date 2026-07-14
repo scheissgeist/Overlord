@@ -50,7 +50,7 @@ namespace Overlord
         {
             if (session == null || string.IsNullOrEmpty(session.username))
                 return;
-            if (!session.isConnected || session.HasPawn)
+            if (!session.isConnected || session.OwnsPawn)
                 return;
 
             lastWaitingUsername = session.username;
@@ -95,7 +95,7 @@ namespace Overlord
                 return;
 
             var waiting = viewers.AllSessions
-                .Where(s => s != null && s.isConnected && !s.HasPawn && viewers.GetPendingClaim(s.username) == null)
+                .Where(s => s != null && s.isConnected && !s.OwnsPawn && viewers.GetPendingClaim(s.username) == null)
                 .OrderByDescending(s => string.Equals(s.username, lastWaitingUsername, System.StringComparison.OrdinalIgnoreCase))
                 .ThenBy(s => s.displayName ?? s.username ?? "")
                 .ToList();

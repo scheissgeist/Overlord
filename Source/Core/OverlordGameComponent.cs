@@ -269,8 +269,11 @@ namespace Overlord
             // Force game_info so late joiners don't stay stuck on "Host waiting".
             viewerManager.SendGameInfoNow(username);
 
-            // Alert the streamer when a connected viewer is waiting for a pawn.
-            if (session != null && session.isConnected && !session.HasPawn
+            // Alert the streamer only when the viewer genuinely OWNS no colonist.
+            // A pawn that's merely off-map (downed & carried, caravan, pod, captured,
+            // cryptosleep) is NOT lost — ownership persists and control resumes when
+            // it respawns, so the "needs a colonist" pop-up must not fire for it.
+            if (session != null && session.isConnected && !session.OwnsPawn
                 && viewerManager.GetPendingClaim(username) == null)
             {
                 ClaimAlertOverlay.NotifyWaitingViewer(session);

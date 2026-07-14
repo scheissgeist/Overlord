@@ -111,8 +111,8 @@ namespace Overlord
 
             var sessions = vm.AllSessions.ToList();
             int online        = vm.ConnectedCount;
-            int assigned      = sessions.Count(s => s != null && s.HasPawn);
-            int waiting       = sessions.Count(s => s != null && !s.HasPawn && s.isConnected);
+            int assigned      = sessions.Count(s => s != null && s.OwnsPawn);
+            int waiting       = sessions.Count(s => s != null && !s.OwnsPawn && s.isConnected);
             int openColonists = colonists.Count(p => vm.GetSessionForPawn(p) == null);
             int pendingClaims = vm.PendingClaims.Count();
             int deadCount     = ReviveManager.CountDeadColonists();
@@ -262,13 +262,17 @@ namespace Overlord
             var sessions = vm.AllSessions
                 .Where(s => s != null)
                 .OrderByDescending(s => s.isConnected)
-                .ThenByDescending(s => !s.HasPawn)
+                .ThenByDescending(s => !s.OwnsPawn)
                 .ThenBy(s => s.displayName ?? s.username ?? "")
                 .ToList();
 
+            // "waiting" = genuinely owns NO colonist. A viewer whose pawn is merely
+            // off-map (OwnsPawn true, HasPawn false — caravan/pod/downed/captured) is
+            // ACTIVE, not waiting: they keep control when the pawn returns, so they
+            // must not appear in the "needs a colonist" list.
             var claims  = sessions.Where(s => vm.GetPendingClaim(s.username) != null).ToList();
-            var waiting = sessions.Where(s => s.isConnected && !s.HasPawn && vm.GetPendingClaim(s.username) == null).ToList();
-            var active  = sessions.Where(s => s.isConnected && s.HasPawn).ToList();
+            var waiting = sessions.Where(s => s.isConnected && !s.OwnsPawn && vm.GetPendingClaim(s.username) == null).ToList();
+            var active  = sessions.Where(s => s.isConnected && s.OwnsPawn).ToList();
             var offline = sessions.Where(s => !s.isConnected).ToList();
 
             int sectionCount = (claims.Count > 0 ? 1 : 0) + (waiting.Count > 0 ? 1 : 0) + (active.Count > 0 ? 1 : 0) + (offline.Count > 0 ? 1 : 0);
@@ -318,7 +322,7 @@ namespace Overlord
             if (Widgets.ButtonInvisible(clickable))
             {
                 selectedViewer = session.username;
-                if (session.HasPawn)
+                if (session.OwnsPawn)
                     selectedPawnId = session.assignedPawn.thingIDNumber;
             }
 
@@ -340,7 +344,10 @@ namespace Overlord
                 vm.GrantTicket(session.username);
             TooltipHandler.TipRegion(plusRect, $"Grant ticket ({session.tickets}/{maxTickets})");
 
-            if (!session.HasPawn)
+            // Offer Assign ONLY when the viewer genuinely owns no colonist. An
+            // away-owner (off-map pawn) gets Jump, not Assign — they don't need
+            // reassignment; their pawn is coming back.
+            if (!session.OwnsPawn)
             {
                 var actionRect = new Rect(rightX, row.y + 34f, rightW, 22f);
                 string actionLabel = pendingClaim != null ? "Approve" : "Assign";
@@ -353,20 +360,26 @@ namespace Overlord
                         Find.WindowStack.Add(new AssignmentDialog());
                 }
             }
-            else
+            else if (session.HasPawn)
             {
                 var actionRect = new Rect(rightX, row.y + 34f, rightW, 22f);
                 if (BrassButton(actionRect, "Jump"))
                     JumpToPawn(session.assignedPawn);
                 TooltipHandler.TipRegion(actionRect, "Jump camera to this viewer's pawn");
             }
+            // else: owns a pawn but it's off-map — no action button, status says "away".
 
             // Left column: dot + name + status — all remaining width
             float textX = row.x + 8f;
             float textW = rightX - textX - 6f;
 
             var dotRect = new Rect(textX, row.y + 8f, 8f, 8f);
-            Color dotColor = session.isConnected ? (session.HasPawn ? OnlineColor : WaitingColor) : OfflineColor;
+            // green = controlling live · muted = owns but away (off-map) · amber =
+            // genuinely needs a colonist · red = offline.
+            Color dotColor = !session.isConnected ? OfflineColor
+                : session.HasPawn ? OnlineColor
+                : session.OwnsPawn ? MutedColor
+                : WaitingColor;
             Widgets.DrawBoxSolid(dotRect, dotColor);
 
             var nameRect = new Rect(dotRect.xMax + 6f, row.y + 4f, textW - 14f, 20f);
@@ -1061,6 +1074,13 @@ namespace Overlord
                 return session.isConnected
                     ? $"Controlling {session.assignedPawn.LabelShort}"
                     : $"Offline with {session.assignedPawn.LabelShort}";
+
+            // Owns a pawn that's temporarily off-map (caravan/pod/downed/captured) —
+            // not waiting for assignment; control resumes when it returns.
+            if (session.PawnAwayTemporarily)
+                return session.isConnected
+                    ? $"{session.assignedPawn.LabelShort} is away (off-map)"
+                    : $"Offline — {session.assignedPawn.LabelShort} away";
 
             return session.isConnected ? "Waiting for assignment" : "Offline session";
         }

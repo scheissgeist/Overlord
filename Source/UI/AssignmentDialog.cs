@@ -73,7 +73,7 @@ namespace Overlord
 
             var sessions = vm.AllSessions
                 .Where(s => s != null)
-                .OrderByDescending(s => s.isConnected && !s.HasPawn)
+                .OrderByDescending(s => s.isConnected && !s.OwnsPawn)
                 .ThenByDescending(s => s.isConnected)
                 .ThenBy(s => s.displayName ?? s.username ?? "")
                 .ToList();
@@ -169,6 +169,11 @@ namespace Overlord
                 {
                     status = $"Controls {session.assignedPawn.LabelShort}";
                     statusColor = new Color(0.35f, 0.9f, 0.4f);
+                }
+                else if (session.PawnAwayTemporarily)
+                {
+                    status = $"{session.assignedPawn.LabelShort} away (off-map)";
+                    statusColor = new Color(0.62f, 0.58f, 0.50f);
                 }
                 else if (session.isConnected)
                 {
