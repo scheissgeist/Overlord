@@ -57,3 +57,11 @@ docs/AI_CHANNEL.md
 
 # stray generated image at repo root — never commit to public tree
 Generated_image.png
+
+# Untracked host-UI screenshots from 2026-07-09, kept on disk but out of the tree.
+# Identical shots saved 6 min apart; nothing references either; both predate the
+# Inspector heal/cube buttons (238189c) so neither is a usable gallery asset. A
+# fresh Workshop shot belongs in docs/images/ off the CURRENT UI. Ignored so they
+# stop reading as dirty every session (three sessions re-surveyed them since 07-09).
+rimmies.png
+docs/images/overlord-workshop-gallery-ui.png
