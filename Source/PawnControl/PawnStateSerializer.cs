@@ -272,12 +272,46 @@ namespace Overlord
                 };
 
                 // Hediffs (injuries, diseases, etc.)
+                //
+                // MISSING-PART rows are filtered exactly the way RimWorld's own health
+                // tab filters them (HealthCardUtility.VisibleHediffs yields precisely
+                // GetMissingPartsCommonAncestors() for missing parts). Without this a
+                // single prosthetic bloats the viewer's health list: a bionic arm marks
+                // the natural arm AND every child part (hand, fingers, each finger) as
+                // removed — rows the game itself never shows (rettycombine report).
+                // The game's cache already excludes parts covered by a prosthetic, so
+                // no separate added-parts check is needed here. Non-missing hediffs
+                // (injuries, diseases, bionics) are still sent unfiltered.
                 var hediffs = new List<Dictionary<string, object>>();
-                if (pawn.health.hediffSet != null)
+                var hediffSet = pawn.health.hediffSet;
+                if (hediffSet != null)
                 {
-                    foreach (var hediff in pawn.health.hediffSet.hediffs)
+                    // The game's own cached list of topmost missing parts — read-only,
+                    // typically 0-2 entries, effectively free (no walk per call).
+                    List<Hediff_MissingPart> visibleMissing = null;
+                    bool missingFilterOk = false;
+                    try
+                    {
+                        visibleMissing = hediffSet.GetMissingPartsCommonAncestors();
+                        missingFilterOk = visibleMissing != null;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        // FAIL OPEN: if this ever throws, show every missing part rather
+                        // than silently hiding real amputations. Too many rows is the old
+                        // cosmetic bug; too few is a lie about the pawn's body.
+                        LogUtil.Warn($"Missing-part filter unavailable, showing all: {ex.Message}");
+                    }
+
+                    foreach (var hediff in hediffSet.hediffs)
                     {
                         if (hediff?.def == null) continue;
+
+                        // Hide child/prosthetic-covered missing parts; keep the topmost.
+                        if (missingFilterOk && hediff is Hediff_MissingPart missing
+                            && !visibleMissing.Contains(missing))
+                            continue;
+
                         var h = new Dictionary<string, object>
                         {
                             ["label"] = hediff.Label ?? hediff.def.defName,
