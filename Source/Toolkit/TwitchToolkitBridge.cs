@@ -94,7 +94,7 @@ namespace Overlord
             return msg;
         }
 
-        public static Dictionary<string, object> ExecutePurchase(string username, string purchase, int quantity, string argument, Pawn targetPawn = null)
+        public static Dictionary<string, object> ExecutePurchase(string username, string purchase, int quantity, string argument, Pawn targetPawn = null, bool equipToPawn = false)
         {
             if (!IsBridgeAvailable)
                 return Error("Twitch Toolkit is not loaded");
@@ -118,6 +118,12 @@ namespace Overlord
             string purchaseArgument = NormalizePurchaseArgument(argument);
             if (info.needsInput && string.IsNullOrEmpty(purchaseArgument))
                 return Error("That purchase needs a selection.");
+
+            // "Buy & Equip": deliver a personal item (weapon/apparel/carriable) straight
+            // to the buyer's pawn instead of a colony drop pod. Only valid for items.
+            bool routeToPawn = equipToPawn
+                && string.Equals(info.kind, "item", StringComparison.OrdinalIgnoreCase)
+                && IsPersonalItem(ResolveThingDef(info.defName));
 
             // Pawn-targeted Toolkit SKUs (healme, trait, etc.) resolve against Toolkit's
             // GameComponentPawns.pawnHistory — sync it to Overlord's assigned pawn first.
@@ -146,6 +152,13 @@ namespace Overlord
             // Check before both the stuff path and ResolvePurchase so Overlord Buy shows the block.
             if (ToolkitItemBlockedByCooldown(username))
                 return Error(DescribeToolkitCooldown(username, info));
+
+            if (routeToPawn)
+            {
+                if (targetPawn == null || targetPawn.Dead || targetPawn.Destroyed || !targetPawn.Spawned)
+                    return Error("Assign an active colonist in Overlord before Buy & Equip");
+                return ExecuteItemPurchaseToPawn(username, info, quantity, purchaseArgument, viewer, finalCost, unlimited, targetPawn);
+            }
 
             if (string.Equals(info.kind, "item", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrEmpty(purchaseArgument))
@@ -689,6 +702,82 @@ namespace Overlord
             }
         }
 
+        /// <summary>
+        /// Buy &amp; Equip: make the item (with an optional material) and deliver it onto
+        /// the buyer's pawn (equip/wear/backpack) instead of a colony drop pod. Coins
+        /// are only charged after the item is successfully placed on the pawn.
+        /// </summary>
+        private static Dictionary<string, object> ExecuteItemPurchaseToPawn(
+            string username,
+            PurchaseInfo info,
+            int quantity,
+            string stuffDefName,
+            object viewer,
+            int finalCost,
+            bool unlimited,
+            Pawn pawn)
+        {
+            ThingDef itemDef = ResolveThingDef(info.defName);
+            if (itemDef == null)
+                return Error("Toolkit item def not found: " + info.defName);
+
+            // Material is optional for Buy & Equip. If the item is made-from-stuff and a
+            // material was chosen, honor it; otherwise let ThingMaker pick a default.
+            ThingDef stuffDef = null;
+            if (itemDef.MadeFromStuff && !string.IsNullOrEmpty(stuffDefName))
+            {
+                stuffDef = ResolveThingDef(stuffDefName);
+                if (!IsAllowedStuffFor(itemDef, stuffDef))
+                    return Error("That material is not valid for " + (itemDef.label ?? info.label));
+            }
+
+            if (ReadStaticBool("TwitchToolkit.IncidentHelpers.IncidentHelper_Settings.BuyItemSettings", "mustResearchFirst", false) &&
+                !IsThingResearched(itemDef, out string researchLabel))
+            {
+                return Error($"{GenText.CapitalizeFirst(itemDef.label ?? info.label)} requires research first: {researchLabel}");
+            }
+
+            // Weapons/apparel are single items; a quantity>1 only makes sense for
+            // stackable carriables (meals/meds). Clamp equippables to one.
+            int qty = (itemDef.IsWeapon || itemDef.IsApparel) ? 1 : quantity;
+
+            try
+            {
+                Thing thing = MakeStoreThing(itemDef, stuffDef, qty);
+
+                string verb = DeliverItemToPawn(thing, pawn);
+                if (verb == null)
+                {
+                    // Delivery failed and the item could not even be dropped — do not
+                    // charge, and destroy the orphan so it doesn't leak.
+                    if (!thing.Destroyed)
+                        thing.Destroy();
+                    return Error("Could not place the item on your colonist");
+                }
+
+                if (!unlimited)
+                    InvokeInstanceMethod(viewer, "TakeViewerCoins", finalCost);
+                ApplyToolkitItemKarma(viewer, finalCost);
+                TryLogToolkitItemPurchase(username, info.sku);
+
+                string matPrefix = stuffDef != null ? (stuffDef.label ?? stuffDef.defName) + " " : "";
+                string label = GenText.CapitalizeFirst((matPrefix + (itemDef.label ?? info.label)).Trim());
+                LogUtil.Log($"Viewer {NormalizeUsername(username)} Buy&Equip: {verb} {label} on {pawn.LabelShort}");
+
+                return new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.ActionResult,
+                    ["ok"] = true,
+                    ["action"] = StateProtocol.CmdToolkitPurchase,
+                    ["message"] = $"{verb}: {label}"
+                };
+            }
+            catch (Exception ex)
+            {
+                return Error(FormatToolkitRejection(ex));
+            }
+        }
+
         private static Dictionary<string, object> PurchaseOk(string label, int quantity)
         {
             string message = quantity > 1
@@ -757,6 +846,107 @@ namespace Overlord
 
             thing.stackCount = quantity;
             return thing;
+        }
+
+        /// <summary>
+        /// True if a bought item is something a pawn could reasonably carry ON their
+        /// person: a weapon, apparel, or any non-stackable haulable (armor, gear).
+        /// Raw resources (steel/wood/silver — stackable materials) and buildings are
+        /// NOT — those belong in the colony, so "Buy &amp; Equip" is not offered for them.
+        /// </summary>
+        public static bool IsPersonalItem(ThingDef def)
+        {
+            if (def == null)
+                return false;
+            if (def.IsWeapon || def.IsApparel)
+                return true;
+            // Ingestibles (meals/drugs/meds) can go in a backpack too.
+            if (def.IsIngestible && !def.IsStuff)
+                return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Delivers a freshly-made (unspawned) item onto a pawn: equip a weapon or
+        /// wear apparel directly on the tracker (instant, no walk-to-item job), else
+        /// drop it into the pawn's backpack (inventory), else drop it near the pawn as
+        /// a last resort. Returns a short human verb ("Equipped"/"Now wearing"/
+        /// "In backpack"/"Dropped nearby") for the purchase message. Never throws in a
+        /// way that loses the item — the caller has already charged coins, so on any
+        /// failure we still place the item at the pawn's feet rather than vaporize it.
+        /// </summary>
+        private static string DeliverItemToPawn(Thing thing, Pawn pawn)
+        {
+            if (thing == null || pawn == null)
+                return null;
+
+            // Apparel -> wear directly if the pawn can (not downed/dead). Wearing via
+            // the tracker avoids the JobDefOf.Equip-on-apparel corruption class
+            // (see PawnCommandRouter.ExecuteEquip) — apparel never touches equipment.
+            if (thing is Apparel apparel)
+            {
+                if (pawn.apparel != null && !pawn.Dead && ApparelUtility.HasPartsToWear(pawn, apparel.def))
+                {
+                    try
+                    {
+                        pawn.apparel.Wear(apparel, dropReplacedApparel: true);
+                        pawn.Drawer?.renderer?.SetAllGraphicsDirty();
+                        PortraitsCache.SetDirty(pawn);
+                        return "Now wearing";
+                    }
+                    catch (Exception ex)
+                    {
+                        LogUtil.Warn("Wear-on-purchase failed, backpacking instead: " + ex.Message);
+                    }
+                }
+                return BackpackOrDrop(thing, pawn);
+            }
+
+            // Weapon -> into the equipment tracker if the pawn has no primary yet;
+            // otherwise backpack it so we never silently drop their current weapon.
+            if (thing is ThingWithComps twc && thing.def.IsWeapon && thing.def.equipmentType == EquipmentType.Primary)
+            {
+                if (pawn.equipment != null && !pawn.Dead && pawn.equipment.Primary == null)
+                {
+                    try
+                    {
+                        pawn.equipment.AddEquipment(twc);
+                        return "Equipped";
+                    }
+                    catch (Exception ex)
+                    {
+                        LogUtil.Warn("Equip-on-purchase failed, backpacking instead: " + ex.Message);
+                    }
+                }
+                return BackpackOrDrop(thing, pawn);
+            }
+
+            // Everything else personal (meals/drugs/meds, off-hand gear) -> backpack.
+            return BackpackOrDrop(thing, pawn);
+        }
+
+        private static string BackpackOrDrop(Thing thing, Pawn pawn)
+        {
+            if (pawn.inventory?.innerContainer != null)
+            {
+                try
+                {
+                    if (pawn.inventory.innerContainer.TryAdd(thing, canMergeWithExistingStacks: true))
+                        return "In backpack";
+                }
+                catch (Exception ex)
+                {
+                    LogUtil.Warn("Backpack-on-purchase failed, dropping near pawn: " + ex.Message);
+                }
+            }
+
+            // Last resort: never lose a paid item. Drop near the pawn if spawnable.
+            if (pawn.Spawned && pawn.Map != null)
+            {
+                if (GenPlace.TryPlaceThing(thing, pawn.Position, pawn.Map, ThingPlaceMode.Near))
+                    return "Dropped nearby";
+            }
+            return null;
         }
 
         private static bool IsAllowedStuffFor(ThingDef itemDef, ThingDef stuffDef)

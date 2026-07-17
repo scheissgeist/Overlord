@@ -359,9 +359,10 @@ namespace Overlord
             string purchase = JsonHelper.ExtractString(json, "purchase");
             int quantity = JsonHelper.ExtractInt(json, "quantity", 1);
             string argument = JsonHelper.ExtractString(json, "argument");
+            bool equipToPawn = JsonHelper.ExtractBool(json, "equipToPawn", false);
             var session = OverlordGameComponent.Instance?.Viewers?.GetSession(username);
             Pawn targetPawn = session != null && session.HasPawn ? session.assignedPawn : null;
-            var result = TwitchToolkitBridge.ExecutePurchase(username, purchase, quantity, argument, targetPawn);
+            var result = TwitchToolkitBridge.ExecutePurchase(username, purchase, quantity, argument, targetPawn, equipToPawn);
             // Always push a fresh wallet/store snapshot so Buy UI coins/affordability update.
             OverlordGameComponent.Instance?.SendToolkitStatePublic(username);
             if (result != null && !result.ContainsKey("action"))

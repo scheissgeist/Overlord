@@ -3503,6 +3503,12 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   color: #fff6d8;
 }
 
+.buy-actions {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+}
+
 .buy-meta button {
   min-width: 72px;
   height: 28px;
@@ -3515,6 +3521,22 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font: inherit;
   font-size: 12px;
   font-weight: 650;
+  white-space: nowrap;
+}
+
+/* Buy & Equip = "to your colonist" — a green tint distinguishes destination
+   (pawn vs colony) without adding a new accent hue to the whole view. */
+.buy-actions .buy-equip {
+  min-width: 96px;
+  border-color: rgba(122, 168, 96, 0.5);
+  background: rgba(122, 168, 96, 0.14);
+  color: #cfe6b4;
+}
+
+.buy-actions .buy-equip:hover:not(:disabled) {
+  background: rgba(122, 168, 96, 0.26);
+  border-color: rgba(160, 200, 120, 0.7);
+  color: #eaf6d8;
 }
 
 .buy-meta button:hover:not(:disabled) {

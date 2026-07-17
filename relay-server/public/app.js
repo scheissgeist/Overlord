@@ -816,7 +816,9 @@ window.OverlordDebug = {
   mapPointToCell: (clientX, clientY) => {
     const tileCell = tileMapPointToCell(clientX, clientY);
     return tileCell || liveFramePointToCell(clientX, clientY);
-  }
+  },
+  // Test hook: open a Command Center section (e.g. 'buy') without clicking chrome.
+  openCommand: (section) => { try { openCommandWindow(section); } catch (_) {} }
 };
 
 function applyCommandAvailability() {
@@ -5186,9 +5188,22 @@ function renderBuyItem(item, canBuy, state = null) {
     <div class="buy-meta">
       <span class="buy-price">${escapeHtml(priceLine)}<small> coins</small></span>
       ${qtyControls}
-      <button data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" ${disabled ? 'disabled' : ''} title="${escapeAttr(blockReason || 'Buy')}">${escapeHtml(buttonLabel)}</button>
+      <div class="buy-actions">
+        <button data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" ${disabled ? 'disabled' : ''} title="${escapeAttr(blockReason || 'Buy — drops at colony')}">${escapeHtml(buttonLabel)}</button>
+        ${isPersonalBuyItem(item) ? `<button class="buy-equip" data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" data-buy-equip="1" ${disabled ? 'disabled' : ''} title="${escapeAttr(disabled ? (blockReason || '') : 'Buy & Equip — goes to your colonist')}">${escapeHtml(disabled ? (blockReason || 'Locked') : 'Buy & Equip')}</button>` : ''}
+      </div>
     </div>
   </div>`;
+}
+
+// A "personal" item can be worn/wielded/carried by a pawn, so it can be routed
+// to the buyer's colonist via Buy & Equip. Raw materials (steel/wood — stackable
+// stuff) and buildings are colony-only, so they only get the plain Buy button.
+// Mirrors TwitchToolkitBridge.IsPersonalItem on the host.
+function isPersonalBuyItem(item) {
+  if (!item || item.kind !== 'item') return false;
+  if (item.isWeapon || item.isApparel) return true;
+  return false;
 }
 
 function formatPrice(value) {
@@ -5567,8 +5582,13 @@ function requestRespawnFromCommands() {
   send({ type: 'command', action: 'respawn', portalId: respawnPortalId });
 }
 
-function sendToolkitPurchase(sku, kind = '', quantity = null, argument = '') {
+function sendToolkitPurchase(sku, kind = '', quantity = null, argument = '', equipToPawn = false) {
   if (!sku) return;
+  if (equipToPawn && !pawnState) {
+    lastBuyFeedback = { ok: false, message: 'Assign a colonist before Buy & Equip' };
+    renderCommandCenter();
+    return;
+  }
   if (!toolkitState?.available) {
     appendLog('Twitch Toolkit is not loaded');
     lastBuyFeedback = { ok: false, message: 'Twitch Toolkit is not loaded' };
@@ -5602,13 +5622,15 @@ function sendToolkitPurchase(sku, kind = '', quantity = null, argument = '') {
     renderCommandCenter();
     return;
   }
-  markCommandSent('toolkit_purchase', detail ? `Buying ${sku}: ${detail}` : (qty > 1 ? `Buying ${qty} ${sku}` : `Buying ${sku}`));
+  const verb = equipToPawn ? 'Equipping' : 'Buying';
+  markCommandSent('toolkit_purchase', detail ? `${verb} ${sku}: ${detail}` : (qty > 1 ? `${verb} ${qty} ${sku}` : `${verb} ${sku}`));
   lastBuyFeedback = {
     ok: true,
-    message: detail ? `Buying ${item?.label || sku}: ${detail}…` : `Buying ${item?.label || sku}…`
+    message: detail ? `${verb} ${item?.label || sku}: ${detail}…` : `${verb} ${item?.label || sku}…`
   };
   const message = { type: 'command', action: 'toolkit_purchase', purchase: sku, purchaseKind: kind, quantity: qty };
   if (detail) message.argument = detail;
+  if (equipToPawn) message.equipToPawn = true;
   send(message);
   if (activeCommandMenu === 'buy' || activeCommandMenu === 'story') renderCommandCenter();
 }
@@ -5693,7 +5715,8 @@ function handleCommandCenterClick(event) {
 
   const buy = event.target.closest('[data-buy-sku]');
   if (buy) {
-    sendToolkitPurchase(buy.dataset.buySku, buy.dataset.buyKind);
+    const equipToPawn = buy.dataset.buyEquip === '1';
+    sendToolkitPurchase(buy.dataset.buySku, buy.dataset.buyKind, null, null, equipToPawn);
     return;
   }
 
