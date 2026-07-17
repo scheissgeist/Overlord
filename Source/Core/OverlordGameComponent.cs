@@ -29,6 +29,19 @@ namespace Overlord
         // "defName" or "defName|stuffDefName" -> base64 PNG (or "" = no icon, cached
         // so we don't re-attempt a def with no uiIcon every request).
         private readonly Dictionary<string, string> iconCache = new Dictionary<string, string>();
+        // Icon RENDERING (Graphics.DrawTexture + ReadPixels GPU stall + EncodeToPNG)
+        // is bounded to a few per frame via this queue — rendering a whole 60-key
+        // request inline stalled the streamer's game when several viewers opened
+        // buy menus at once. Each queued request remembers who to answer.
+        private readonly Queue<IconRequest> iconQueue = new Queue<IconRequest>();
+        private readonly HashSet<string> pendingIconKeys = new HashSet<string>();
+        private const int IconsRenderedPerFrame = 2;
+
+        private class IconRequest
+        {
+            public string username;
+            public string key;
+        }
 
         private class PortraitRequest
         {
@@ -160,6 +173,7 @@ namespace Overlord
 
             mapRenderer.Update(viewerManager);
             ProcessPortraitQueue();
+            ProcessIconQueue();
         }
 
         public override void GameComponentOnGUI()
@@ -202,6 +216,10 @@ namespace Overlord
             portraitQueue.Clear();
             pendingPortraitKeys.Clear();
             portraitCache.Clear();
+            iconQueue.Clear();
+            pendingIconKeys.Clear();
+            // iconCache is keyed by defName+stuff (not thingIDNumber), so it is
+            // stable across save loads and intentionally NOT cleared here.
             // Static per-pawn state must not leak across save loads — thingIDNumbers
             // are reused between saves.
             PawnCommandRouter.ClearAutoDraftState();
@@ -447,41 +465,90 @@ namespace Overlord
             if (string.IsNullOrEmpty(defsCsv))
                 return;
 
-            var icons = new Dictionary<string, object>();
-            int rendered = 0;
+            // Answer already-cached icons immediately (a Dictionary lookup, no
+            // render). Queue only the uncached ones — the actual GPU-stalling
+            // render happens a few per frame in ProcessIconQueue, so a burst of
+            // requests from several viewers can't hitch the streamer's game.
+            var cached = new Dictionary<string, object>();
+            int queued = 0;
             foreach (string rawKey in defsCsv.Split(','))
             {
                 string key = rawKey?.Trim();
-                if (string.IsNullOrEmpty(key) || icons.ContainsKey(key))
+                if (string.IsNullOrEmpty(key))
                     continue;
-                if (rendered >= MaxIconsPerRequest)
+                if (queued >= MaxIconsPerRequest)
                     break;
 
-                if (!iconCache.TryGetValue(key, out string b64))
+                if (iconCache.TryGetValue(key, out string b64))
                 {
-                    string[] parts = key.Split('|');
+                    if (!string.IsNullOrEmpty(b64) && !cached.ContainsKey(key))
+                        cached[key] = b64;
+                    continue;
+                }
+
+                string pendKey = username + ":" + key;
+                if (pendingIconKeys.Add(pendKey))
+                {
+                    iconQueue.Enqueue(new IconRequest { username = username, key = key });
+                    queued++;
+                }
+            }
+
+            if (cached.Count > 0)
+                SendToViewer(username, new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.ItemIcons,
+                    ["icons"] = cached
+                });
+        }
+
+        // Render a bounded number of queued icons per frame (each is a GPU ReadPixels
+        // stall). Groups the frame's finished icons per viewer into one message.
+        private void ProcessIconQueue()
+        {
+            if (iconQueue.Count == 0)
+                return;
+
+            Dictionary<string, Dictionary<string, object>> perViewer = null;
+            int rendered = 0;
+            while (iconQueue.Count > 0 && rendered < IconsRenderedPerFrame)
+            {
+                var req = iconQueue.Dequeue();
+                pendingIconKeys.Remove(req.username + ":" + req.key);
+
+                if (!iconCache.TryGetValue(req.key, out string b64))
+                {
+                    string[] parts = req.key.Split('|');
                     ThingDef def = DefDatabase<ThingDef>.GetNamedSilentFail(parts[0]);
                     ThingDef stuff = parts.Length > 1 && !string.IsNullOrEmpty(parts[1])
                         ? DefDatabase<ThingDef>.GetNamedSilentFail(parts[1])
                         : null;
-                    // Cache "" for a def with no icon so we don't re-render it forever.
                     b64 = IconRenderer.GetIconBase64(def, stuff) ?? "";
-                    iconCache[key] = b64;
+                    iconCache[req.key] = b64;
                     rendered++;
                 }
 
-                if (!string.IsNullOrEmpty(b64))
-                    icons[key] = b64;
+                if (string.IsNullOrEmpty(b64))
+                    continue;
+
+                if (perViewer == null)
+                    perViewer = new Dictionary<string, Dictionary<string, object>>();
+                if (!perViewer.TryGetValue(req.username, out var icons))
+                {
+                    icons = new Dictionary<string, object>();
+                    perViewer[req.username] = icons;
+                }
+                icons[req.key] = b64;
             }
 
-            if (icons.Count == 0)
+            if (perViewer == null)
                 return;
-
-            SendToViewer(username, new Dictionary<string, object>
-            {
-                ["type"] = StateProtocol.ItemIcons,
-                ["icons"] = icons
-            });
+            foreach (var pair in perViewer)
+                SendToViewer(pair.Key, new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.ItemIcons,
+                    ["icons"] = pair.Value
+                });
         }
 
         private void HandleChat(string json)
