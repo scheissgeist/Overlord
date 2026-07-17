@@ -1006,7 +1006,7 @@ wss.on('connection', (ws, req) => {
         resolveSession(sToken);
         const text = raw.toString('utf8');
         const msg  = JSON.parse(text);
-        const allowedViewerTypes = new Set(['command', 'request_state', 'state_resync_request', 'request_armory', 'map_transport', 'chat', 'request_colonist_list']);
+        const allowedViewerTypes = new Set(['command', 'request_state', 'state_resync_request', 'request_armory', 'request_icons', 'map_transport', 'chat', 'request_colonist_list']);
         if (!allowedViewerTypes.has(msg.type)) {
           console.warn(`[relay] Rejected viewer message type from ${login}: ${msg.type}`);
           recordOps('viewer_message_rejected', { username: login, type: msg.type });

@@ -25,6 +25,7 @@ namespace Overlord
         public const string HostCapabilities = "host_capabilities";
         public const string ToolkitState = "toolkit_state";
         public const string ArmoryState = "armory_state";
+        public const string ItemIcons = "item_icons";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";
@@ -32,6 +33,7 @@ namespace Overlord
         public const string RequestState = "request_state";
         public const string StateResyncRequest = "state_resync_request";
         public const string RequestArmory = "request_armory";
+        public const string RequestIcons = "request_icons";
 
         // --- Relay coordination ---
         public const string HostConnected = "host_connected";

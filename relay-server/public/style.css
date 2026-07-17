@@ -3509,6 +3509,30 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   justify-items: end;
 }
 
+/* Item thumbnails (buy / gear / inventory). image-rendering:pixelated keeps
+   RimWorld's low-res sprites crisp instead of blurring them. */
+.item-icon,
+.buy-icon,
+.gear-icon {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  vertical-align: middle;
+  object-fit: contain;
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
+
+.buy-icon { margin-right: 6px; }
+
+.item-icon-empty,
+.buy-icon-empty,
+.gear-icon-empty {
+  background: rgba(232, 212, 168, 0.06);
+  border: 1px solid rgba(232, 212, 168, 0.08);
+  border-radius: 2px;
+}
+
 .buy-meta button {
   min-width: 72px;
   height: 28px;

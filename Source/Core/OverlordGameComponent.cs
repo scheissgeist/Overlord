@@ -25,6 +25,11 @@ namespace Overlord
         private readonly Dictionary<int, string> portraitCache = new Dictionary<int, string>();
         private float nextPortraitTime;
 
+        // Item icons are static per (def, stuff) — cache permanently, no invalidation.
+        // "defName" or "defName|stuffDefName" -> base64 PNG (or "" = no icon, cached
+        // so we don't re-attempt a def with no uiIcon every request).
+        private readonly Dictionary<string, string> iconCache = new Dictionary<string, string>();
+
         private class PortraitRequest
         {
             public string username;
@@ -226,6 +231,7 @@ namespace Overlord
                         HandleRequestState(json);
                         break;
                     case StateProtocol.RequestArmory:  HandleRequestArmory(json); break;
+                    case StateProtocol.RequestIcons:   HandleRequestIcons(json); break;
                     case StateProtocol.Assign:         if (IsAdminMessage(json)) HandleAssign(json);       break;
                     case StateProtocol.Unassign:       if (IsAdminMessage(json)) HandleUnassign(json);     break;
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
@@ -423,6 +429,59 @@ namespace Overlord
                     JsonHelper.ExtractInt(json, "pageSize", 3));
             }
             SendToViewer(username, response);
+        }
+
+        // Client requests item icons on demand (never pushed). "defs" is a
+        // comma-separated list of keys: "defName" or "defName|stuffDefName".
+        // Icons are static, so once cached they cost nothing. Capped per request
+        // so a malformed client can't force a huge render batch on the main thread.
+        private const int MaxIconsPerRequest = 60;
+
+        private void HandleRequestIcons(string json)
+        {
+            string username = JsonHelper.ExtractLastString(json, "username");
+            if (string.IsNullOrEmpty(username))
+                return;
+
+            string defsCsv = JsonHelper.ExtractString(json, "defs");
+            if (string.IsNullOrEmpty(defsCsv))
+                return;
+
+            var icons = new Dictionary<string, object>();
+            int rendered = 0;
+            foreach (string rawKey in defsCsv.Split(','))
+            {
+                string key = rawKey?.Trim();
+                if (string.IsNullOrEmpty(key) || icons.ContainsKey(key))
+                    continue;
+                if (rendered >= MaxIconsPerRequest)
+                    break;
+
+                if (!iconCache.TryGetValue(key, out string b64))
+                {
+                    string[] parts = key.Split('|');
+                    ThingDef def = DefDatabase<ThingDef>.GetNamedSilentFail(parts[0]);
+                    ThingDef stuff = parts.Length > 1 && !string.IsNullOrEmpty(parts[1])
+                        ? DefDatabase<ThingDef>.GetNamedSilentFail(parts[1])
+                        : null;
+                    // Cache "" for a def with no icon so we don't re-render it forever.
+                    b64 = IconRenderer.GetIconBase64(def, stuff) ?? "";
+                    iconCache[key] = b64;
+                    rendered++;
+                }
+
+                if (!string.IsNullOrEmpty(b64))
+                    icons[key] = b64;
+            }
+
+            if (icons.Count == 0)
+                return;
+
+            SendToViewer(username, new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.ItemIcons,
+                ["icons"] = icons
+            });
         }
 
         private void HandleChat(string json)

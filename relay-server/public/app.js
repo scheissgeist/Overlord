@@ -1796,6 +1796,7 @@ function handleMessage(msg) {
     case 'relay_capabilities': handleRelayCapabilities(msg); break;
     case 'toolkit_state':    handleToolkitState(msg);    break;
     case 'armory_state':     handleArmoryState(msg);     break;
+    case 'item_icons':       handleItemIcons(msg);       break;
     case 'host_connected':
       const forceHostResync = hasSeenHostConnection;
       hasSeenHostConnection = true;
@@ -2167,6 +2168,68 @@ function handlePawnPortrait(msg) {
   if (!msg.data) return;
   applyPawnPortrait(msg.data);
   if (!appearancePreviewData) renderCommandCenterFromState();
+}
+
+// ── Item icons (on-demand, cached permanently — icons are static per def+stuff) ──
+const itemIconCache = new Map();     // key -> base64 png ('' = known no-icon)
+const itemIconRequested = new Set(); // keys already asked for (in-flight or done)
+let itemIconRequestTimer = null;
+let itemIconRequestBatch = new Set();
+
+// Build the icon key the host expects: "defName" or "defName|stuffDefName".
+function iconKey(defName, stuffDefName) {
+  if (!defName) return '';
+  return stuffDefName ? `${defName}|${stuffDefName}` : String(defName);
+}
+
+// Queue an icon key for fetch; debounced so a panel render asking for 20 icons
+// sends ONE request. No-ops for keys already cached or already requested.
+function ensureItemIcon(defName, stuffDefName) {
+  const key = iconKey(defName, stuffDefName);
+  if (!key || itemIconCache.has(key) || itemIconRequested.has(key)) return;
+  itemIconRequestBatch.add(key);
+  if (itemIconRequestTimer) return;
+  itemIconRequestTimer = setTimeout(flushItemIconRequests, 120);
+}
+
+function flushItemIconRequests() {
+  itemIconRequestTimer = null;
+  const keys = Array.from(itemIconRequestBatch).filter(k => !itemIconRequested.has(k));
+  itemIconRequestBatch = new Set();
+  if (!keys.length) return;
+  keys.forEach(k => itemIconRequested.add(k));
+  // Cap per request mirrors the host (MaxIconsPerRequest); chunk if larger.
+  for (let i = 0; i < keys.length; i += 60) {
+    send({ type: 'request_icons', defs: keys.slice(i, i + 60).join(',') });
+  }
+}
+
+function handleItemIcons(msg) {
+  const icons = msg && msg.icons;
+  if (!icons || typeof icons !== 'object') return;
+  let any = false;
+  for (const key of Object.keys(icons)) {
+    itemIconCache.set(key, String(icons[key] || ''));
+    any = true;
+  }
+  if (any) {
+    // Icons arrived — force affected panels to repaint with real thumbnails.
+    invalidatePanel('gear');
+    if (activeCommandMenu === 'buy') renderCommandCenter();
+    renderCommandCenterFromState();
+  }
+}
+
+// Returns an <img> tag if the icon is cached and non-empty, else a placeholder
+// slot (and triggers a fetch). `cls` lets callers size it per surface.
+function itemIconHtml(defName, stuffDefName, cls = 'item-icon') {
+  const key = iconKey(defName, stuffDefName);
+  if (!key) return '';
+  const cached = itemIconCache.get(key);
+  if (cached) return `<img class="${cls}" src="data:image/png;base64,${cached}" alt="" loading="lazy">`;
+  if (cached === '') return `<span class="${cls} ${cls}-empty" aria-hidden="true"></span>`; // known no-icon
+  ensureItemIcon(defName, stuffDefName);
+  return `<span class="${cls} ${cls}-empty" aria-hidden="true"></span>`; // pending
 }
 
 function renderNeeds(needs) {
@@ -5177,9 +5240,10 @@ function renderBuyItem(item, canBuy, state = null) {
       <button data-buy-qty-step="1" data-buy-qty-sku="${escapeAttr(sku)}" ${buyState.quantity >= 100 ? 'disabled' : ''}>+</button>
     </div>` : '';
   const argInput = buyState.needsInput ? `<input class="buy-arg-input" data-buy-arg-input="${escapeAttr(sku)}" type="text" value="${escapeAttr(buyArgumentDrafts.get(sku) || '')}" placeholder="${escapeAttr(buyState.syntax || 'Argument')}" aria-label="Argument for ${escapeAttr(item?.label || sku)}">` : '';
+  const buyIcon = item?.defName ? itemIconHtml(item.defName, selectedStuff || '', 'buy-icon') : '';
   return `<div class="buy-item${disabled ? ' disabled' : ''}">
     <div class="buy-main">
-      <strong>${escapeHtml(item?.label || sku)}</strong>
+      ${buyIcon}<strong>${escapeHtml(item?.label || sku)}</strong>
       ${item?.mustResearchFirst && item?.researched === false ? `<span class="buy-warning">${escapeHtml(item?.researchProject ? `Needs ${item.researchProject}` : 'Needs research')}</span>` : ''}
       ${buyState.needsInput && buyState.syntax ? `<span class="buy-syntax">${escapeHtml(buyState.syntax)}</span>` : ''}
       ${stuffSelector}

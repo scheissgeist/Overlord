@@ -174,6 +174,33 @@ async function main() {
     await waitFor(() => hostMessages.filter(m => m.type === 'command' && m.action === 'toolkit_purchase').length > beforeCount2, 'plain Buy toolkit_purchase');
     const buyMsg = hostMessages.filter(m => m.type === 'command' && m.action === 'toolkit_purchase').pop();
     if (buyMsg.equipToPawn) failures.push(`plain Buy wrongly set equipToPawn → ${JSON.stringify(buyMsg)}`);
+
+    // (4) Item icons: client requests icons for item defNames, and renders <img>
+    //     thumbnails once the host replies with base64 PNGs.
+    const iconReq = await waitFor(
+      () => hostMessages.find(m => m.type === 'request_icons' && typeof m.defs === 'string'),
+      'request_icons from client'
+    ).catch(() => null);
+    if (!iconReq) {
+      failures.push('client never sent request_icons for buy item defNames');
+    } else {
+      const wanted = iconReq.defs.split(',');
+      // A 1x1 transparent PNG stands in for a real rendered icon.
+      const onePx = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const iconsPayload = {};
+      wanted.forEach(k => { iconsPayload[k] = onePx; });
+      hostWs.send(JSON.stringify({ type: 'item_icons', target: VIEWER_LOGIN, icons: iconsPayload }));
+      const rendered = await waitFor(async () => {
+        const n = await page.evaluate(() => document.querySelectorAll('.buy-item img.buy-icon').length);
+        return n > 0 ? n : null;
+      }, 'buy-item icon <img> rendered').catch(() => 0);
+      if (!rendered) failures.push('buy cards did not render <img> icons after item_icons reply');
+    }
+
+    if (process.env.OVERLORD_SMOKE_SCREENSHOTS !== '0') {
+      const el2 = await page.$('.buy-shops') || await page.$('.command-window') || page;
+      await el2.screenshot({ path: path.join(OUT_DIR, 'buy-equip-icons.png') });
+    }
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (hostWs) hostWs.close();
