@@ -9,6 +9,7 @@ namespace Overlord
         public const string PawnState = "pawn_state";
         public const string PawnPortrait = "pawn_portrait";
         public const string MapFrame = "map_frame";
+        public const string MapTransport = "map_transport";
         public const string MapFull = "map_full";
         public const string MapDelta = "map_delta";
         public const string MapChunk = "map_chunk";
@@ -23,12 +24,14 @@ namespace Overlord
         public const string ActionLog = "action_log";
         public const string HostCapabilities = "host_capabilities";
         public const string ToolkitState = "toolkit_state";
+        public const string ArmoryState = "armory_state";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";
         public const string MapClick = "map_click";
         public const string RequestState = "request_state";
         public const string StateResyncRequest = "state_resync_request";
+        public const string RequestArmory = "request_armory";
 
         // --- Relay coordination ---
         public const string HostConnected = "host_connected";

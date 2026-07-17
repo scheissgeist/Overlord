@@ -13,6 +13,8 @@ Inspired by Puppeteer (Andreas Pardeike / Brrainz). New codebase for RimWorld 1.
     <loadAfter>
         <li>ludeon.rimworld</li>
         <li>brrainz.harmony</li>
+        <li>nry.toolkitcore</li>
+        <li>nry.twitchtoolkit</li>
     </loadAfter>
     <modDependencies>
         <li>

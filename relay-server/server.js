@@ -33,8 +33,15 @@ const RELAY_CAPABILITIES = Object.freeze({
   replayCache: true,
   cacheResync: true,
   replayAnnotations: true,
-  version: 1,
+  mapTransportNegotiation: true,
+  version: 2,
 });
+
+function normalizeMapTransport(value) {
+  const transport = String(value || '').trim().toLowerCase();
+  if (transport === 'jpeg' || transport === 'tile') return transport;
+  return 'auto';
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 /** @type {WebSocket|null} */
@@ -45,6 +52,78 @@ const viewers = new Map();
 const admins = new Map();
 const viewerInfo = new Map();
 const viewerReplayCache = new Map();
+
+// Context menus are expensive host work and viewers only care about the latest
+// right-click. Allow one request in flight per viewer and keep at most one newer
+// target, paced by wall clock so a paused game cannot create retry storms.
+const CONTEXT_MENU_MIN_INTERVAL_MS = 150;
+const CONTEXT_MENU_RESPONSE_TIMEOUT_MS = 2000;
+const contextMenuRequests = new Map();
+
+function clearContextMenuRequest(login) {
+  const state = contextMenuRequests.get(login);
+  if (state) {
+    clearTimeout(state.sendTimer);
+    clearTimeout(state.responseTimer);
+  }
+  contextMenuRequests.delete(login);
+}
+
+function dispatchContextMenuRequest(login, msg, state) {
+  const delay = Math.max(0, CONTEXT_MENU_MIN_INTERVAL_MS - (Date.now() - state.lastSentAt));
+  if (delay > 0) {
+    state.queued = msg;
+    if (!state.sendTimer) {
+      state.sendTimer = setTimeout(() => {
+        state.sendTimer = null;
+        const latest = state.queued;
+        state.queued = null;
+        if (latest && !state.inFlight) dispatchContextMenuRequest(login, latest, state);
+      }, delay);
+    }
+    return;
+  }
+
+  state.inFlight = true;
+  state.lastSentAt = Date.now();
+  sendToHost(msg);
+  clearTimeout(state.responseTimer);
+  state.responseTimer = setTimeout(() => {
+    state.responseTimer = null;
+    state.inFlight = false;
+    recordOps('context_menu_timeout', { username: login });
+    flushQueuedContextMenuRequest(login, state);
+  }, CONTEXT_MENU_RESPONSE_TIMEOUT_MS);
+}
+
+function queueContextMenuRequest(login, msg) {
+  let state = contextMenuRequests.get(login);
+  if (!state) {
+    state = { inFlight: false, queued: null, lastSentAt: 0, sendTimer: null, responseTimer: null };
+    contextMenuRequests.set(login, state);
+  }
+  if (state.inFlight || state.sendTimer) {
+    state.queued = msg;
+    recordOps('context_menu_coalesced', { username: login });
+    return;
+  }
+  dispatchContextMenuRequest(login, msg, state);
+}
+
+function flushQueuedContextMenuRequest(login, state) {
+  const latest = state.queued;
+  state.queued = null;
+  if (latest) dispatchContextMenuRequest(login, latest, state);
+}
+
+function completeContextMenuRequest(login) {
+  const state = contextMenuRequests.get(login);
+  if (!state || !state.inFlight) return;
+  clearTimeout(state.responseTimer);
+  state.responseTimer = null;
+  state.inFlight = false;
+  flushQueuedContextMenuRequest(login, state);
+}
 
 // ─── Per-viewer outbound batch queue ─────────────────────────────────────────
 // Messages targeted to a specific viewer are queued for up to BATCH_FLUSH_MS
@@ -360,6 +439,10 @@ function getViewerCache(login) {
 
 function cacheHostTextMessage(msg, text) {
   if (!msg || typeof text !== 'string') return;
+
+  if (msg.type === 'map_transport' && msg.target) {
+    clearViewerMapReplayCache(String(msg.target), 'map_transport_selected');
+  }
 
   if (msg.type === 'host_capabilities' && msg.tacticalMap === false) {
     if (msg.target) clearViewerMapReplayCache(String(msg.target), 'tactical_map_disabled');
@@ -774,6 +857,7 @@ wss.on('connection', (ws, req) => {
   const secret  = url.searchParams.get('secret');
   const sToken  = url.searchParams.get('session');
   const clientBuild = String(url.searchParams.get('build') || '').slice(0, 80);
+  const mapTransport = normalizeMapTransport(url.searchParams.get('mapTransport'));
 
   // ── Host ──────────────────────────────────────────────────────────────────
   if (role === 'host') {
@@ -804,6 +888,7 @@ wss.on('connection', (ws, req) => {
         type: 'viewer_joined',
         username: viewer.login,
         displayName: viewer.displayName || viewer.login,
+        mapTransport: viewer.mapTransport,
       }), { type: 'viewer_joined', target: 'host' });
     }
 
@@ -823,6 +908,9 @@ wss.on('connection', (ws, req) => {
 
         if (msg.target) {
           const login = msg.target;
+          if (msg.type === 'context_menu' || (msg.type === 'action_result' && msg.action === 'context_menu')) {
+            completeContextMenuRequest(login);
+          }
           // Kick/ban must arrive immediately and close the socket — bypass batch queue
           if (msg.type === 'viewer_kick' || msg.type === 'banned') {
             const dest = viewers.get(login);
@@ -858,6 +946,7 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
       if (hostSocket === ws) {
         hostSocket = null;
+        for (const login of contextMenuRequests.keys()) clearContextMenuRequest(login);
         console.log('[relay] Host disconnected');
         recordOps('host_disconnected');
         const notice = JSON.stringify({ type: 'host_disconnected' });
@@ -892,12 +981,13 @@ wss.on('connection', (ws, req) => {
     if (prev && prev.readyState === WebSocket.OPEN) {
       prev.close(4005, 'Reconnected from another tab');
     }
+    clearContextMenuRequest(login);
 
     viewers.set(login, ws);
-    viewerInfo.set(login, { login, displayName: displayName || login, connectedAt: Date.now(), clientBuild });
+    viewerInfo.set(login, { login, displayName: displayName || login, connectedAt: Date.now(), clientBuild, mapTransport });
     console.log(`[relay] Viewer joined: ${displayName} (${login})`);
     recordOps('viewer_joined', { username: login, displayName, clientBuild });
-    sendToHost({ type: 'viewer_joined', username: login, displayName });
+    sendToHost({ type: 'viewer_joined', username: login, displayName, mapTransport });
     broadcastToAdmins({ type: 'viewer_update', action: 'joined', login, displayName });
     suggestClientReload(ws, login, clientBuild);
     sendWs(ws, JSON.stringify(RELAY_CAPABILITIES), { type: 'relay_capabilities', target: login });
@@ -916,7 +1006,7 @@ wss.on('connection', (ws, req) => {
         resolveSession(sToken);
         const text = raw.toString('utf8');
         const msg  = JSON.parse(text);
-        const allowedViewerTypes = new Set(['command', 'request_state', 'state_resync_request', 'chat', 'request_colonist_list']);
+        const allowedViewerTypes = new Set(['command', 'request_state', 'state_resync_request', 'request_armory', 'map_transport', 'chat', 'request_colonist_list']);
         if (!allowedViewerTypes.has(msg.type)) {
           console.warn(`[relay] Rejected viewer message type from ${login}: ${msg.type}`);
           recordOps('viewer_message_rejected', { username: login, type: msg.type });
@@ -929,6 +1019,16 @@ wss.on('connection', (ws, req) => {
         if (msg.type === 'state_resync_request' && replayCachedState(login, msg)) {
           return;
         }
+        if (msg.type === 'map_transport') {
+          msg.transport = normalizeMapTransport(msg.transport);
+          const info = viewerInfo.get(login);
+          if (info) info.mapTransport = msg.transport;
+          if (msg.transport === 'jpeg') clearViewerMapReplayCache(login, 'viewer_selected_jpeg');
+        }
+        if (msg.type === 'command' && msg.action === 'context_menu') {
+          queueContextMenuRequest(login, msg);
+          return;
+        }
         sendToHost(msg);
       } catch (e) {
         console.error(`[relay] Bad viewer message from ${login}:`, e.message);
@@ -939,6 +1039,7 @@ wss.on('connection', (ws, req) => {
       if (viewers.get(login) === ws) {
         viewers.delete(login);
         viewerInfo.delete(login);
+        clearContextMenuRequest(login);
         console.log(`[relay] Viewer left: ${login}`);
         recordOps('viewer_left', { username: login });
         sendToHost({ type: 'viewer_left', username: login });
@@ -1030,6 +1131,7 @@ function getViewerList() {
       connected: ws.readyState === WebSocket.OPEN,
       connectedAt: info.connectedAt || 0,
       clientBuild: info.clientBuild || '',
+      mapTransport: info.mapTransport || 'auto',
     });
   }
   list.sort((a, b) => a.login.localeCompare(b.login));

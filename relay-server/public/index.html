@@ -152,7 +152,7 @@
             <button class="tab" data-tab="skills">Skills</button>
             <button class="tab" data-tab="gear">Gear</button>
             <button class="tab" data-tab="social">Social</button>
-            <button class="tab" data-tab="events">Events</button>
+            <button class="tab hidden" data-tab="events">Events</button>
             <button class="tab" data-tab="log">Log</button>
             <button class="tab" data-tab="chat">Chat</button>
           </div>
@@ -165,7 +165,16 @@
               <div id="skills-list"></div>
             </div>
             <div id="tab-health" class="tab-pane">
-              <div id="bio-summary" class="bio-summary"></div>
+              <div id="health-profile" class="health-profile">
+                <div class="health-profile-portrait" aria-label="Pawn portrait">
+                  <svg id="health-portrait-placeholder" viewBox="0 0 32 44" aria-hidden="true">
+                    <circle cx="16" cy="12" r="6" fill="#5a4630"/>
+                    <ellipse cx="16" cy="36" rx="11" ry="12" fill="#5a4630"/>
+                  </svg>
+                  <img id="health-pawn-portrait" src="" alt="Pawn portrait">
+                </div>
+                <div id="bio-summary" class="bio-summary"></div>
+              </div>
               <div id="traits-list" class="health-traits"></div>
               <div id="health-list" class="health-section"></div>
               <div id="capacities-list" class="health-section"></div>

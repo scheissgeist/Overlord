@@ -202,7 +202,7 @@ namespace Overlord
                     pendingClaims.Remove(claim.username);
                 pawnToViewer[pawn.thingIDNumber] = username;
                 session.lastStateHash = 0;
-                TwitchToolkitBridge.TrySyncViewerPawn(username, pawn, out _);
+                TwitchToolkitBridge.QueueViewerPawnSync(username, pawn);
                 SendPermissions(username);
                 SendTacticalMapSnapshot(username);
                 SendResourceReadout(username, force: true);
@@ -252,7 +252,7 @@ namespace Overlord
 
             LogUtil.Log($"Assigned {pawn.LabelShort} to viewer {username}");
             ActionLog.Append(ActionLogKind.Assignment, username, "assign", $"Assigned to {pawn.LabelShort}", pawn.thingIDNumber);
-            TwitchToolkitBridge.TrySyncViewerPawn(username, pawn, out _);
+            TwitchToolkitBridge.QueueViewerPawnSync(username, pawn);
             SendPermissions(username);
 
             SendTacticalMapSnapshot(username);
@@ -319,6 +319,8 @@ namespace Overlord
 
             var comp = OverlordGameComponent.Instance;
             var session = GetSession(username);
+            if (session?.UsesTacticalMapTransport != true)
+                return false;
             var pawn = session?.assignedPawn;
             var map = pawn?.Map;
             if (comp == null || pawn == null || pawn.Dead || pawn.Destroyed || map == null)
@@ -454,7 +456,7 @@ namespace Overlord
                 session.assignedPawn = null;
                 session.lastStateHash = 0;
                 session.ResetTacticalMapStream();
-                TwitchToolkitBridge.ClearViewerPawn(username);
+                TwitchToolkitBridge.QueueClearViewerPawn(username);
             }
         }
 
@@ -763,7 +765,7 @@ namespace Overlord
                 }
 
                 // Send tile map delta (pawn/building positions)
-                if (OverlordMod.Settings?.allowViewerTacticalMap == true && pawn.Map != null)
+                if (session.UsesTacticalMapTransport && pawn.Map != null)
                 {
                     SendTacticalMapDelta(session, pawn, comp);
                 }

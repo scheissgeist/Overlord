@@ -65,3 +65,6 @@ Generated_image.png
 # stop reading as dirty every session (three sessions re-surveyed them since 07-09).
 rimmies.png
 docs/images/overlord-workshop-gallery-ui.png
+
+# Local browser verification artifacts.
+output/playwright/

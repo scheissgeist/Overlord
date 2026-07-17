@@ -49,8 +49,6 @@ namespace Overlord
             if (map == null)
                 return ops;
 
-            CollectGroundItems(ops, map, centerX, centerZ, radiusX, radiusZ, texW, texH);
-
             float hp = pawn.health?.summaryHealth?.SummaryHealthPercent ?? 1f;
             Color pawnColor = hp > 0.5f ? Color.green : (hp > 0.25f ? Color.yellow : Color.red);
             if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, pawn.DrawPos.x, pawn.DrawPos.z, out int cx, out int cy))
@@ -66,16 +64,6 @@ namespace Overlord
             {
                 if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, enemy.DrawPos.x, enemy.DrawPos.z, out int px, out int py))
                     ops.Add(new DrawOp { kind = KindDot, px = px, py = py, size = 3, color = Color.red });
-            }
-
-            var friendlies = map.mapPawns.FreeColonists
-                .Where(p => p != pawn && p.Spawned && !p.Dead)
-                .Take(20);
-
-            foreach (var friendly in friendlies)
-            {
-                if (TryWorldToPixel(texW, texH, centerX, centerZ, radiusX, radiusZ, friendly.DrawPos.x, friendly.DrawPos.z, out int px, out int py))
-                    ops.Add(new DrawOp { kind = KindDot, px = px, py = py, size = 3, color = Color.cyan });
             }
 
             return ops;

@@ -745,6 +745,11 @@ namespace Overlord
                 return ErrorResult($"Cannot take gear from {holder.LabelShort ?? "another colonist"}");
             }
 
+            if (!ArmoryCatalog.ValidateEquipTarget(pawn, thing, out string validationError))
+                return ErrorResult(validationError);
+            if (!ArmoryCatalog.TryClaimEquipTarget(pawn, thing, out string claimError))
+                return ErrorResult(claimError);
+
             // JobDefOf.Equip is the WEAPON job — it puts the item into the pawn's
             // equipment tracker. Using it for apparel stuffed hats into the weapon
             // tracker: they piled up unworn ("collecting hats") and corrupted the
@@ -758,7 +763,11 @@ namespace Overlord
             else
                 return ErrorResult($"{thing.LabelShort ?? "Item"} cannot be equipped");
 
-            pawn.jobs.TryTakeOrderedJob(job);
+            if (!pawn.jobs.TryTakeOrderedJob(job))
+            {
+                ArmoryCatalog.ReleaseEquipClaim(pawn, thing);
+                return ErrorResult($"Could not order {thing.LabelShort ?? "item"}");
+            }
             return SuccessResult($"{(thing is Apparel ? "Wearing" : "Equipping")} {thing.LabelShort ?? "item"}");
         }
 
@@ -1400,6 +1409,10 @@ namespace Overlord
                 case StateProtocol.CmdCameraZoom:
                 case StateProtocol.CmdToolkitRefresh:
                 case StateProtocol.CmdPreviewAppearance:
+                case StateProtocol.CmdSetSchedule:
+                // The relay already wall-clock paces and coalesces menu requests.
+                // Game-tick throttling here made menus appear broken while paused.
+                case StateProtocol.CmdContextMenu:
                     return false;
                 default:
                     return true;

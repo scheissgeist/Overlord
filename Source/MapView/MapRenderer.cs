@@ -362,7 +362,7 @@ namespace Overlord
                 return;
 
             var activeSessions = viewers.AllSessions
-                .Where(s => s != null && s.isConnected && s.HasPawn && s.assignedPawn.Map != null && s.assignedPawn.Spawned)
+                .Where(s => s != null && s.isConnected && s.HasPawn && s.UsesJpegMapTransport && s.assignedPawn.Map != null && s.assignedPawn.Spawned)
                 .ToList();
 
             if (activeSessions.Count == 0)
@@ -371,12 +371,6 @@ namespace Overlord
                 // lobby-only audiences, e.g. stream start) can never stack with
                 // group renders in the same frame.
                 MaybeRenderSpectatorFrame(viewers);
-                return;
-            }
-
-            if (OverlordMod.Settings?.allowViewerTacticalMap == true &&
-                OverlordMod.Settings?.mirrorHostCameraToViewers != true)
-            {
                 return;
             }
 
@@ -462,12 +456,10 @@ namespace Overlord
             // path (one map render, GPU crops). On the sync fallback each member costs
             // a ReadPixels stall + main-thread encode, so grouping would smuggle the
             // exact multi-encode frame spike the budget cap exists to prevent.
-            // Grouping re-enabled 2026-07-09 (late): the Blit crops that decoded
-            // upside-down on D3D are replaced by CPU row-crops from a single union
-            // readback, which preserve the union buffer's row order — orientation is
-            // identical to the (production-soaked) solo path by construction. Also
-            // one readback per GROUP now, not per member. Async path only.
-            bool groupingAllowed = asyncSupported && !asyncPipelineBroken;
+            // Live reports confirm grouped union crops can still invert frames on D3D;
+            // that also reverses the browser's Z-axis movement target. Keep every
+            // viewer on the proven solo capture path until orientation is regression-tested.
+            bool groupingAllowed = false;
             var groups = groupingAllowed
                 ? GroupCompatibleViews(dueParams)
                 : dueParams.Select(p => new List<ViewerFrameParams> { p }).ToList();
@@ -1212,7 +1204,7 @@ namespace Overlord
                         }
 
                         MapOverlayPainter.RasterizeToBuffer(pixels, crop.width, crop.height, topDown, crop.ops);
-                        if (topDown)
+                        if (!topDown)
                             MapOverlayPainter.FlipRowsInPlace(pixels, crop.width, crop.height);
 
                         DumpFrameProbe(pixels, crop.width, crop.height, crop.metadata);
@@ -1363,10 +1355,10 @@ namespace Overlord
                 try
                 {
                     MapOverlayPainter.RasterizeToBuffer(pixels, width, height, topDown, ops);
-                    // Unity's image encoders consume Texture2D raw-data convention
-                    // (row 0 = BOTTOM). D3D readbacks arrive top-down and must be
-                    // flipped; GL readbacks are already bottom-up.
-                    if (topDown)
+                    // EncodeArrayToJPG consumes image rows top-down. D3D readbacks
+                    // already use that layout; GL readbacks are bottom-up and must be
+                    // normalized before encoding.
+                    if (!topDown)
                         MapOverlayPainter.FlipRowsInPlace(pixels, width, height);
 
                     DumpFrameProbe(pixels, width, height, metadata);

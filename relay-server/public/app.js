@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260709-buy-polish-v1';
+const UI_BUILD = '20260715-map-transport-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -21,6 +21,7 @@ const MAP_BRIGHTNESS_KEY = 'overlord_map_brightness';
 const RESOURCE_READOUT_COLLAPSED_KEY = 'overlord_resource_readout_collapsed';
 const WORK_LOADOUTS_KEY = 'overlord_work_loadouts_v1';
 const FORCE_JPEG_RENDERER = new URLSearchParams(location.search).get('renderer') === 'jpeg';
+const PREFERRED_MAP_TRANSPORT = FORCE_JPEG_RENDERER ? 'jpeg' : 'tile';
 const LIVE_FRAME_MIN_ZOOM = 0.45;
 const LIVE_FRAME_MAX_ZOOM = 5;
 const MAP_BRIGHTNESS_MIN = 0.8;
@@ -45,19 +46,26 @@ let identity = null; // { sessionToken, login, displayName }
 let pawnState = null;
 let hostCapabilities = null;
 let relayCapabilities = null;
+let negotiatedMapTransport = null;
 let viewerPermissions = null;
 let toolkitState = null;
 let colonyResources = null;
 let resourceReadoutCollapsed = loadResourceReadoutCollapsed();
 let relayOnline = false;
 let hostOnline = false;
+let hasSeenHostConnection = false;
 let lastHostStatusAt = 0;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let connectionSeq = 0;
+let lastFreshSnapshotAt = 0;
+let lastFreshSnapshotSeq = 0;
 let pendingMove = false;
 let targetMode = null;
 let lastContextMenuPoint = null;
+let contextMenuRequestInFlight = false;
+let queuedContextMenuRequest = null;
+let contextMenuRequestTimer = null;
 let liveFrameMeta = null;
 let liveFrameDrawRect = null;
 let liveFrameImage = null;
@@ -98,8 +106,21 @@ let appearancePreviewLabel = '';
 let currentPortraitData = '';
 let activeGearSlot = 'weapon';
 let gearSortMode = 'distance';
+let gearNearbyPage = 0;
+let gearSourceMode = 'nearby';
+let armoryState = null;
+let armoryLoading = false;
+let armorySearch = '';
+let armoryPage = 0;
+let armoryRequestId = 0;
+let armorySearchTimer = null;
+let inventoryPage = 0;
 let activeSocialTargetId = null;
 let socialSortMode = 'alpha';
+let socialPage = 0;
+let thoughtPage = 0;
+let viewerTickets = null;
+let activeVote = false;
 let selectedScheduleHour = 8;
 let activeBuyShop = 'all';
 let buySearchQuery = '';
@@ -111,6 +132,7 @@ const buyStuffSelections = new Map();
 const buyArgumentDrafts = new Map();
 const storyPurchaseSelections = new Map();
 const COMMAND_FEEDBACK_CLEAR_MS = 2200;
+const ARMORY_PAGE_SIZE = 3;
 const MAP_RESYNC_THROTTLE_MS = 1500;
 const clientDiagnostics = [];
 const CLIENT_DIAGNOSTIC_LIMIT = 300;
@@ -304,7 +326,8 @@ const COMMAND_ALIAS_GROUPS = [
 // Must stay aligned with TwitchToolkitBridge.PawnTargetedSkus (+ category "pawn").
 const PAWN_TARGETED_SKUS = new Set([
   'healme', 'fullheal', 'reviveme', 'rescueme', 'imstuck', 'fixmypawn',
-  'trait', 'removetrait', 'settraits', 'levelskill', 'passionshuffle', 'genderswap'
+  'trait', 'removetrait', 'settraits', 'levelskill', 'passionshuffle', 'genderswap',
+  'repairgear'
 ]);
 
 const BUY_SHOP_ORDER = ['medical', 'food', 'weapons', 'apparel', 'buildables', 'events', 'pawn', 'items', 'other'];
@@ -401,6 +424,10 @@ const GEAR_SLOT_DEFS = [
   { key: 'weapon', label: 'Weapon' },
   { key: 'other', label: 'Other' }
 ];
+const GEAR_NEARBY_PAGE_SIZE = 3;
+const INVENTORY_PAGE_SIZE = 3;
+const SOCIAL_PAGE_SIZE = 4;
+const THOUGHT_PAGE_SIZE = 4;
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
 function showScreen(name) {
@@ -509,6 +536,15 @@ function getDrawerLabel(tab) {
 function setActiveTab(tab, options = {}) {
   activeTab = tab;
 
+  // The Toolkit catalog is very large. Fetch it only for surfaces that use it,
+  // rather than making every viewer download it during connection and resync.
+  if (tab === 'gear' && !toolkitState) {
+    requestToolkitState();
+  }
+  if (tab === 'gear' && gearSourceMode === 'armory' && !armoryLoading) {
+    requestArmory();
+  }
+
   document.querySelectorAll('.tab').forEach(button => {
     button.classList.toggle('active', button.dataset.tab === tab);
   });
@@ -523,6 +559,17 @@ function setActiveTab(tab, options = {}) {
 
   if (drawerLabel) {
     drawerLabel.textContent = getDrawerLabel(tab);
+  }
+}
+
+function syncEventsTabAvailability() {
+  const tab = document.querySelector('.tab[data-tab="events"]');
+  const pane = $('tab-events');
+  const visible = hostCapabilities?.events === true || activeVote;
+  tab?.classList.toggle('hidden', !visible);
+  pane?.setAttribute('aria-hidden', visible ? 'false' : 'true');
+  if (!visible && activeTab === 'events') {
+    setActiveTab('log', { expand: false });
   }
 }
 
@@ -756,6 +803,10 @@ window.OverlordDebug = {
       entityEpoch: entityStreamEpoch,
       seq: entityStreamSeq,
       lastResyncAt: entityStreamLastResyncAt
+    },
+    mapTransport: {
+      preferred: PREFERRED_MAP_TRANSPORT,
+      selected: negotiatedMapTransport
     },
     forceJpegRenderer: FORCE_JPEG_RENDERER,
     liveFrameMeta,
@@ -1134,7 +1185,6 @@ function startLobbyRefresh() {
       return;
     }
     send({ type: 'request_colonist_list' });
-    send({ type: 'request_state' });
     lobbyRefreshTimer = setTimeout(tick, 2500);
   };
   tick();
@@ -1149,12 +1199,32 @@ function resetPortrait() {
   currentPortraitData = '';
   appearancePreviewData = '';
   appearancePreviewLabel = '';
-  pawnPortrait.removeAttribute('src');
-  pawnPortrait.style.display = 'none';
-  const placeholder = $('pawn-portrait-placeholder');
-  if (placeholder) placeholder.style.display = '';
-  const cmdPortrait = $('command-portrait-img');
-  if (cmdPortrait) cmdPortrait.removeAttribute('src');
+  ['pawn-portrait', 'health-pawn-portrait', 'command-portrait-img'].forEach(id => {
+    const image = $(id);
+    if (!image) return;
+    image.removeAttribute('src');
+    image.style.display = 'none';
+  });
+  ['pawn-portrait-placeholder', 'health-portrait-placeholder', 'command-portrait-placeholder'].forEach(id => {
+    const placeholder = $(id);
+    if (placeholder) placeholder.style.display = '';
+  });
+}
+
+function applyPawnPortrait(data) {
+  if (!data) return;
+  currentPortraitData = data;
+  const dataUrl = `data:image/png;base64,${data}`;
+  ['pawn-portrait', 'health-pawn-portrait', 'command-portrait-img'].forEach(id => {
+    const image = $(id);
+    if (!image) return;
+    image.src = dataUrl;
+    image.style.display = '';
+  });
+  ['pawn-portrait-placeholder', 'health-portrait-placeholder', 'command-portrait-placeholder'].forEach(id => {
+    const placeholder = $(id);
+    if (placeholder) placeholder.style.display = 'none';
+  });
 }
 
 function resetMapSurface() {
@@ -1188,6 +1258,16 @@ function resetAssignedState() {
   pendingMove = false;
   targetMode = null;
   pendingClaimPawnId = null;
+  gearNearbyPage = 0;
+  armoryState = null;
+  armoryLoading = false;
+  armoryPage = 0;
+  clearTimeout(armorySearchTimer);
+  armorySearchTimer = null;
+  inventoryPage = 0;
+  socialPage = 0;
+  thoughtPage = 0;
+  viewerTickets = null;
   exitMoveMode();
 
   resetMapSurface();
@@ -1468,13 +1548,15 @@ function connect() {
   const params = new URLSearchParams({
     role: 'viewer',
     session: identity.sessionToken || '',
-    build: UI_BUILD
+    build: UI_BUILD,
+    mapTransport: PREFERRED_MAP_TRANSPORT
   });
   const url = EMBEDDED_MODE ? WS_URL : `${WS_URL}?${params.toString()}`;
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
   ws = socket;
   relayCapabilities = null;
+  negotiatedMapTransport = null;
 
   socket.onopen = () => {
     if (seq !== connectionSeq) {
@@ -1492,10 +1574,12 @@ function connect() {
         username: identity.login,
         displayName: identity.displayName || identity.login
       });
+      send({ type: 'map_transport', transport: PREFERRED_MAP_TRANSPORT });
       return;
     }
 
     statusText.textContent = 'Connected';
+    send({ type: 'map_transport', transport: PREFERRED_MAP_TRANSPORT });
     if (pawnState || hasTileData || liveFrameMeta) {
       resetMapSurface();
     }
@@ -1623,10 +1707,13 @@ function relaySupportsCacheResync() {
   return relayCapabilities?.replayCache === true && relayCapabilities?.cacheResync === true;
 }
 
-function requestFreshViewerSnapshot() {
+function requestFreshViewerSnapshot(force = false) {
+  const now = Date.now();
+  if (!force && lastFreshSnapshotSeq === connectionSeq && now - lastFreshSnapshotAt < 1000) return;
+  lastFreshSnapshotSeq = connectionSeq;
+  lastFreshSnapshotAt = now;
   send({ type: 'request_colonist_list' });
   send({ type: 'request_state' });
-  requestToolkitState();
 }
 
 function requestToolkitState(force = false) {
@@ -1636,7 +1723,32 @@ function requestToolkitState(force = false) {
   send({ type: 'command', action: 'toolkit_refresh' });
 }
 
-function beginHostResync(message = 'Catching up with the colony…') {
+function requestArmory() {
+  if (!pawnState) return;
+  const blocked = getActionBlockedReason('equip');
+  if (blocked) {
+    armoryState = { ok: false, message: blocked, items: [], total: 0, page: 0, pageCount: 1 };
+    invalidatePanel('gear');
+    renderGear(pawnState);
+    return;
+  }
+
+  armoryLoading = true;
+  const requestId = ++armoryRequestId;
+  send({
+    type: 'request_armory',
+    requestId,
+    search: armorySearch,
+    slot: activeGearSlot,
+    sort: gearSortMode,
+    page: armoryPage,
+    pageSize: ARMORY_PAGE_SIZE,
+  });
+  invalidatePanel('gear');
+  renderGear(pawnState);
+}
+
+function beginHostResync(message = 'Catching up with the colony…', force = false) {
   resetAssignedState();
   showLobbyState({
     phase: 'lobby',
@@ -1644,7 +1756,7 @@ function beginHostResync(message = 'Catching up with the colony…') {
     message,
     statusHtml: '<span class="on">Connected</span>'
   });
-  requestFreshViewerSnapshot();
+  requestFreshViewerSnapshot(force);
 }
 
 // ─── Message handling ─────────────────────────────────────────────────────────
@@ -1669,6 +1781,7 @@ function handleMessage(msg) {
     case 'pawn_portrait':    handlePawnPortrait(msg);    break;
     case 'permissions':      handlePermissions(msg);      break;
     case 'map_frame':        handleMapFrame(msg);        break;
+    case 'map_transport':    handleMapTransport(msg);    break;
     case 'command_result':
     case 'action_result':    handleCommandResult(msg);   break;
     case 'pawn_died':        handlePawnDied(msg);        break;
@@ -1680,10 +1793,13 @@ function handleMessage(msg) {
     case 'host_capabilities': handleHostCapabilities(msg); break;
     case 'relay_capabilities': handleRelayCapabilities(msg); break;
     case 'toolkit_state':    handleToolkitState(msg);    break;
+    case 'armory_state':     handleArmoryState(msg);     break;
     case 'host_connected':
+      const forceHostResync = hasSeenHostConnection;
+      hasSeenHostConnection = true;
       markHostOnline('host_connected');
       statusText.textContent = 'Connected';
-      beginHostResync('The colony is live. Finding your colonist…');
+      beginHostResync('The colony is live. Finding your colonist…', forceHostResync);
       break;
     case 'context_menu':     handleContextMenu(msg);     break;
     case 'map_full':         handleMapFull(msg);         break;
@@ -2010,13 +2126,7 @@ function handlePawnState(msg) {
     : `<span style="color:var(--text-muted)">— Mood</span>`;
 
   if (s.portrait) {
-    const dataUrl = `data:image/png;base64,${s.portrait}`;
-    pawnPortrait.src = dataUrl;
-    pawnPortrait.style.display = '';
-    const ph = $('pawn-portrait-placeholder');
-    if (ph) ph.style.display = 'none';
-    const cmdPortrait = $('command-portrait-img');
-    if (cmdPortrait) cmdPortrait.src = dataUrl;
+    applyPawnPortrait(s.portrait);
   }
 
   syncCommandDeck(s);
@@ -2053,14 +2163,7 @@ function syncCommandDeck(state) {
 
 function handlePawnPortrait(msg) {
   if (!msg.data) return;
-  currentPortraitData = msg.data;
-  const dataUrl = `data:image/png;base64,${msg.data}`;
-  pawnPortrait.src = dataUrl;
-  pawnPortrait.style.display = '';
-  const ph = $('pawn-portrait-placeholder');
-  if (ph) ph.style.display = 'none';
-  const cmdPortrait = $('command-portrait-img');
-  if (cmdPortrait) cmdPortrait.src = dataUrl;
+  applyPawnPortrait(msg.data);
   if (!appearancePreviewData) renderCommandCenterFromState();
 }
 
@@ -2137,7 +2240,7 @@ function renderBioSummary(state) {
       const cls = skill.passion > 0 ? 'bio-skill-chip passion' : 'bio-skill-chip';
       return `<span class="${cls}">${escapeHtml(skill.label)} <strong>${skill.level}${passionMark}</strong></span>`;
     }).join('');
-    lines.push(`<div class="bio-line"><span class="bio-label">Good at</span></div><div class="bio-good-at">${chips}</div>`);
+    lines.push(`<div class="bio-good-at" aria-label="Strongest skills">${chips}</div>`);
   } else {
     lines.push(`<div class="bio-line"><span class="bio-label">Good at</span>No standout skills yet — open Skills for the full board.</div>`);
   }
@@ -2229,46 +2332,87 @@ function renderThoughts(thoughts) {
     }
   });
   const rows = Array.from(groups.values())
-    .sort((a, b) => Math.abs(b.totalMood) - Math.abs(a.totalMood))
-    .slice(0, 14);
-  const items = rows.map(g => {
+    .sort((a, b) => Math.abs(b.totalMood) - Math.abs(a.totalMood));
+  const pageCount = Math.max(1, Math.ceil(rows.length / THOUGHT_PAGE_SIZE));
+  thoughtPage = Math.min(thoughtPage, pageCount - 1);
+  const visibleRows = rows.slice(thoughtPage * THOUGHT_PAGE_SIZE, (thoughtPage + 1) * THOUGHT_PAGE_SIZE);
+  const items = visibleRows.map(g => {
     const cls = g.totalMood > 0 ? 'positive' : g.totalMood < 0 ? 'negative' : '';
     const sign = g.totalMood > 0 ? '+' : '';
     const count = g.count > 1 ? ` <span class="thought-count">x${g.count}</span>` : '';
     const value = g.totalMood === 0 ? '' : `${sign}${g.totalMood}`;
     return `<div class="thought-row"><span class="thought-label">${escapeHtml(g.label)}${count}</span><span class="thought-mood ${cls}">${value}</span></div>`;
   }).join('');
-  el.innerHTML = `<div class="health-section-title">Mind</div>${items}`;
+  const pager = pageCount > 1
+    ? `<span class="compact-pager"><button data-thought-page="${thoughtPage - 1}" ${thoughtPage <= 0 ? 'disabled' : ''}>Prev</button><span>${thoughtPage + 1}/${pageCount}</span><button data-thought-page="${thoughtPage + 1}" ${thoughtPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
+    : '';
+  el.innerHTML = `<div class="health-section-title"><span>Mind</span>${pager}</div>${items}`;
+  el.querySelectorAll('[data-thought-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      thoughtPage = Number(btn.dataset.thoughtPage) || 0;
+      invalidatePanel('thoughts');
+      renderThoughts(pawnState?.thoughts);
+    });
+  });
 }
 
 function renderGear(s) {
   const el = $('gear-list');
   if (!el) return;
-  // Gate on the exact inputs this panel reads: the gear data slices PLUS the two
-  // pieces of UI state that change what's shown (selected slot, sort mode). The
-  // slot-tab / sort click handlers mutate those and call renderGear again with an
-  // unchanged pawnState — so they MUST be in the key or clicking a slot would be a
-  // no-op. Missing a slice here would hide gear (the exact bug this panel had), so
-  // the key is deliberately the full set, not a subset.
+  const focusedSearch = document.activeElement?.matches?.('[data-armory-search]') === true;
+  const searchStart = focusedSearch ? document.activeElement.selectionStart : null;
+  const searchEnd = focusedSearch ? document.activeElement.selectionEnd : null;
+  const repairEntry = getArray(toolkitState?.entries)
+    .find(entry => String(entry?.sku || '').toLowerCase() === 'repairgear') || null;
   if (s && !panelChanged('gear', {
         weapon: s.weapon, apparel: s.apparel, inventory: s.inventory,
-        nearby: s.nearbyEquipment, slot: activeGearSlot, sort: gearSortMode
+        nearby: s.nearbyEquipment, slot: activeGearSlot, sort: gearSortMode,
+        source: gearSourceMode, nearbyPage: gearNearbyPage,
+        armory: armoryState, armoryLoading, armorySearch, armoryPage, repairEntry,
+        toolkitCoins: toolkitState?.coins, toolkitUnlimited: toolkitState?.unlimitedCoins,
+        toolkitAvailable: toolkitState?.available, toolkitConnected: toolkitState?.chatConnected
       })) return;
   const items = buildGearItems(s);
   const nearby = buildNearbyGearItems(s);
+  const usingArmory = gearSourceMode === 'armory';
+  const repairState = repairEntry ? getBuyItemState(repairEntry) : null;
+  const damagedEquippedCount = items.filter(item => Number.isFinite(Number(item.hp)) && Number(item.hp) < 100).length;
+  const allTrackedGearFull = items.length > 0 && items.every(item => Number.isFinite(Number(item.hp)) && Number(item.hp) >= 100);
+  let repairBlocked = '';
+  if (repairEntry && !toolkitState?.available) repairBlocked = 'Twitch Toolkit is not loaded';
+  else if (repairEntry && !toolkitState?.chatConnected) repairBlocked = 'Twitch Toolkit chat is not connected';
+  else if (repairEntry && !items.length) repairBlocked = 'No weapon or apparel is equipped';
+  else if (repairEntry && allTrackedGearFull) repairBlocked = 'All equipped gear is already at full condition';
+  else if (repairEntry && !repairState?.affordable) repairBlocked = `Requires ${formatNumber(repairState?.totalCost ?? 0)} coins`;
+  const repairButton = repairEntry
+    ? `<button class="gear-repair-button" data-gear-repair title="${escapeAttr(repairBlocked || `Repair ${damagedEquippedCount || 'all damaged'} equipped item${damagedEquippedCount === 1 ? '' : 's'}`)}" ${repairBlocked ? 'disabled' : ''}>Repair all · ${escapeHtml(formatNumber(repairState?.totalCost ?? repairEntry.cost ?? 0))} coins</button>`
+    : '';
 
   const slotItems = new Map();
   items.forEach(item => {
     if (!slotItems.has(item.slotKey)) slotItems.set(item.slotKey, item);
   });
-  const slotHasContent = GEAR_SLOT_DEFS.some(def => slotItems.has(def.key) || nearby.some(item => item.slotKey === def.key));
-  if (!slotHasContent) activeGearSlot = 'weapon';
   if (!GEAR_SLOT_DEFS.some(def => def.key === activeGearSlot)) activeGearSlot = 'weapon';
   const activeDef = GEAR_SLOT_DEFS.find(def => def.key === activeGearSlot) || GEAR_SLOT_DEFS[0];
-  const activeEquipped = items.filter(item => item.slotKey === activeGearSlot);
   const activeNearbyRaw = sortGearItems(nearby.filter(item => item.slotKey === activeGearSlot));
   const activeNearby = dedupeNearbyGear(activeNearbyRaw);
-  const totalReachable = activeNearbyRaw.length;
+  const nearbyPageCount = Math.max(1, Math.ceil(activeNearby.length / GEAR_NEARBY_PAGE_SIZE));
+  gearNearbyPage = Math.min(gearNearbyPage, nearbyPageCount - 1);
+  const visibleNearby = activeNearby.slice(
+    gearNearbyPage * GEAR_NEARBY_PAGE_SIZE,
+    (gearNearbyPage + 1) * GEAR_NEARBY_PAGE_SIZE
+  );
+  const armoryCurrent = armoryState &&
+    String(armoryState.slot || '') === activeGearSlot &&
+    String(armoryState.sort || '') === gearSortMode &&
+    String(armoryState.search || '') === armorySearch.trim();
+  const armoryItems = armoryCurrent ? buildArmoryGearItems(armoryState) : [];
+  const armoryTotal = armoryCurrent ? Math.max(0, Number(armoryState.total) || 0) : 0;
+  const armoryPageCount = armoryCurrent ? Math.max(1, Number(armoryState.pageCount) || 1) : 1;
+  const visibleOptions = usingArmory ? armoryItems : visibleNearby;
+  const sourceTotal = usingArmory ? armoryTotal : activeNearbyRaw.length;
+  const sourcePage = usingArmory ? armoryPage : gearNearbyPage;
+  const sourcePageCount = usingArmory ? armoryPageCount : nearbyPageCount;
 
   const sortLabels = {
     distance: 'Nearest',
@@ -2278,26 +2422,46 @@ function renderGear(s) {
     alpha: 'Name A–Z',
   };
 
+  const sourcePager = sourcePageCount > 1
+    ? `<span class="compact-pager"><button ${usingArmory ? 'data-gear-armory-page' : 'data-gear-nearby-page'}="${sourcePage - 1}" ${sourcePage <= 0 ? 'disabled' : ''}>Prev</button><span>${sourcePage + 1}/${sourcePageCount}</span><button ${usingArmory ? 'data-gear-armory-page' : 'data-gear-nearby-page'}="${sourcePage + 1}" ${sourcePage >= sourcePageCount - 1 ? 'disabled' : ''}>Next</button></span>`
+    : '';
+  const sourceCount = usingArmory
+    ? `${sourceTotal} stored`
+    : `${sourceTotal} nearby${activeNearby.length !== sourceTotal ? ` · ${activeNearby.length} kinds` : ''}`;
+  let sourceEmpty = usingArmory ? 'No stored items match this slot' : 'No reachable items for this slot';
+  if (usingArmory && armoryLoading) sourceEmpty = 'Loading armory…';
+  else if (usingArmory && armoryCurrent && armoryState?.ok === false) sourceEmpty = armoryState.message || 'Armory unavailable';
+
   el.innerHTML = `<div class="gear-layout">
-    <div class="gear-worn-all">
-      <div class="gear-nearby-title">Wearing now (${items.length})</div>
-      ${items.length
-        ? items.map(renderWornRow).join('')
-        : '<div class="quiet-empty slim">Nothing equipped</div>'}
+    <div class="gear-overview-head">
+      <span><strong>Equipped</strong><small>${items.length} item${items.length === 1 ? '' : 's'}</small></span>
+      ${repairButton}
     </div>
-    <div class="gear-rig" aria-label="Equipment slots">
+    <div class="gear-slot-tabs" aria-label="Equipment slots">
       ${GEAR_SLOT_DEFS.map(def => renderGearSlot(def, slotItems.get(def.key))).join('')}
     </div>
-    <div class="gear-sheet">
+    <div class="gear-equipped-sheet">
+      <div class="gear-column-title">Wearing now</div>
+      ${items.length
+        ? items.map(renderGearRow).join('')
+        : '<div class="quiet-empty slim">Nothing equipped</div>'}
+    </div>
+    <div class="gear-nearby-sheet">
       <div class="gear-sheet-head">
         <span class="gear-sheet-title">${escapeHtml(activeDef.label)}</span>
-        <span class="gear-sheet-count">${totalReachable} nearby${activeNearby.length !== totalReachable ? ` · ${activeNearby.length} kinds` : ''}</span>
+        <span class="gear-sheet-tools">
+          <span class="gear-sheet-count">${escapeHtml(sourceCount)}</span>
+        </span>
       </div>
-      ${activeEquipped.length
-        ? activeEquipped.map(renderGearRow).join('')
-        : '<div class="quiet-empty slim">Nothing equipped in this slot</div>'}
+      <div class="gear-source-line">
+        <span class="gear-source-toggle" role="group" aria-label="Equipment source">
+          <button data-gear-source="nearby" class="${usingArmory ? '' : 'active'}">Nearby</button>
+          <button data-gear-source="armory" class="${usingArmory ? 'active' : ''}">Armory</button>
+        </span>
+        ${usingArmory ? `<input data-armory-search type="search" value="${escapeAttr(armorySearch)}" placeholder="Search gear" aria-label="Search colony armory">` : ''}
+      </div>
       <div class="gear-nearby-title">
-        <span>Available nearby</span>
+        <span>${usingArmory ? 'Colony storage' : 'Nearby'} ${sourcePager}</span>
         <label class="gear-sort-dropdown">
           <span class="visually-hidden">Sort by</span>
           <select data-gear-sort-select>
@@ -2307,12 +2471,19 @@ function renderGear(s) {
           </select>
         </label>
       </div>
-      ${activeNearby.length
-        ? activeNearby.map(renderNearbyGearRow).join('')
-        : '<div class="quiet-empty slim">No reachable items for this slot</div>'}
+      ${visibleOptions.length
+        ? visibleOptions.map(renderNearbyGearRow).join('')
+        : `<div class="quiet-empty slim">${escapeHtml(sourceEmpty)}</div>`}
     </div>
   </div>`;
   bindGearButtons(el);
+  if (focusedSearch) {
+    const input = el.querySelector('[data-armory-search]');
+    input?.focus();
+    if (input && searchStart != null && searchEnd != null) {
+      input.setSelectionRange(searchStart, searchEnd);
+    }
+  }
 }
 
 // Dye: viewers recolor individual worn apparel from the host's fixed swatch
@@ -2401,6 +2572,7 @@ function buildNearbyGearItems(s) {
       const quality = item?.quality || '';
       const metaParts = [
         Number.isFinite(distance) ? `${distance} cells` : 'nearby',
+        Number.isFinite(hp) ? `${hp}% condition` : '',
         quality ? String(quality) : '',
         Number.isFinite(marketValue) && marketValue > 0 ? `${Math.round(marketValue)} silver` : ''
       ].filter(Boolean);
@@ -2416,6 +2588,37 @@ function buildNearbyGearItems(s) {
       qualityRank: Number.isFinite(qualityRank) ? qualityRank : -1,
       hp,
       blocked: equipBlocked
+    };
+  }).filter(item => item.id != null && GEAR_SLOT_DEFS.some(def => def.key === item.slotKey));
+}
+
+function buildArmoryGearItems(state) {
+  const equipBlocked = getActionBlockedReason('equip');
+  return getArray(state?.items).map(item => {
+    const label = item?.label || item?.defName || 'item';
+    const hp = clampPercent(item?.hp ?? 100);
+    const distance = Number(item?.distance);
+    const marketValue = Number(item?.marketValue ?? item?.value);
+    const qualityRank = Number(item?.qualityRank ?? -1);
+    const quality = item?.quality || '';
+    const metaParts = [
+      Number.isFinite(distance) ? `${distance} cells` : '',
+      Number.isFinite(hp) ? `${hp}% condition` : '',
+      quality ? String(quality) : '',
+      Number.isFinite(marketValue) && marketValue > 0 ? `${Math.round(marketValue)} silver` : ''
+    ].filter(Boolean);
+    return {
+      id: item?.id,
+      type: item?.type || (item?.slotKey === 'weapon' ? 'weapon' : 'apparel'),
+      slotKey: item?.slotKey || 'other',
+      slotLabel: gearSlotLabel(item?.slotKey),
+      label,
+      meta: metaParts.join(' - '),
+      distance,
+      marketValue: Number.isFinite(marketValue) ? marketValue : 0,
+      qualityRank: Number.isFinite(qualityRank) ? qualityRank : -1,
+      hp,
+      blocked: equipBlocked || (item?.available === false ? (item?.blockedReason || 'Unavailable') : '')
     };
   }).filter(item => item.id != null && GEAR_SLOT_DEFS.some(def => def.key === item.slotKey));
 }
@@ -2478,14 +2681,20 @@ function renderGearSlot(def, item) {
 function renderGearRow(item) {
   const hp = item.hp == null ? 100 : clampPercent(item.hp);
   const blocked = item.blocked || '';
+  const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
+  const dyeButton = canDye ? `<button class="item-action ghost" data-dye-toggle="${item.itemId}">Dye</button>` : '';
+  const palette = canDye ? `<div class="worn-dye-palette hidden" data-dye-palette="${item.itemId}">
+    ${hostCapabilities.dyePalette.map(c =>
+      `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}" data-dye-apply="${item.itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('')}
+  </div>` : '';
   return `<div class="gear-row equipped">
     <div class="gear-row-main">
       <span class="gear-name">${escapeHtml(item.label)}</span>
       <span class="gear-meta-text">${escapeHtml(item.meta)}</span>
     </div>
     ${item.hp == null ? '' : `<span class="condition ${conditionClass(hp)}"><span style="width:${hp}%"></span></span>`}
-    <button class="item-action ghost" data-gear-action="${escapeAttr(item.action)}" data-slot="${escapeAttr(item.slot)}" ${blocked ? 'disabled' : ''} title="${escapeAttr(blocked)}">${escapeHtml(item.button)}</button>
-  </div>`;
+    <span class="gear-row-actions">${dyeButton}<button class="item-action ghost" data-gear-action="${escapeAttr(item.action)}" data-slot="${escapeAttr(item.slot)}" ${blocked ? 'disabled' : ''} title="${escapeAttr(blocked)}">${escapeHtml(item.button)}</button></span>
+  </div>${palette}`;
 }
 
 function renderNearbyGearRow(item) {
@@ -2530,24 +2739,76 @@ function dedupeNearbyGear(items) {
 }
 
 function bindGearButtons(root) {
+  root.querySelectorAll('[data-gear-repair]').forEach(btn => {
+    btn.addEventListener('click', () => sendToolkitPurchase('repairgear', 'service'));
+  });
   root.querySelectorAll('[data-gear-sort-select]').forEach(sel => {
     sel.addEventListener('focus', () => markCommandInteraction(4000));
     sel.addEventListener('mousedown', () => markCommandInteraction(4000));
     sel.addEventListener('change', () => {
       gearSortMode = sel.value || 'distance';
-      renderGear(pawnState);
+      gearNearbyPage = 0;
+      armoryPage = 0;
+      if (gearSourceMode === 'armory') requestArmory();
+      else renderGear(pawnState);
     });
   });
   root.querySelectorAll('[data-gear-sort]').forEach(btn => {
     btn.addEventListener('click', () => {
       gearSortMode = btn.dataset.gearSort || 'distance';
-      renderGear(pawnState);
+      gearNearbyPage = 0;
+      armoryPage = 0;
+      if (gearSourceMode === 'armory') requestArmory();
+      else renderGear(pawnState);
     });
   });
   root.querySelectorAll('[data-gear-slot-select]').forEach(btn => {
     btn.addEventListener('click', () => {
       activeGearSlot = btn.dataset.gearSlotSelect || 'weapon';
+      gearNearbyPage = 0;
+      armoryPage = 0;
+      if (gearSourceMode === 'armory') requestArmory();
+      else renderGear(pawnState);
+    });
+  });
+  root.querySelectorAll('[data-gear-nearby-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      gearNearbyPage = Math.max(0, Number(btn.dataset.gearNearbyPage) || 0);
       renderGear(pawnState);
+    });
+  });
+  root.querySelectorAll('[data-gear-armory-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      armoryPage = Math.max(0, Number(btn.dataset.gearArmoryPage) || 0);
+      requestArmory();
+    });
+  });
+  root.querySelectorAll('[data-gear-source]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.gearSource === 'armory' ? 'armory' : 'nearby';
+      if (gearSourceMode === next) return;
+      gearSourceMode = next;
+      gearNearbyPage = 0;
+      armoryPage = 0;
+      if (gearSourceMode === 'armory') requestArmory();
+      else renderGear(pawnState);
+    });
+  });
+  root.querySelectorAll('[data-armory-search]').forEach(input => {
+    input.addEventListener('focus', () => markCommandInteraction(4000));
+    input.addEventListener('input', () => {
+      armorySearch = input.value;
+      armoryPage = 0;
+      clearTimeout(armorySearchTimer);
+      armorySearchTimer = setTimeout(requestArmory, 250);
+    });
+    input.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      armorySearch = input.value;
+      armoryPage = 0;
+      clearTimeout(armorySearchTimer);
+      requestArmory();
     });
   });
   root.querySelectorAll('[data-gear-action]').forEach(btn => {
@@ -2889,10 +3150,6 @@ function initTileMap() {
       appendLog(getActionBlockedReason('context_menu'));
       return;
     }
-    lastContextMenuPoint = Number.isFinite(clientX) && Number.isFinite(clientY)
-      ? { x: clientX, y: clientY }
-      : null;
-    markCommandSent('context_menu', `Checking actions near (${x}, ${z})`);
     if (typeof tileMap.markTarget === 'function') tileMap.markTarget(x, z, 'context_menu');
     const hoverTarget = typeof tileMap.getHoverTarget === 'function' ? tileMap.getHoverTarget() : null;
     const payload = { type: 'command', action: 'context_menu', x, z };
@@ -2901,7 +3158,11 @@ function initTileMap() {
       payload.targetKind = hoverTarget.kind || '';
       payload.targetLabel = hoverTarget.label || '';
     }
-    send(payload);
+    requestContextMenu(
+      payload,
+      Number.isFinite(clientX) && Number.isFinite(clientY) ? { x: clientX, y: clientY } : null,
+      `Checking actions near (${x}, ${z})`
+    );
   };
 }
 
@@ -3118,6 +3379,10 @@ function handleMapFrame(msg) {
     drawSpectateFrame(imageSrc, msg.binaryImageUrl || null);
     return;
   }
+  if (negotiatedMapTransport === 'tile') {
+    releaseLiveFrameObjectUrl(msg.binaryImageUrl || null);
+    return;
+  }
   if (!mapCtx) mapCtx = mapCanvas.getContext('2d');
   const frameStartedAt = performance.now();
   const objectUrl = msg.binaryImageUrl || null;
@@ -3317,6 +3582,7 @@ function handleCommandResult(msg) {
   statusText.textContent = text;
   appendLog(`${msg.ok === false ? 'Failed: ' : ''}${text}`);
   markCommandResult(msg.action, msg.ok !== false, text);
+  if (msg.action === 'context_menu') completeContextMenuRequest();
   if (msg.action === 'toolkit_purchase' || /purchase|toolkit|maxed|cooldown|coins/i.test(text)) {
     lastBuyFeedback = { ok: msg.ok !== false, message: text };
     if (activeCommandMenu === 'buy') renderCommandCenter();
@@ -3330,6 +3596,7 @@ function handleHostCapabilities(msg) {
   const version = msg.rimworldVersion || 'unknown';
   appendLog(`Host capabilities loaded for RimWorld ${version}`);
   syncCapabilityNotice();
+  syncEventsTabAvailability();
   scheduleServerCameraZoom(true);
   applyCommandAvailability();
   if (hostCapabilities?.resourceReadout !== true) clearResourceReadout();
@@ -3345,13 +3612,40 @@ function handleRelayCapabilities(msg) {
   logClient('relay_capabilities', {
     replayCache: relayCapabilities.replayCache === true,
     cacheResync: relayCapabilities.cacheResync === true,
+    mapTransportNegotiation: relayCapabilities.mapTransportNegotiation === true,
     version: relayCapabilities.version
+  });
+}
+
+function handleMapTransport(msg) {
+  const selected = msg?.selected === 'tile' || msg?.selected === 'jpeg' ? msg.selected : null;
+  if (!selected) return;
+  const previous = negotiatedMapTransport;
+  negotiatedMapTransport = selected;
+  if (previous && previous !== selected) resetMapSurface();
+  logClient('map_transport', {
+    preferred: PREFERRED_MAP_TRANSPORT,
+    requested: msg.requested || PREFERRED_MAP_TRANSPORT,
+    selected,
+    tileAvailable: msg.tileAvailable === true
   });
 }
 
 function handleToolkitState(msg) {
   toolkitState = msg || null;
+  invalidatePanel('gear');
+  if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
   renderCommandCenterFromState();
+}
+
+function handleArmoryState(msg) {
+  const responseId = Number(msg?.requestId ?? 0);
+  if (responseId < armoryRequestId) return;
+  armoryLoading = false;
+  armoryState = msg || null;
+  armoryPage = Math.max(0, Number(msg?.page) || 0);
+  invalidatePanel('gear');
+  if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
 }
 
 function handlePermissions(msg) {
@@ -3444,7 +3738,7 @@ function appendLog(text) {
 
 // ─── Tile map handlers ────────────────────────────────────────────────────────
 function handleMapFull(msg) {
-  if (FORCE_JPEG_RENDERER) {
+  if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') {
     hasTileData = false;
     return;
   }
@@ -3467,7 +3761,7 @@ function handleMapFull(msg) {
 }
 
 function handleMapDelta(msg) {
-  if (FORCE_JPEG_RENDERER) {
+  if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') {
     return;
   }
   if (!acceptMapDeltaEnvelope(msg)) return;
@@ -3491,7 +3785,7 @@ function handleMapDelta(msg) {
 
 // ─── Game info ────────────────────────────────────────────────────────────────
 function handleMapChunk(msg) {
-  if (FORCE_JPEG_RENDERER) {
+  if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') {
     return;
   }
   if (!acceptMapChunkEnvelope(msg)) return;
@@ -3500,7 +3794,7 @@ function handleMapChunk(msg) {
 }
 
 function handleEntityState(msg) {
-  if (FORCE_JPEG_RENDERER) {
+  if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') {
     return;
   }
   if (!acceptEntityStateEnvelope(msg)) return;
@@ -3528,6 +3822,8 @@ function markHostOnline(source = 'host') {
 function markHostOffline() {
   hostOnline = false;
   hostCapabilities = null;
+  activeVote = false;
+  syncEventsTabAvailability();
   const speedEl = $('host-speed');
   if (speedEl) {
     speedEl.textContent = 'Host offline';
@@ -3575,9 +3871,41 @@ function ctxPriorityClass(opt) {
   return '';
 }
 
+function dispatchContextMenuRequest(request) {
+  if (!request) return;
+  contextMenuRequestInFlight = true;
+  lastContextMenuPoint = request.point;
+  markCommandSent('context_menu', request.message);
+  send(request.payload);
+  clearTimeout(contextMenuRequestTimer);
+  contextMenuRequestTimer = setTimeout(completeContextMenuRequest, 2000);
+}
+
+function requestContextMenu(payload, point, message = 'Checking actions') {
+  const request = { payload, point, message };
+  if (contextMenuRequestInFlight) {
+    // Keep only the viewer's latest intent while the host builds the current menu.
+    queuedContextMenuRequest = request;
+    return;
+  }
+  dispatchContextMenuRequest(request);
+}
+
+function completeContextMenuRequest() {
+  clearTimeout(contextMenuRequestTimer);
+  contextMenuRequestTimer = null;
+  contextMenuRequestInFlight = false;
+  const next = queuedContextMenuRequest;
+  queuedContextMenuRequest = null;
+  if (next) dispatchContextMenuRequest(next);
+}
+
 function handleContextMenu(msg) {
   const el = $('context-menu');
-  if (!el || !msg.options) return;
+  if (!el || !msg.options) {
+    completeContextMenuRequest();
+    return;
+  }
 
   el.innerHTML = '';
   const targetLabel = String(msg.targetLabel || '').trim();
@@ -3645,6 +3973,7 @@ function handleContextMenu(msg) {
     };
     document.addEventListener('click', closeCtx);
   }, 100);
+  completeContextMenuRequest();
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -3776,11 +4105,20 @@ function renderSocial(s) {
     el.innerHTML = '<span style="color:var(--text-muted)">No relationships</span>';
     return;
   }
-  if (!people.some(person => String(person.id) === String(activeSocialTargetId))) {
-    activeSocialTargetId = people[0].id;
+  const pageCount = Math.max(1, Math.ceil(people.length / SOCIAL_PAGE_SIZE));
+  socialPage = Math.min(socialPage, pageCount - 1);
+  const visiblePeople = people.slice(socialPage * SOCIAL_PAGE_SIZE, (socialPage + 1) * SOCIAL_PAGE_SIZE);
+  if (!visiblePeople.some(person => String(person.id) === String(activeSocialTargetId))) {
+    activeSocialTargetId = visiblePeople[0]?.id ?? people[0].id;
   }
   const active = people.find(person => String(person.id) === String(activeSocialTargetId)) || people[0];
   const blocked = getActionBlockedReason('social_interact');
+  const opinion = Number(active.opinion ?? 0);
+  const opinionSign = opinion > 0 ? '+' : '';
+  const distance = Number(active.distance);
+  const pager = pageCount > 1
+    ? `<span class="compact-pager"><button data-social-page="${socialPage - 1}" ${socialPage <= 0 ? 'disabled' : ''}>Prev</button><span>${socialPage + 1}/${pageCount}</span><button data-social-page="${socialPage + 1}" ${socialPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
+    : '';
   el.innerHTML = `<div class="social-board">
     <div class="social-list">
       <div class="social-sort">
@@ -3788,7 +4126,7 @@ function renderSocial(s) {
         <button class="${socialSortMode === 'distance' ? 'active' : ''}" data-social-sort="distance">Near</button>
         <button class="${socialSortMode === 'opinion' ? 'active' : ''}" data-social-sort="opinion">Opinion</button>
       </div>
-      ${people.map(person => {
+      ${visiblePeople.map(person => {
         const opinion = Number(person.opinion ?? 0);
         const distance = Number(person.distance);
         const cls = opinion > 0 ? 'positive' : opinion < 0 ? 'negative' : '';
@@ -3802,16 +4140,19 @@ function renderSocial(s) {
           ].filter(Boolean).join(' - '))}</small>
         </button>`;
       }).join('')}
+      ${pager}
     </div>
     <div class="social-actions">
       <div class="social-actions-head">
         <span>${escapeHtml(active.pawn)}</span>
-        <small>${escapeHtml(active.relation || 'colonist')}</small>
+        <small>${escapeHtml(active.relation || 'colonist')} · ${opinionSign}${escapeHtml(String(opinion))}${Number.isFinite(distance) && distance > 0 ? ` · ${Math.round(distance)} cells` : ''}</small>
       </div>
-      <button data-social-interaction="KindWords" ${blocked ? 'disabled' : ''}>Compliment</button>
-      <button data-social-interaction="DeepTalk" ${blocked ? 'disabled' : ''}>Deep talk</button>
-      <button data-social-interaction="RomanceAttempt" ${blocked ? 'disabled' : ''}>Flirt</button>
-      <button data-social-interaction="Insult" ${blocked ? 'disabled' : ''}>Insult</button>
+      <div class="social-action-grid">
+        <button data-social-interaction="KindWords" ${blocked ? 'disabled' : ''}>Compliment</button>
+        <button data-social-interaction="DeepTalk" ${blocked ? 'disabled' : ''}>Deep talk</button>
+        <button data-social-interaction="RomanceAttempt" ${blocked ? 'disabled' : ''}>Flirt</button>
+        <button data-social-interaction="Insult" ${blocked ? 'disabled' : ''}>Insult</button>
+      </div>
     </div>
   </div>`;
   bindSocialButtons(el);
@@ -3863,6 +4204,15 @@ function bindSocialButtons(root) {
   root.querySelectorAll('[data-social-sort]').forEach(btn => {
     btn.addEventListener('click', () => {
       socialSortMode = btn.dataset.socialSort || 'alpha';
+      socialPage = 0;
+      activeSocialTargetId = null;
+      renderSocial(pawnState);
+    });
+  });
+  root.querySelectorAll('[data-social-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      socialPage = Math.max(0, Number(btn.dataset.socialPage) || 0);
+      activeSocialTargetId = null;
       renderSocial(pawnState);
     });
   });
@@ -3899,9 +4249,15 @@ function renderInventory(inv) {
     el.innerHTML = '<div class="quiet-empty">No carried inventory</div>';
     return;
   }
+  const pageCount = Math.max(1, Math.ceil(inv.length / INVENTORY_PAGE_SIZE));
+  inventoryPage = Math.min(inventoryPage, pageCount - 1);
+  const visibleItems = inv.slice(inventoryPage * INVENTORY_PAGE_SIZE, (inventoryPage + 1) * INVENTORY_PAGE_SIZE);
+  const pager = pageCount > 1
+    ? `<span class="compact-pager"><button data-inventory-page="${inventoryPage - 1}" ${inventoryPage <= 0 ? 'disabled' : ''}>Prev</button><span>${inventoryPage + 1}/${pageCount}</span><button data-inventory-page="${inventoryPage + 1}" ${inventoryPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
+    : '';
   el.innerHTML = `<div class="inventory-sheet">
-    <div class="intel-title">Carried</div>
-    ${inv.map(item => {
+    <div class="inventory-head"><span>Carried <small>${inv.length}</small></span>${pager}</div>
+    <div class="inventory-grid">${visibleItems.map(item => {
     const countStr = item.count > 1 ? ` x${item.count}` : '';
     const dropBlocked = getActionBlockedReason('drop_inventory');
     const hp = clampPercent(item.hp);
@@ -3917,7 +4273,7 @@ function renderInventory(inv) {
         <button class="item-action" data-inv-action="drop_inventory" data-thing-id="${escapeAttr(item.id)}" ${dropBlocked ? 'disabled' : ''} title="${escapeAttr(dropBlocked)}">Drop</button>
       </div>
     </div>`;
-  }).join('')}</div>`;
+  }).join('')}</div></div>`;
   bindInventoryButtons(el);
 }
 
@@ -3937,6 +4293,12 @@ function bindInventoryButtons(root) {
       window.sendInvAction(btn.dataset.invAction, btn.dataset.thingId);
     });
   });
+  root.querySelectorAll('[data-inventory-page]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      inventoryPage = Math.max(0, Number(btn.dataset.inventoryPage) || 0);
+      renderInventory(pawnState?.inventory);
+    });
+  });
 }
 
 // ─── Portal available ────────────────────────────────────────────────────────
@@ -3953,12 +4315,14 @@ function handlePortalAvailable(msg) {
 
 function handleTicketUpdate(msg) {
   const count = msg.tickets ?? 0;
+  viewerTickets = Number.isFinite(Number(count)) ? Number(count) : null;
   const btn = $('btn-respawn');
   if (btn) {
     btn.disabled = count <= 0;
     btn.textContent = `Respawn (${count} ticket${count !== 1 ? 's' : ''})`;
   }
   if (lobbyTickets) lobbyTickets.textContent = `${count} ticket${count !== 1 ? 's' : ''}`;
+  renderEventButtons();
   renderCommandCenter();
 }
 
@@ -4202,6 +4566,7 @@ function renderCommandMenuContent() {
       break;
     case 'story':
       commandMenuContent.innerHTML = `<div class="command-page">${renderStoryControls(pawnState)}</div>`;
+      requestToolkitState();
       break;
     case 'work':
       commandMenuContent.innerHTML = `<div class="command-page">${renderWorkControls(pawnState)}</div>`;
@@ -5612,27 +5977,37 @@ function exitMoveMode() {
 
 // ─── Event triggers ───────────────────────────────────────────────────────────
 const EVENTS = [
-  { id: 'wanderer',      label: 'Wanderer',       cost: 1 },
-  { id: 'self_tame',     label: 'Self-tame',      cost: 1 },
-  { id: 'drop_pod',      label: 'Refugee Pod',    cost: 1 },
-  { id: 'solar_flare',   label: 'Solar Flare',    cost: 1 },
-  { id: 'short_circuit', label: 'Short Circuit',  cost: 1 },
-  { id: 'raid_small',    label: 'Raid',           cost: 2 },
-  { id: 'manhunter',     label: 'Manhunters',     cost: 2 },
-  { id: 'psychic_drone', label: 'Psychic Drone',  cost: 3 },
+  { id: 'wanderer',      label: 'Wanderer joins', detail: 'A new colonist may arrive', cost: 1 },
+  { id: 'self_tame',     label: 'Animal self-tames', detail: 'A wild animal joins', cost: 1 },
+  { id: 'drop_pod',      label: 'Refugee pod', detail: 'A crash-landed refugee', cost: 1 },
+  { id: 'solar_flare',   label: 'Solar flare', detail: 'Electronics shut down', cost: 1 },
+  { id: 'short_circuit', label: 'Short circuit', detail: 'Stored power discharges', cost: 1 },
+  { id: 'raid_small',    label: 'Small raid', detail: 'A 200-point hostile raid', cost: 2 },
+  { id: 'manhunter',     label: 'Manhunter pack', detail: 'Hostile animals arrive', cost: 2 },
+  { id: 'psychic_drone', label: 'Psychic drone', detail: 'Colony-wide mood pressure', cost: 3 },
 ];
 
 function renderEventButtons() {
   const el = $('event-buttons');
   if (!el) return;
-  const blocked = getActionBlockedReason('trigger_event');
-  if (blocked) {
-    el.innerHTML = `<div class="events-blocked">${escapeHtml(blocked)}</div>`;
+  if (hostCapabilities?.events !== true) {
+    el.innerHTML = '';
+    syncEventsTabAvailability();
     return;
   }
-  el.innerHTML = EVENTS.map(ev =>
-    `<button class="evt-btn" onclick="triggerEvent('${ev.id}')">${ev.label} <span style="color:var(--text-muted)">(${ev.cost}t)</span></button>`
-  ).join('');
+  const balance = viewerTickets == null ? 'Tickets update when the host reports them' : `${viewerTickets} ticket${viewerTickets === 1 ? '' : 's'} available`;
+  el.innerHTML = `<div class="events-sheet">
+    <div class="events-head"><span>Incident tickets</span><small>${escapeHtml(balance)}</small></div>
+    <div class="events-grid">${EVENTS.map(ev => {
+      const short = viewerTickets != null && viewerTickets < ev.cost;
+      return `<button class="evt-btn" data-trigger-event="${ev.id}" ${short ? 'disabled' : ''} title="${short ? `Need ${ev.cost} tickets` : ''}">
+        <span><strong>${escapeHtml(ev.label)}</strong><small>${escapeHtml(ev.detail)}</small></span><b>${ev.cost}t</b>
+      </button>`;
+    }).join('')}</div>
+  </div>`;
+  el.querySelectorAll('[data-trigger-event]').forEach(btn => {
+    btn.addEventListener('click', () => window.triggerEvent(btn.dataset.triggerEvent));
+  });
 }
 
 renderEventButtons();
@@ -5643,6 +6018,7 @@ window.triggerEvent = function(id) {
     appendLog(blocked);
     return;
   }
+  markCommandSent('trigger_event', 'Incident requested');
   send({ type: 'command', action: 'trigger_event', eventId: id });
 };
 
@@ -5650,6 +6026,8 @@ window.triggerEvent = function(id) {
 function handleVoteUpdate(msg) {
   const el = $('vote-area');
   if (!el) return;
+  activeVote = !!msg.active;
+  syncEventsTabAvailability();
   if (!msg.active) { el.innerHTML = ''; return; }
 
   playSound('vote');
@@ -5958,17 +6336,20 @@ mapCanvas.addEventListener('contextmenu', (e) => {
   if (liveFrameMeta) {
     const cell = liveFramePointToCell(e.clientX, e.clientY);
     if (!cell) return;
-    lastContextMenuPoint = { x: e.clientX, y: e.clientY };
-    markCommandSent('context_menu', `Checking actions near (${cell.x}, ${cell.z})`);
-    send({ type: 'command', action: 'context_menu', x: cell.x, z: cell.z });
+    requestContextMenu(
+      { type: 'command', action: 'context_menu', x: cell.x, z: cell.z },
+      { x: e.clientX, y: e.clientY },
+      `Checking actions near (${cell.x}, ${cell.z})`
+    );
     return;
   }
   const rect = mapCanvas.getBoundingClientRect();
   const cx = (e.clientX - rect.left) / rect.width;
   const cy = (e.clientY - rect.top) / rect.height;
-  lastContextMenuPoint = { x: e.clientX, y: e.clientY };
-  markCommandSent('context_menu', 'Checking actions');
-  send({ type: 'command', action: 'context_menu', targetX: cx, targetY: cy });
+  requestContextMenu(
+    { type: 'command', action: 'context_menu', targetX: cx, targetY: cy },
+    { x: e.clientX, y: e.clientY }
+  );
 });
 
 

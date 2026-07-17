@@ -66,6 +66,7 @@ namespace Overlord
                 case StateProtocol.CmdSetArea:
                     return area;
                 case StateProtocol.CmdSetAppearance:
+                case StateProtocol.CmdDyeApparel:
                     return appearance;
                 case StateProtocol.CmdEquip:
                 case StateProtocol.CmdDrop:

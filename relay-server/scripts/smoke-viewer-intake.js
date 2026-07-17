@@ -1,6 +1,7 @@
 'use strict';
 
 const childProcess = require('child_process');
+const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
@@ -14,6 +15,10 @@ const WS_URL = `ws://127.0.0.1:${PORT}/ws`;
 const VIEWER_LOGIN = 'broteam';
 const VIEWER_DISPLAY = 'BroTeam';
 const PAWN_ID = 10101;
+const SCREENSHOT_DIR = process.env.OVERLORD_SMOKE_SCREENSHOTS
+  ? path.resolve(ROOT, '..', 'output', 'playwright')
+  : '';
+const SUMMARY_OUTPUT = process.env.OVERLORD_SMOKE_SUMMARY === '1';
 
 function requireMaybeGlobal(name) {
   try {
@@ -121,6 +126,7 @@ async function main() {
   const relay = startRelay();
   let browser = null;
   let hostWs = null;
+  let burstViewerWs = null;
 
   try {
     await waitFor(() => requestJson('GET', '/health').catch(() => null), 'relay health', 15000);
@@ -131,6 +137,39 @@ async function main() {
       try { hostMessages.push(JSON.parse(raw.toString('utf8'))); } catch (_) {}
     });
     await waitForWsOpen(hostWs, 'host');
+
+    const burstLogin = 'contextburst';
+    const burstSession = await requestJson('POST', '/admin/viewer-session', {
+      login: burstLogin,
+      displayName: 'Context Burst',
+      ttlMs: 60 * 1000,
+    });
+    burstViewerWs = new WebSocket(`${WS_URL}?role=viewer&session=${encodeURIComponent(burstSession.sessionToken)}&build=context-burst-smoke`);
+    await waitForWsOpen(burstViewerWs, 'context burst viewer');
+    await waitFor(() => hostMessages.find(m => m.type === 'viewer_joined' && m.username === burstLogin), 'context burst viewer_joined');
+    for (let x = 1; x <= 25; x++) {
+      burstViewerWs.send(JSON.stringify({ type: 'command', action: 'context_menu', x, z: 10 }));
+    }
+    await waitFor(() => hostMessages.find(m => m.type === 'command' && m.action === 'context_menu' && m.username === burstLogin), 'first coalesced context request');
+    await wait(250);
+    let burstRequests = hostMessages.filter(m => m.type === 'command' && m.action === 'context_menu' && m.username === burstLogin);
+    if (burstRequests.length !== 1 || Number(burstRequests[0].x) !== 1) {
+      throw new Error(`Relay did not hold a context burst to one in-flight request: ${JSON.stringify(burstRequests)}`);
+    }
+    hostWs.send(JSON.stringify({
+      type: 'action_result', target: burstLogin, action: 'context_menu', ok: false, message: 'No actions here',
+    }));
+    await waitFor(() => hostMessages.filter(m => m.type === 'command' && m.action === 'context_menu' && m.username === burstLogin).length === 2, 'latest coalesced context request');
+    await wait(250);
+    burstRequests = hostMessages.filter(m => m.type === 'command' && m.action === 'context_menu' && m.username === burstLogin);
+    if (burstRequests.length !== 2 || Number(burstRequests[1].x) !== 25) {
+      throw new Error(`Relay did not retain only the latest context target: ${JSON.stringify(burstRequests)}`);
+    }
+    hostWs.send(JSON.stringify({
+      type: 'context_menu', target: burstLogin, ok: true, x: 25, z: 10, options: [],
+    }));
+    burstViewerWs.close();
+    burstViewerWs = null;
 
     const viewerSession = await requestJson('POST', '/admin/viewer-session', {
       login: VIEWER_LOGIN,
@@ -156,8 +195,26 @@ async function main() {
     });
 
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-    await waitFor(() => hostMessages.find(m => m.type === 'viewer_joined' && m.username === VIEWER_LOGIN), 'viewer_joined');
+    const joinedMessage = await waitFor(() => hostMessages.find(m => m.type === 'viewer_joined' && m.username === VIEWER_LOGIN), 'viewer_joined');
+    if (joinedMessage.mapTransport !== 'tile') {
+      throw new Error(`Viewer join did not advertise its preferred map transport: ${JSON.stringify(joinedMessage)}`);
+    }
+    await waitFor(() => hostMessages.find(m => m.type === 'map_transport' && m.username === VIEWER_LOGIN && m.transport === 'tile'), 'map transport negotiation request');
+    hostWs.send(JSON.stringify({
+      type: 'map_transport', target: VIEWER_LOGIN, requested: 'tile', selected: 'jpeg',
+      tileAvailable: false, jpegAvailable: true,
+    }));
+    await page.waitForFunction(() => window.OverlordDebug.getState().mapTransport.selected === 'jpeg', null, { timeout: 10000 });
     await waitFor(() => hostMessages.find(m => m.type === 'request_colonist_list' && m.username === VIEWER_LOGIN), 'initial colonist list request');
+
+    // A waiting viewer may poll the small colonist list, but must not repeatedly
+    // request the full pawn snapshot or the ~450 KB Toolkit catalog.
+    await wait(2700);
+    const initialStateRequests = hostMessages.filter(m => m.type === 'request_state' && m.username === VIEWER_LOGIN);
+    const initialToolkitRequests = hostMessages.filter(m => m.type === 'command' && m.action === 'toolkit_refresh' && m.username === VIEWER_LOGIN);
+    if (initialStateRequests.length > 1 || initialToolkitRequests.length !== 0) {
+      throw new Error(`Viewer intake request storm: state=${initialStateRequests.length}, toolkit=${initialToolkitRequests.length}`);
+    }
 
     hostWs.send(JSON.stringify({
       type: 'host_capabilities',
@@ -218,11 +275,20 @@ async function main() {
         name: VIEWER_DISPLAY,
         currentJob: 'Smoke synced',
         drafted: false,
-        health: { summaryHp: 100 },
+        health: {
+          summaryHp: 82,
+          painLevel: 14,
+          hediffs: [
+            { label: 'Bruise', part: 'left arm', severity: 18 },
+            { label: 'Alcohol tolerance (small)', severity: 1 },
+          ],
+        },
         needs: { Mood: 74, Food: 75, Rest: 80, Joy: 53 },
         skills: [
-          { name: 'Cooking', label: 'cooking', level: 3, passion: 0, disabled: false },
+          { name: 'Cooking', label: 'cooking', level: 11, passion: 2, disabled: false },
           { name: 'Mining', label: 'mining', level: 3, passion: 0, disabled: false },
+          { name: 'Plants', label: 'plants', level: 9, passion: 1, disabled: false },
+          { name: 'Medical', label: 'medical', level: 8, passion: 0, disabled: false },
         ],
         capacities: [
           { label: 'moving', def: 'Moving', level: 93 },
@@ -269,10 +335,16 @@ async function main() {
           { id: 8002, label: 'Flak vest', defName: 'Apparel_FlakVest', type: 'apparel', slotKey: 'outer', hp: 68, distance: 7, marketValue: 1600, quality: 'normal', qualityRank: 2 },
           { id: 8003, label: 'Cloth tuque', defName: 'Apparel_Tuque', type: 'apparel', slotKey: 'head', hp: 94, distance: 3, marketValue: 90, quality: 'awful', qualityRank: 0 },
           { id: 8004, label: 'Synthread duster', defName: 'Apparel_Duster', type: 'apparel', slotKey: 'outer', hp: 90, distance: 12, marketValue: 1200, quality: 'masterwork', qualityRank: 5 },
+          { id: 8005, label: 'Marine helmet', defName: 'Apparel_MarineHelmet', type: 'apparel', slotKey: 'head', hp: 79, distance: 8, marketValue: 1800, quality: 'excellent', qualityRank: 4 },
+          { id: 8006, label: 'Broadwrap', defName: 'Apparel_Broadwrap', type: 'apparel', slotKey: 'head', hp: 98, distance: 11, marketValue: 120, quality: 'good', qualityRank: 3 },
+          { id: 8007, label: 'War mask', defName: 'Apparel_WarMask', type: 'apparel', slotKey: 'head', hp: 66, distance: 14, marketValue: 240, quality: 'normal', qualityRank: 2 },
         ],
         inventory: [
           { id: 7001, label: 'Simple meal', count: 1, hp: 100, ingestible: true },
           { id: 7002, label: 'Herbal medicine', count: 3, hp: 100, ingestible: false },
+          { id: 7003, label: 'Kibble', count: 14, hp: 100, ingestible: true },
+          { id: 7004, label: 'Component', count: 2, hp: 100, ingestible: false },
+          { id: 7005, label: 'Smokeleaf joint', count: 1, hp: 97, ingestible: true },
         ],
         relations: [
           { id: 20202, pawn: 'Wig', relation: 'friend' },
@@ -280,9 +352,16 @@ async function main() {
         opinions: [
           { id: 20202, pawn: 'Wig', opinion: 12, distance: 6 },
           { id: 30303, pawn: 'Soap', opinion: -3, distance: 9 },
+          { id: 40404, pawn: 'Willow', opinion: 4, distance: 18 },
+          { id: 50505, pawn: 'Xavier', opinion: -8, distance: 22 },
+          { id: 60606, pawn: 'York', opinion: 0, distance: 25 },
+          { id: 70707, pawn: 'Zed', opinion: 18, distance: 31 },
         ],
         traits: [
           { defName: 'Cannibal', label: 'Cannibal', degree: 0 },
+          { defName: 'Undergrounder', label: 'Undergrounder', degree: 0 },
+          { defName: 'Pessimist', label: 'Pessimist', degree: 0 },
+          { defName: 'SuperImmune', label: 'Super-immune', degree: 0 },
         ],
         traitOptions: [
           { defName: 'Cannibal', label: 'Cannibal', degree: 0 },
@@ -306,8 +385,22 @@ async function main() {
           ],
           genderOptions: ['Male', 'Female'],
         },
-        thoughts: [],
+        thoughts: [
+          { label: 'Extremely impressive rec room', mood: 6 },
+          { label: 'Fine meal', mood: 5 },
+          { label: 'Disturbed sleep', mood: -3 },
+          { label: 'Ate without table', mood: -3 },
+          { label: 'Soaking wet', mood: -3 },
+          { label: 'Deep talk', mood: 4 },
+          { label: 'Slighted', mood: -2 },
+          { label: 'Chitchat', mood: 1 },
+        ],
       },
+    }));
+    hostWs.send(JSON.stringify({
+      type: 'pawn_portrait',
+      target: VIEWER_LOGIN,
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
     }));
     hostWs.send(JSON.stringify({
       type: 'permissions',
@@ -326,6 +419,7 @@ async function main() {
       freeAppearanceAvailable: true,
     }));
     const toolkitEntries = [
+      { kind: 'service', category: 'pawn', sku: 'repairgear', label: 'Repair equipped gear', description: 'Fully repair equipped weapon and worn apparel.', cost: 2000, price: 2000, unitCost: 2000, affordable: true, needsInput: false, command: '!buy repairgear' },
       { kind: 'event', sku: 'healme', label: 'healme', cost: 2167, price: 2167, unitCost: 2167, affordable: true, needsInput: false, command: '!buy healme' },
       { kind: 'event', sku: 'reviveme', label: 'reviveme', cost: 2833, price: 2833, unitCost: 2833, affordable: true, needsInput: false, command: '!buy reviveme' },
       { kind: 'event', sku: 'passionshuffle', label: 'passion shuffle', cost: 1500, price: 1500, unitCost: 1500, affordable: true, needsInput: false, command: '!buy passionshuffle' },
@@ -432,44 +526,64 @@ async function main() {
       x: mapBox.x + mapBox.width * 0.66,
       y: mapBox.y + mapBox.height * 0.58,
     };
-    const expectedContextCell = await page.evaluate(point => {
-      return window.OverlordDebug.mapPointToCell(point.x, point.y);
-    }, contextPoint);
-    if (!expectedContextCell) {
-      throw new Error('Live map context point did not resolve to a cell');
+    const latestContextPoint = {
+      x: mapBox.x + mapBox.width * 0.78,
+      y: mapBox.y + mapBox.height * 0.42,
+    };
+    const expectedContextCells = await page.evaluate(points => {
+      return points.map(point => window.OverlordDebug.mapPointToCell(point.x, point.y));
+    }, [contextPoint, latestContextPoint]);
+    if (expectedContextCells.some(cell => !cell)) {
+      throw new Error('Live map context points did not resolve to cells');
     }
-    await page.evaluate(point => {
+    await page.evaluate(points => {
       const canvas = document.getElementById('map-canvas');
-      canvas.dispatchEvent(new MouseEvent('contextmenu', {
-        button: 2,
-        clientX: point.x,
-        clientY: point.y,
-        bubbles: true,
-        cancelable: true,
-      }));
-    }, contextPoint);
-    const contextCommand = await waitFor(() => hostMessages.find(m =>
-      m.type === 'command' &&
-      m.action === 'context_menu' &&
-      m.username === VIEWER_LOGIN
-    ), 'context_menu command from live map right-click');
-    if (Number(contextCommand.x) !== Number(expectedContextCell.x) || Number(contextCommand.z) !== Number(expectedContextCell.z)) {
-      throw new Error(`Context menu cell mismatch: ${JSON.stringify({ expectedContextCell, contextCommand })}`);
+      points.forEach(point => canvas.dispatchEvent(new MouseEvent('contextmenu', {
+        button: 2, clientX: point.x, clientY: point.y, bubbles: true, cancelable: true,
+      })));
+    }, [contextPoint, latestContextPoint]);
+    await waitFor(() => hostMessages.filter(m =>
+      m.type === 'command' && m.action === 'context_menu' && m.username === VIEWER_LOGIN
+    ).length === 1, 'one in-flight context_menu command from live map right-click burst');
+    await wait(250);
+    let contextCommands = hostMessages.filter(m =>
+      m.type === 'command' && m.action === 'context_menu' && m.username === VIEWER_LOGIN
+    );
+    if (contextCommands.length !== 1 || Number(contextCommands[0].x) !== Number(expectedContextCells[0].x) || Number(contextCommands[0].z) !== Number(expectedContextCells[0].z)) {
+      throw new Error(`Browser did not hold the latest context request while one was in flight: ${JSON.stringify({ expectedContextCells, contextCommands })}`);
     }
     hostWs.send(JSON.stringify({
       type: 'context_menu',
       target: VIEWER_LOGIN,
       ok: true,
+      x: expectedContextCells[0].x,
+      z: expectedContextCells[0].z,
       options: [
-        { id: 0, label: 'Prioritize hauling steel', disabled: false },
+        { id: 0, label: 'First response', disabled: false },
         { id: 1, label: 'Cannot reach reserved thing', disabled: true },
       ],
     }));
-    await page.waitForSelector('#context-menu:not(.hidden)', { timeout: 10000 });
-    const contextBox = await page.locator('#context-menu').boundingBox();
-    if (Math.abs(contextBox.x - contextPoint.x) > 80 || Math.abs(contextBox.y - contextPoint.y) > 80) {
-      throw new Error(`Context menu was not anchored near click: ${JSON.stringify({ contextBox, contextPoint })}`);
+    await waitFor(() => hostMessages.filter(m =>
+      m.type === 'command' && m.action === 'context_menu' && m.username === VIEWER_LOGIN
+    ).length === 2, 'latest browser context request after first response');
+    contextCommands = hostMessages.filter(m =>
+      m.type === 'command' && m.action === 'context_menu' && m.username === VIEWER_LOGIN
+    );
+    if (Number(contextCommands[1].x) !== Number(expectedContextCells[1].x) || Number(contextCommands[1].z) !== Number(expectedContextCells[1].z)) {
+      throw new Error(`Browser did not retain the latest context target: ${JSON.stringify({ expectedContextCells, contextCommands })}`);
     }
+    hostWs.send(JSON.stringify({
+      type: 'context_menu', target: VIEWER_LOGIN, ok: true,
+      x: expectedContextCells[1].x, z: expectedContextCells[1].z,
+      options: [{ id: 0, label: 'Latest response', disabled: false }],
+    }));
+    await page.waitForFunction(() => document.getElementById('context-menu')?.textContent.includes('Latest response'), null, { timeout: 10000 });
+    const contextBox = await page.locator('#context-menu').boundingBox();
+    if (Math.abs(contextBox.x - latestContextPoint.x) > 80 || Math.abs(contextBox.y - latestContextPoint.y) > 80) {
+      throw new Error(`Context menu was not anchored near the latest click: ${JSON.stringify({ contextBox, latestContextPoint })}`);
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.getElementById('context-menu')?.classList.contains('hidden'), null, { timeout: 10000 });
 
     await page.click('[data-tab="skills"]');
     await page.waitForSelector('.skill-board .skill-card', { timeout: 10000 });
@@ -517,17 +631,115 @@ async function main() {
       const slotLabels = Array.from(document.querySelectorAll('.gear-slot-label')).map(row => row.textContent.trim());
       const actions = Array.from(document.querySelectorAll('#gear-list [data-gear-action]')).map(row => row.textContent.trim());
       const nearby = Array.from(document.querySelectorAll('#gear-list [data-equip-thing-id]')).map(row => row.textContent.trim());
+      const equippedNames = Array.from(document.querySelectorAll('.gear-equipped-sheet .gear-name')).map(name => ({
+        text: name.textContent.trim(),
+        clientWidth: name.clientWidth,
+        scrollWidth: name.scrollWidth,
+      }));
       return {
         noHorizontalOverflow: tab.scrollWidth <= tab.clientWidth + 1,
+        tabWidth: { client: tab.clientWidth, scroll: tab.scrollWidth },
+        gearListWidth: (() => { const el = document.getElementById('gear-list'); return { client: el.clientWidth, scroll: el.scrollWidth }; })(),
+        inventoryWidth: (() => { const el = document.getElementById('inventory-list'); return { client: el.clientWidth, scroll: el.scrollWidth }; })(),
         slotLabels,
         actions,
         nearby,
+        equippedNames,
         inventoryRows: document.querySelectorAll('.inventory-row').length,
       };
     });
-    if (!gearLayout.noHorizontalOverflow || !gearLayout.slotLabels.includes('Head') || !gearLayout.actions.includes('Take off') || !gearLayout.nearby.includes('Equip')) {
+    if (!gearLayout.noHorizontalOverflow || !gearLayout.slotLabels.includes('Head') || !gearLayout.actions.includes('Take off') ||
+        !gearLayout.nearby.includes('Equip') || gearLayout.equippedNames.some(name => name.scrollWidth > name.clientWidth + 1)) {
       throw new Error(`Gear layout regression: ${JSON.stringify(gearLayout)}`);
     }
+    if (SCREENSHOT_DIR) {
+      await page.locator('#bottom-panel').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-gear-desktop.png') });
+    }
+    const eagerArmoryRequests = hostMessages.filter(m => m.type === 'request_armory' && m.username === VIEWER_LOGIN);
+    if (eagerArmoryRequests.length !== 0) {
+      throw new Error(`Armory must be on-demand, found ${eagerArmoryRequests.length} eager requests`);
+    }
+    await page.click('[data-gear-source="armory"]');
+    const armoryRequest = await waitFor(() => hostMessages.find(m =>
+      m.type === 'request_armory' &&
+      m.username === VIEWER_LOGIN &&
+      m.slot === 'head' &&
+      m.sort === 'distance' &&
+      Number(m.page) === 0 &&
+      Number(m.pageSize) === 3
+    ), 'on-demand head armory request');
+    hostWs.send(JSON.stringify({
+      type: 'armory_state',
+      target: VIEWER_LOGIN,
+      ok: true,
+      requestId: armoryRequest.requestId,
+      search: '',
+      slot: 'head',
+      sort: 'distance',
+      page: 0,
+      pageSize: 3,
+      pageCount: 1,
+      total: 2,
+      items: [
+        { id: 9001, label: 'Marine helmet', defName: 'Apparel_MarineHelmet', type: 'apparel', slotKey: 'head', hp: 86, distance: 42, marketValue: 1800, quality: 'excellent', qualityRank: 4, available: true },
+        { id: 9002, label: 'Prestige cataphract helmet', defName: 'Apparel_ArmorCataphractHelmetPrestige', type: 'apparel', slotKey: 'head', hp: 97, distance: 55, marketValue: 3200, quality: 'masterwork', qualityRank: 5, available: false, blockedReason: 'Reserved or unreachable' },
+      ],
+    }));
+    await page.waitForSelector('[data-equip-thing-id="9001"]', { timeout: 10000 });
+    const unavailableArmoryItem = page.locator('[data-equip-thing-id="9002"]');
+    if (!(await unavailableArmoryItem.isDisabled())) {
+      throw new Error('Armory did not preserve the host unavailable reason');
+    }
+    await page.fill('[data-armory-search]', 'marine');
+    const searchRequest = await waitFor(() => hostMessages.find(m =>
+      m.type === 'request_armory' &&
+      m.username === VIEWER_LOGIN &&
+      m.search === 'marine' &&
+      Number(m.requestId) > Number(armoryRequest.requestId)
+    ), 'server-side armory search request');
+    hostWs.send(JSON.stringify({
+      type: 'armory_state',
+      target: VIEWER_LOGIN,
+      ok: true,
+      requestId: searchRequest.requestId,
+      search: 'marine',
+      slot: 'head',
+      sort: 'distance',
+      page: 0,
+      pageSize: 3,
+      pageCount: 1,
+      total: 1,
+      items: [
+        { id: 9001, label: 'Marine helmet', defName: 'Apparel_MarineHelmet', type: 'apparel', slotKey: 'head', hp: 86, distance: 42, marketValue: 1800, quality: 'excellent', qualityRank: 4, available: true },
+      ],
+    }));
+    await page.waitForFunction(() => document.querySelector('[data-armory-search]')?.value === 'marine', null, { timeout: 10000 });
+    const armorySearchFocus = await page.evaluate(() => document.activeElement?.matches?.('[data-armory-search]') === true);
+    if (!armorySearchFocus) {
+      throw new Error('Armory search lost focus when host results arrived');
+    }
+    if (SCREENSHOT_DIR) {
+      await page.locator('#bottom-panel').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-armory-desktop.png') });
+    }
+    await page.click('[data-equip-thing-id="9001"]');
+    await waitFor(() => hostMessages.find(m =>
+      m.type === 'command' &&
+      m.action === 'equip' &&
+      m.username === VIEWER_LOGIN &&
+      Number(m.thingId) === 9001
+    ), 'equip command from colony armory');
+    await page.click('[data-gear-source="nearby"]');
+    const repairButtonText = await page.locator('[data-gear-repair]').innerText();
+    if (!repairButtonText.includes('2,000 coins')) {
+      throw new Error(`Gear repair price regression: ${repairButtonText}`);
+    }
+    await page.click('[data-gear-repair]');
+    await waitFor(() => hostMessages.find(m =>
+      m.type === 'command' &&
+      m.action === 'toolkit_purchase' &&
+      m.username === VIEWER_LOGIN &&
+      m.purchase === 'repairgear'
+    ), 'repairgear toolkit_purchase command from Gear tab');
     await page.click('[data-gear-slot-select="outer"]');
     let firstOuterGear = await page.locator('#gear-list [data-equip-thing-id]').first().evaluate(el => el.closest('.gear-row')?.innerText || '');
     if (!firstOuterGear.includes('Flak vest')) {
@@ -544,6 +756,7 @@ async function main() {
       throw new Error(`Gear value sort regression: ${firstOuterGear}`);
     }
     await page.click('[data-gear-slot-select="head"]');
+    await page.selectOption('[data-gear-sort-select]', 'distance');
     await page.click('[data-equip-thing-id="8003"]');
     await waitFor(() => hostMessages.find(m =>
       m.type === 'command' &&
@@ -573,6 +786,7 @@ async function main() {
       m.interaction === 'KindWords'
     ), 'social_interact command from Social tab');
 
+    await page.click('#btn-drawer-close');
     await page.click('#btn-command-menu');
     await page.waitForSelector('#command-window:not(.hidden)', { timeout: 10000 });
     await page.waitForSelector('.order-sheet .order-row', { timeout: 10000 });
@@ -592,7 +806,7 @@ async function main() {
       m.action === 'toolkit_purchase' &&
       m.username === VIEWER_LOGIN &&
       m.purchase === 'trait' &&
-      m.argument === 'Jogger'
+      m.argument === 'Jogger:0'
     ), 'trait toolkit_purchase command from Story menu');
     await page.selectOption('[data-story-purchase-select="remove-trait"]', 'Cannibal');
     await page.waitForSelector('[data-story-purchase-select="remove-trait"]', { timeout: 10000 });
@@ -602,7 +816,7 @@ async function main() {
       m.action === 'toolkit_purchase' &&
       m.username === VIEWER_LOGIN &&
       m.purchase === 'removetrait' &&
-      m.argument === 'Cannibal'
+      m.argument === 'Cannibal:0'
     ), 'remove trait toolkit_purchase command from Story menu');
     await page.click('[data-appearance-hair-step="1"]');
     await page.click('[data-appearance-gender="Female"]');
@@ -633,7 +847,7 @@ async function main() {
       m.gender === 'Female'
     ), 'set_appearance command from Story menu');
     await page.click('[data-command-section="buy"]');
-    await page.waitForSelector('.toolkit-wallet', { timeout: 10000 });
+    await page.waitForSelector('.buy-wallet-bar', { timeout: 10000 });
     await page.waitForSelector('[data-buy-sku="healme"]:not([disabled])', { timeout: 10000 });
     const buyTabs = await page.locator('.buy-shop-tab span').allTextContents();
     for (const expected of ['All', 'Medical', 'Food', 'Weapons', 'Apparel', 'Buildables', 'Pawn']) {
@@ -649,7 +863,7 @@ async function main() {
     }
     await page.click('[data-buy-shop="all"]');
     const buyText = await page.locator('.toolkit-page').innerText();
-    if (!buyText.includes('Price 2,167 coins') || !buyText.includes('Unit 900 coins') || !buyText.includes('Total 900 coins') || !buyText.includes('flak vest') || !buyText.includes('wall')) {
+    if (!buyText.includes('2,167 coins') || !buyText.includes('900 coins') || !buyText.includes('flak vest') || !buyText.includes('wall')) {
       throw new Error(`Buy price display regression: ${buyText}`);
     }
     const qtyType = await page.getAttribute('[data-buy-qty-input="medicine"]', 'type');
@@ -689,7 +903,7 @@ async function main() {
     await page.waitForFunction(() => document.activeElement?.matches('[data-buy-qty-input="medicine"]'), null, { timeout: 10000 });
     await page.fill('[data-buy-qty-input="medicine"]', '3');
     await page.locator('[data-buy-qty-input="medicine"]').press('Enter');
-    await page.waitForFunction(() => document.querySelector('[data-buy-sku="medicine"]')?.closest('.buy-item')?.innerText.includes('Total 2,700 coins'), null, { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('[data-buy-sku="medicine"]')?.closest('.buy-item')?.innerText.includes('2,700 coins'), null, { timeout: 10000 });
     await page.click('[data-buy-sku="healme"]');
     await waitFor(() => hostMessages.find(m =>
       m.type === 'command' &&
@@ -765,7 +979,198 @@ async function main() {
       m.assignment === 'Sleep'
     ), 'set_schedule command from schedule block');
 
-    const result = await page.evaluate(() => ({
+    // Visual/overflow gate at the compact browser-source dimensions reported by viewers.
+    await page.click('#btn-command-close');
+    await page.setViewportSize({ width: 735, height: 452 });
+    await page.click('#btn-drawer-open');
+    await page.waitForFunction(() => {
+      const panel = document.getElementById('bottom-panel');
+      return panel?.classList.contains('expanded') && panel.getBoundingClientRect().height > 180;
+    }, null, { timeout: 10000 });
+    const compactChrome = await page.evaluate(() => {
+      const rect = id => {
+        const box = document.getElementById(id)?.getBoundingClientRect();
+        return box ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height } : null;
+      };
+      const panel = rect('bottom-panel');
+      const inspect = rect('inspect-pane');
+      const commands = rect('cmd-bar');
+      const overlaps = (a, b) => !!a && !!b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      const topAt = box => box ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
+      const inspectTop = topAt(inspect);
+      const commandTop = topAt(commands);
+      const commandStyle = getComputedStyle(document.getElementById('cmd-bar'));
+      const portrait = document.getElementById('pawn-portrait');
+      return {
+        panel, inspect, commands,
+        inspectCovered: overlaps(panel, inspect),
+        commandsCovered: overlaps(panel, commands),
+        commandsVisible: commandStyle.opacity !== '0' && commandStyle.pointerEvents !== 'none',
+        inspectOnTop: !!inspectTop?.closest('#inspect-pane'),
+        commandsOnTop: !!commandTop?.closest('#cmd-bar'),
+        inspectTop: inspectTop ? `${inspectTop.id || ''}.${inspectTop.className || ''}` : '',
+        commandTop: commandTop ? `${commandTop.id || ''}.${commandTop.className || ''}` : '',
+        portraitVisible: !!portrait?.getAttribute('src') && getComputedStyle(portrait).display !== 'none',
+      };
+    });
+    if (compactChrome.inspectCovered || compactChrome.commandsCovered || !compactChrome.commandsVisible ||
+        !compactChrome.commandsOnTop || !compactChrome.portraitVisible) {
+      throw new Error(`Compact chrome overlap regression: ${JSON.stringify(compactChrome)}`);
+    }
+    if (SCREENSHOT_DIR) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    if (SCREENSHOT_DIR) {
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-compact-chrome.png') });
+      await page.locator('#inspect-pane').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-compact-profile.png') });
+      await page.locator('#cmd-bar').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-compact-commands.png') });
+    }
+    for (const tabName of ['health', 'gear', 'social']) {
+      await page.click(`[data-tab="${tabName}"]`);
+      await page.waitForFunction(name => document.getElementById(`tab-${name}`)?.classList.contains('active'), tabName);
+      const drawerOverflow = await page.evaluate(() => {
+        const el = document.getElementById('tab-content');
+        const pane = el.querySelector('.tab-pane.active');
+        const children = Array.from(pane?.children || []).map(child => ({ id: child.id, height: child.getBoundingClientRect().height }));
+        return { clientHeight: el.clientHeight, scrollHeight: el.scrollHeight, clientWidth: el.clientWidth, scrollWidth: el.scrollWidth, paneHeight: pane?.getBoundingClientRect().height, children };
+      });
+      if (drawerOverflow.scrollHeight > drawerOverflow.clientHeight + 1 || drawerOverflow.scrollWidth > drawerOverflow.clientWidth + 1) {
+        throw new Error(`${tabName} compact drawer overflow: ${JSON.stringify(drawerOverflow)}`);
+      }
+      if (tabName === 'health') {
+        const healthProfile = await page.evaluate(() => {
+          const traits = document.getElementById('traits-list');
+          const traitBox = traits?.getBoundingClientRect();
+          const chips = Array.from(traits?.querySelectorAll('.trait-chip') || []);
+          const portrait = document.getElementById('health-pawn-portrait');
+          return {
+            traitCount: chips.length,
+            traitsContained: !!traitBox && chips.every(chip => {
+              const box = chip.getBoundingClientRect();
+              return box.left >= traitBox.left - 1 && box.right <= traitBox.right + 1 && box.top >= traitBox.top - 1 && box.bottom <= traitBox.bottom + 1;
+            }),
+            portraitVisible: !!portrait?.getAttribute('src') && getComputedStyle(portrait).display !== 'none',
+          };
+        });
+        if (healthProfile.traitCount !== 4 || !healthProfile.traitsContained || !healthProfile.portraitVisible) {
+          throw new Error(`Health profile regression: ${JSON.stringify(healthProfile)}`);
+        }
+      }
+      if (SCREENSHOT_DIR) {
+        await page.locator('#bottom-panel').screenshot({ path: path.join(SCREENSHOT_DIR, `overlord-${tabName}-compact.png`) });
+      }
+    }
+
+    const eventsTab = page.locator('[data-tab="events"]');
+    if (await eventsTab.isVisible()) throw new Error('Events tab should be hidden when host event capability is disabled');
+    hostWs.send(JSON.stringify({
+      type: 'host_capabilities', target: VIEWER_LOGIN, rimworldVersion: '1.6.4633',
+      work: true, schedule: true, contextMenu: true, serverCameraZoom: true,
+      toolkitBridge: true, storyPurchaseArguments: true, events: true,
+    }));
+    hostWs.send(JSON.stringify({ type: 'ticket_update', target: VIEWER_LOGIN, tickets: 2 }));
+    await eventsTab.waitFor({ state: 'visible', timeout: 10000 });
+    await eventsTab.click();
+    await page.waitForSelector('.events-grid .evt-btn', { timeout: 10000 });
+    if (await page.locator('.events-grid .evt-btn').count() !== 8) throw new Error('Events sheet did not expose all eight host incidents');
+    await page.click('[data-trigger-event="wanderer"]');
+    await waitFor(() => hostMessages.find(m =>
+      m.type === 'command' && m.action === 'trigger_event' && m.username === VIEWER_LOGIN && m.eventId === 'wanderer'
+    ), 'trigger_event command from Events tab');
+    if (SCREENSHOT_DIR) {
+      await page.locator('#bottom-panel').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-events-compact.png') });
+    }
+    hostWs.send(JSON.stringify({
+      type: 'host_capabilities', target: VIEWER_LOGIN, rimworldVersion: '1.6.4633',
+      work: true, schedule: true, contextMenu: true, serverCameraZoom: true,
+      toolkitBridge: true, storyPurchaseArguments: true, events: false,
+    }));
+    await eventsTab.waitFor({ state: 'hidden', timeout: 10000 });
+
+    // Very narrow browsers use the stacked Gear layout. Vertical detail scrolling
+    // is allowed here, but the page itself, names, and core actions must remain
+    // within the viewport and clickable.
+    await page.setViewportSize({ width: 480, height: 700 });
+    await page.click('[data-tab="gear"]');
+    await page.waitForSelector('#tab-gear.active .gear-layout', { timeout: 10000 });
+    const narrowGear = await page.evaluate(() => {
+      const panel = document.getElementById('bottom-panel')?.getBoundingClientRect();
+      const tab = document.getElementById('tab-gear');
+      const names = Array.from(tab?.querySelectorAll('.gear-name') || []).map(name => ({
+        text: name.textContent.trim(),
+        clientWidth: name.clientWidth,
+        scrollWidth: name.scrollWidth,
+      }));
+      const sourceButtons = Array.from(tab?.querySelectorAll('[data-gear-source]') || []);
+      const action = tab?.querySelector('[data-equip-thing-id]');
+      const actionBox = action?.getBoundingClientRect();
+      const commands = document.getElementById('cmd-bar');
+      const commandBox = commands?.getBoundingClientRect();
+      const commandStyle = commands ? getComputedStyle(commands) : null;
+      const commandTop = commandBox
+        ? document.elementFromPoint(commandBox.left + commandBox.width / 2, commandBox.top + commandBox.height / 2)
+        : null;
+      return {
+        viewportWidth: innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        panel: panel ? { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom, width: panel.width, height: panel.height } : null,
+        tabHorizontalOverflow: !!tab && tab.scrollWidth > tab.clientWidth + 1,
+        names,
+        sourceButtons: sourceButtons.map(button => button.textContent.trim()),
+        actionVisible: !!actionBox && actionBox.width > 0 && actionBox.height > 0 &&
+          actionBox.left >= -1 && actionBox.right <= innerWidth + 1,
+        commandsVisible: !!commandStyle && commandStyle.opacity !== '0' && commandStyle.pointerEvents !== 'none',
+        commandBox: commandBox ? { left: commandBox.left, top: commandBox.top, right: commandBox.right, bottom: commandBox.bottom, width: commandBox.width, height: commandBox.height } : null,
+        commandsCovered: !!panel && !!commandBox &&
+          panel.left < commandBox.right && panel.right > commandBox.left &&
+          panel.top < commandBox.bottom && panel.bottom > commandBox.top,
+        commandsOnTop: !!commandTop?.closest('#cmd-bar'),
+      };
+    });
+    if (narrowGear.documentWidth > narrowGear.viewportWidth + 1 ||
+        narrowGear.tabHorizontalOverflow ||
+        !narrowGear.sourceButtons.includes('Nearby') ||
+        !narrowGear.sourceButtons.includes('Armory') ||
+        !narrowGear.actionVisible ||
+        !narrowGear.commandsVisible ||
+        narrowGear.commandsCovered ||
+        !narrowGear.commandsOnTop ||
+        narrowGear.names.some(name => name.scrollWidth > name.clientWidth + 1)) {
+      throw new Error(`Narrow Gear regression: ${JSON.stringify(narrowGear)}`);
+    }
+    if (SCREENSHOT_DIR) {
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-gear-narrow.png') });
+    }
+
+    // A full browser reload is the deterministic reconnect transition. The relay
+    // must replay the assigned pawn exactly once and remain stable long enough to
+    // prove build negotiation did not start another reload loop.
+    const viewerJoinsBeforeReconnect = hostMessages.filter(m =>
+      m.type === 'viewer_joined' && m.username === VIEWER_LOGIN
+    ).length;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitFor(() => hostMessages.filter(m =>
+      m.type === 'viewer_joined' && m.username === VIEWER_LOGIN
+    ).length === viewerJoinsBeforeReconnect + 1, 'single viewer reconnect');
+    await page.waitForFunction(expectedName =>
+      document.body.dataset.viewerPhase === 'assigned' &&
+      document.getElementById('pawn-name')?.textContent.trim() === expectedName,
+      VIEWER_DISPLAY,
+      { timeout: 10000 });
+    await wait(2200);
+    const reconnectJoins = hostMessages.filter(m =>
+      m.type === 'viewer_joined' && m.username === VIEWER_LOGIN
+    ).length - viewerJoinsBeforeReconnect;
+    if (reconnectJoins !== 1) {
+      throw new Error(`Reconnect reload loop: expected one viewer_joined, got ${reconnectJoins}`);
+    }
+    await page.click('#btn-command-menu');
+    await page.waitForSelector('#command-window-status .status-summary.ok', { timeout: 10000 });
+    const reconnectCommandStatus = await page.locator('#command-window-status .status-summary').innerText();
+    if (!reconnectCommandStatus.includes(`Assigned to ${VIEWER_DISPLAY}`)) {
+      throw new Error(`Reconnect command state regression: ${reconnectCommandStatus}`);
+    }
+    await page.click('#btn-command-close');
+
+    const result = await page.evaluate(reconnectCount => ({
       phase: document.body.dataset.viewerPhase,
       mainActive: document.getElementById('screen-main')?.classList.contains('active'),
       lobbyActive: document.getElementById('screen-lobby')?.classList.contains('active'),
@@ -774,18 +1179,36 @@ async function main() {
       commandWindowOpen: !document.getElementById('command-window')?.classList.contains('hidden'),
       activeCommandSection: document.querySelector('.command-nav-btn.active')?.textContent.trim(),
       commandStatus: document.querySelector('#command-window-status .status-summary')?.textContent.trim(),
-    }));
+      reconnectJoins: reconnectCount,
+      viewport: { width: innerWidth, height: innerHeight },
+    }), reconnectJoins);
 
+    const summarizedHostMessages = SUMMARY_OUTPUT
+      ? {
+          total: hostMessages.length,
+          types: hostMessages.reduce((counts, message) => {
+            const key = message.type || 'unknown';
+            counts[key] = (counts[key] || 0) + 1;
+            return counts;
+          }, {}),
+          actions: hostMessages.reduce((counts, message) => {
+            if (!message.action) return counts;
+            counts[message.action] = (counts[message.action] || 0) + 1;
+            return counts;
+          }, {}),
+        }
+      : hostMessages.map(m => ({ type: m.type, action: m.action, username: m.username, pawnId: m.pawnId }));
     console.log(JSON.stringify({
       ok: true,
       baseUrl: BASE_URL,
       viewer: VIEWER_LOGIN,
       pawnId: PAWN_ID,
       result,
-      hostMessages: hostMessages.map(m => ({ type: m.type, action: m.action, username: m.username, pawnId: m.pawnId })),
+      hostMessages: summarizedHostMessages,
     }, null, 2));
   } finally {
     if (browser) await browser.close().catch(() => {});
+    if (burstViewerWs) burstViewerWs.close();
     if (hostWs) hostWs.close();
     relay.child.kill();
     await wait(200);

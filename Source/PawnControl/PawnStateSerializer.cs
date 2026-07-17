@@ -822,7 +822,7 @@ namespace Overlord
         // the legs — a duster/parka covers Torso+Arms+Legs, so "legs" matched and it
         // landed under Legs instead of Outer (aSoapyoid's report). Layer is the real
         // signal: Shell = outerwear regardless of what body parts it happens to cover.
-        private static string GearSlotKeyForDef(ThingDef def)
+        internal static string GearSlotKeyForDef(ThingDef def)
         {
             if (def == null)
                 return "other";

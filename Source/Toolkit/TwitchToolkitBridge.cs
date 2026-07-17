@@ -18,9 +18,20 @@ namespace Overlord
         private const int MaxStoreEntries = 700;
         private const int MaxItemEntries = 560;
         private const int MaxStuffOptions = 48;
+        public const string RepairEquippedGearSku = "repairgear";
+        public const int RepairEquippedGearCost = 2000;
 
         private static Type fakeMessageType;
         private static Type fakeMessageInterface;
+        private static readonly ThreadSafeQueue<string> repairChatQueue = new ThreadSafeQueue<string>();
+        private static readonly ThreadSafeQueue<PawnLinkRequest> pawnLinkQueue = new ThreadSafeQueue<PawnLinkRequest>();
+
+        private sealed class PawnLinkRequest
+        {
+            public string username;
+            public Pawn pawn;
+            public bool clear;
+        }
 
         public static bool IsToolkitLoaded => FindType("TwitchToolkit.Viewers") != null;
         public static bool IsToolkitUtilsLoaded => FindType("SirRandoo.ToolkitUtils.CommandRouter") != null;
@@ -96,6 +107,9 @@ namespace Overlord
                 return Error("Missing purchase");
 
             quantity = Math.Max(1, Math.Min(quantity, 100));
+
+            if (string.Equals(sku, RepairEquippedGearSku, StringComparison.OrdinalIgnoreCase))
+                return ExecuteRepairEquippedGear(username, targetPawn);
 
             PurchaseInfo info;
             if (!TryFindPurchase(sku, out info))
@@ -176,6 +190,21 @@ namespace Overlord
             AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsSimple", coins, unlimited, "event");
             AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsVariables", coins, unlimited, "event");
             AppendItemEntries(entries, coins, unlimited);
+            entries.Add(new Dictionary<string, object>
+            {
+                ["kind"] = "service",
+                ["category"] = "pawn",
+                ["sku"] = RepairEquippedGearSku,
+                ["label"] = "Repair equipped gear",
+                ["description"] = "Fully repair the assigned colonist's equipped weapon and worn apparel.",
+                ["cost"] = RepairEquippedGearCost,
+                ["price"] = RepairEquippedGearCost,
+                ["unitCost"] = RepairEquippedGearCost,
+                ["affordable"] = unlimited || coins >= RepairEquippedGearCost,
+                ["needsInput"] = false,
+                ["variables"] = 0,
+                ["command"] = "!buy " + RepairEquippedGearSku
+            });
 
             return entries
                 .Where(e => e.ContainsKey("sku"))
@@ -184,6 +213,204 @@ namespace Overlord
                 .ThenBy(e => e.ContainsKey("label") ? e["label"].ToString() : "")
                 .Take(MaxStoreEntries)
                 .ToList();
+        }
+
+        private static Dictionary<string, object> ExecuteRepairEquippedGear(string username, Pawn pawn)
+        {
+            if (pawn == null || pawn.Dead || pawn.Destroyed || !pawn.Spawned)
+                return Error("Assign an active colonist before repairing equipped gear");
+
+            var equipped = new List<Thing>();
+            if (pawn.equipment?.AllEquipmentListForReading != null)
+                equipped.AddRange(pawn.equipment.AllEquipmentListForReading);
+            if (pawn.apparel?.WornApparel != null)
+                equipped.AddRange(pawn.apparel.WornApparel);
+
+            var damaged = equipped
+                .Where(thing => thing != null && !thing.Destroyed && thing.def?.useHitPoints == true &&
+                                thing.MaxHitPoints > 0 && thing.HitPoints < thing.MaxHitPoints)
+                .Distinct()
+                .ToList();
+            if (damaged.Count == 0)
+                return Error("All equipped gear is already at full condition");
+
+            object viewer;
+            int coins;
+            bool unlimited;
+            try
+            {
+                viewer = GetViewer(username);
+                coins = InvokeInt(viewer, "GetViewerCoins", 0);
+                unlimited = ReadStaticBool("TwitchToolkit.ToolkitSettings", "UnlimitedCoins", false);
+            }
+            catch (Exception ex)
+            {
+                return Error("Could not read Toolkit wallet: " + ex.Message);
+            }
+
+            if (!unlimited && coins < RepairEquippedGearCost)
+                return Error($"Not enough coins: {RepairEquippedGearCost} required, {coins} available");
+            if (ToolkitItemBlockedByCooldown(username))
+                return Error("Toolkit purchases are currently on cooldown");
+
+            var originalHitPoints = damaged.ToDictionary(thing => thing, thing => thing.HitPoints);
+            bool charged = false;
+            try
+            {
+                if (!unlimited)
+                {
+                    InvokeInstanceMethod(viewer, "TakeViewerCoins", RepairEquippedGearCost);
+                    int remaining = InvokeInt(viewer, "GetViewerCoins", coins);
+                    if (remaining != coins - RepairEquippedGearCost)
+                    {
+                        InvokeInstanceMethod(viewer, "SetViewerCoins", coins);
+                        return Error("Toolkit did not confirm the repair charge");
+                    }
+                    charged = true;
+                }
+
+                foreach (Thing thing in damaged)
+                    thing.HitPoints = thing.MaxHitPoints;
+
+                pawn.Drawer?.renderer?.SetAllGraphicsDirty();
+                PortraitsCache.SetDirty(pawn);
+                TryLogToolkitItemPurchase(username, RepairEquippedGearSku);
+                LogUtil.Log($"Viewer {NormalizeUsername(username)} repaired {damaged.Count} equipped item(s) on {pawn.LabelShort} for {RepairEquippedGearCost} Toolkit coins");
+
+                return new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.ActionResult,
+                    ["ok"] = true,
+                    ["action"] = StateProtocol.CmdToolkitPurchase,
+                    ["message"] = $"Repaired {damaged.Count} equipped item{(damaged.Count == 1 ? "" : "s")} for {RepairEquippedGearCost} coins",
+                    ["repairedCount"] = damaged.Count,
+                    ["cost"] = RepairEquippedGearCost
+                };
+            }
+            catch (Exception ex)
+            {
+                foreach (var pair in originalHitPoints)
+                {
+                    if (pair.Key != null && !pair.Key.Destroyed)
+                        pair.Key.HitPoints = pair.Value;
+                }
+                if (charged)
+                    InvokeInstanceMethod(viewer, "SetViewerCoins", coins);
+                return Error("Could not repair equipped gear: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Recognizes !repairgear and !buy repairgear on ToolkitCore's Twitch
+        /// thread, then defers all game and wallet mutations to the main thread.
+        /// </summary>
+        public static bool TryQueueRepairChatCommand(object eventArgs)
+        {
+            object command = ReadMember(eventArgs, "Command");
+            if (command == null)
+                return false;
+
+            string commandText = NormalizeSku(ReadString(command, "CommandText"));
+            string arguments = NormalizePurchaseArgument(ReadString(command, "ArgumentsAsString"));
+            string firstArgument = string.IsNullOrEmpty(arguments)
+                ? ""
+                : NormalizeSku(arguments.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault());
+            bool isRepair = string.Equals(commandText, RepairEquippedGearSku, StringComparison.OrdinalIgnoreCase) ||
+                            (string.Equals(commandText, "buy", StringComparison.OrdinalIgnoreCase) &&
+                             string.Equals(firstArgument, RepairEquippedGearSku, StringComparison.OrdinalIgnoreCase));
+            if (!isRepair)
+                return false;
+
+            string username = NormalizeUsername(ReadString(command, "Username"));
+            if (string.IsNullOrEmpty(username))
+                username = NormalizeUsername(ReadString(ReadMember(command, "ChatMessage"), "Username"));
+            if (!string.IsNullOrEmpty(username))
+                repairChatQueue.Enqueue(username);
+            return true;
+        }
+
+        public static void ProcessQueuedChatCommands(ViewerManager viewers)
+        {
+            repairChatQueue.DrainTo(username =>
+            {
+                Pawn pawn = viewers?.GetSession(username)?.assignedPawn ?? FindToolkitPawnForViewer(username);
+                Dictionary<string, object> result = ExecutePurchase(username, RepairEquippedGearSku, 1, "", pawn);
+                string message = result != null && result.TryGetValue("message", out object value)
+                    ? Convert.ToString(value)
+                    : "Repair request failed";
+                SendToolkitChatMessage($"@{username} {message}");
+            });
+        }
+
+        public static void QueueViewerPawnSync(string username, Pawn pawn)
+        {
+            username = NormalizeUsername(username);
+            if (string.IsNullOrEmpty(username) || pawn == null)
+                return;
+            pawnLinkQueue.Enqueue(new PawnLinkRequest { username = username, pawn = pawn, clear = false });
+        }
+
+        public static void QueueClearViewerPawn(string username)
+        {
+            username = NormalizeUsername(username);
+            if (string.IsNullOrEmpty(username))
+                return;
+            pawnLinkQueue.Enqueue(new PawnLinkRequest { username = username, clear = true });
+        }
+
+        public static void ProcessQueuedPawnLinks()
+        {
+            // Claims can be approved more than once in one relay drain. Apply only
+            // the final intent for each viewer at Overlord's controlled tick boundary.
+            var latest = new Dictionary<string, PawnLinkRequest>(StringComparer.OrdinalIgnoreCase);
+            pawnLinkQueue.DrainTo(request =>
+            {
+                if (request != null && !string.IsNullOrEmpty(request.username))
+                    latest[request.username] = request;
+            });
+
+            foreach (PawnLinkRequest request in latest.Values)
+            {
+                if (request.clear)
+                {
+                    ApplyClearViewerPawn(request.username);
+                    continue;
+                }
+
+                if (!TrySyncViewerPawn(request.username, request.pawn, out string error) && !string.IsNullOrEmpty(error))
+                    LogUtil.Warn(error);
+            }
+        }
+
+        private static Pawn FindToolkitPawnForViewer(string username)
+        {
+            try
+            {
+                IDictionary history = ReadPawnHistory(GetToolkitPawnComponent());
+                if (history == null)
+                    return null;
+                foreach (DictionaryEntry entry in history)
+                {
+                    if (string.Equals(Convert.ToString(entry.Key), NormalizeUsername(username), StringComparison.OrdinalIgnoreCase))
+                        return entry.Value as Pawn;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static void SendToolkitChatMessage(string message)
+        {
+            try
+            {
+                Type wrapper = FindType("ToolkitCore.TwitchWrapper");
+                MethodInfo send = wrapper?.GetMethod("SendChatMessage", BindingFlags.Public | BindingFlags.Static);
+                send?.Invoke(null, new object[] { message });
+            }
+            catch (Exception ex)
+            {
+                LogUtil.Warn("Could not send Toolkit repair response: " + ex.Message);
+            }
         }
 
         private static void AppendIncidentEntries(List<Dictionary<string, object>> entries, string ownerTypeName, string fieldName, int coins, bool unlimited, string kind)
@@ -814,6 +1041,11 @@ namespace Overlord
 
         public static void ClearViewerPawn(string username)
         {
+            QueueClearViewerPawn(username);
+        }
+
+        private static void ApplyClearViewerPawn(string username)
+        {
             username = NormalizeUsername(username);
             if (string.IsNullOrEmpty(username))
                 return;
@@ -867,7 +1099,8 @@ namespace Overlord
         private static readonly HashSet<string> PawnTargetedSkus = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "healme", "fullheal", "reviveme", "rescueme", "imstuck", "fixmypawn",
-            "trait", "removetrait", "settraits", "levelskill", "passionshuffle", "genderswap"
+            "trait", "removetrait", "settraits", "levelskill", "passionshuffle", "genderswap",
+            RepairEquippedGearSku
         };
 
         private static object GetToolkitPawnComponent()

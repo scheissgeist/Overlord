@@ -99,7 +99,11 @@ function waitForWsOpen(ws, label) {
 function collectMessages(ws) {
   const messages = [];
   ws.on('message', raw => {
-    try { messages.push(JSON.parse(raw.toString('utf8'))); } catch (_) {}
+    try {
+      const msg = JSON.parse(raw.toString('utf8'));
+      if (msg.type === 'batch' && Array.isArray(msg.msgs)) messages.push(...msg.msgs);
+      else messages.push(msg);
+    } catch (_) {}
   });
   return messages;
 }

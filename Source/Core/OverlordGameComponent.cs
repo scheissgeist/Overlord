@@ -78,7 +78,6 @@ namespace Overlord
                         viewerManager.SendColonistList(user);
                         SendHostCapabilities(user);
                         viewerManager.SendPermissions(user);
-                        SendToolkitStatePublic(user);
                         viewerManager.SendGameInfoNow(user);
                     });
                 };
@@ -97,6 +96,8 @@ namespace Overlord
                         string type = JsonHelper.ExtractString(json, "type");
                         if (type == StateProtocol.Command || type == "command")
                             HandleCommand(json);
+                        else if (type == StateProtocol.MapTransport)
+                            HandleMapTransport(json);
                         else if (type == StateProtocol.RequestState || type == StateProtocol.StateResyncRequest)
                             HandleRequestState(json);
                         else if (type == StateProtocol.Assign && IsAdminMessage(json))
@@ -142,6 +143,8 @@ namespace Overlord
 
             relayClient?.ProcessQueue();
             embeddedQueue.DrainTo(action => action());
+            TwitchToolkitBridge.ProcessQueuedPawnLinks();
+            TwitchToolkitBridge.ProcessQueuedChatCommands(viewerManager);
             viewerManager?.Tick();
         }
 
@@ -197,6 +200,7 @@ namespace Overlord
             // Static per-pawn state must not leak across save loads — thingIDNumbers
             // are reused between saves.
             PawnCommandRouter.ClearAutoDraftState();
+            ArmoryCatalog.ClearClaims();
             PawnStateSerializer.ClearSignatureCaches();
 
             initialized = false;
@@ -216,10 +220,12 @@ namespace Overlord
                     case StateProtocol.ViewerJoined:   HandleViewerJoined(json); break;
                     case StateProtocol.ViewerLeft:     HandleViewerLeft(json);   break;
                     case StateProtocol.Command:        HandleCommand(json);      break;
+                    case StateProtocol.MapTransport:   HandleMapTransport(json); break;
                     case StateProtocol.RequestState:
                     case StateProtocol.StateResyncRequest:
                         HandleRequestState(json);
                         break;
+                    case StateProtocol.RequestArmory:  HandleRequestArmory(json); break;
                     case StateProtocol.Assign:         if (IsAdminMessage(json)) HandleAssign(json);       break;
                     case StateProtocol.Unassign:       if (IsAdminMessage(json)) HandleUnassign(json);     break;
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
@@ -261,11 +267,12 @@ namespace Overlord
             if (username == null) return;
 
             var session = viewerManager.GetOrCreateSession(username, displayName);
+            session?.SetMapTransportPreference(JsonHelper.ExtractString(json, "mapTransport"));
             LogUtil.Log($"Viewer joined: {displayName} ({username})");
             viewerManager.SendColonistList(username);
             SendHostCapabilities(username);
+            SendMapTransportSelection(username, session);
             viewerManager.SendPermissions(username);
-            SendToolkitStatePublic(username);
             // Force game_info so late joiners don't stay stuck on "Host waiting".
             viewerManager.SendGameInfoNow(username);
 
@@ -345,8 +352,77 @@ namespace Overlord
         {
             string username = JsonHelper.ExtractLastString(json, "username");
             if (username == null) return;
-            SendToolkitStatePublic(username);
             HandleRequestStatePublic(username);
+        }
+
+        private void HandleMapTransport(string json)
+        {
+            string username = JsonHelper.ExtractLastString(json, "username");
+            if (string.IsNullOrEmpty(username))
+                return;
+
+            var session = viewerManager?.GetSession(username);
+            if (session == null)
+                return;
+
+            session.SetMapTransportPreference(JsonHelper.ExtractString(json, "transport"));
+            SendMapTransportSelection(username, session);
+            if (session.UsesTacticalMapTransport && session.HasPawn)
+                viewerManager.SendTacticalMapSnapshot(username);
+        }
+
+        private void SendMapTransportSelection(string username, ViewerSession session)
+        {
+            if (string.IsNullOrEmpty(username) || session == null)
+                return;
+
+            SendToViewer(username, new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.MapTransport,
+                ["requested"] = session.RequestedMapTransport,
+                ["selected"] = session.SelectedMapTransport,
+                ["tileAvailable"] = session.TacticalMapTransportAvailable,
+                ["jpegAvailable"] = true
+            });
+        }
+
+        private void HandleRequestArmory(string json)
+        {
+            string username = JsonHelper.ExtractLastString(json, "username");
+            if (string.IsNullOrEmpty(username))
+                return;
+
+            int requestId = JsonHelper.ExtractInt(json, "requestId", 0);
+            var session = viewerManager?.GetSession(username);
+            Dictionary<string, object> response;
+            if (session == null || !session.HasPawn)
+            {
+                response = ArmoryCatalog.BuildResponse(
+                    null, requestId, "", "all", "distance", 0, 3);
+            }
+            else if (!session.permissions.IsAllowed(StateProtocol.CmdEquip))
+            {
+                response = new Dictionary<string, object>
+                {
+                    ["type"] = StateProtocol.ArmoryState,
+                    ["ok"] = false,
+                    ["requestId"] = requestId,
+                    ["message"] = "The streamer disabled equipment changes",
+                    ["items"] = new List<Dictionary<string, object>>()
+                };
+            }
+            else
+            {
+                response = ArmoryCatalog.BuildResponse(
+                    session.assignedPawn,
+                    requestId,
+                    JsonHelper.ExtractString(json, "search"),
+                    JsonHelper.ExtractString(json, "slot"),
+                    JsonHelper.ExtractString(json, "sort"),
+                    JsonHelper.ExtractInt(json, "page", 0),
+                    JsonHelper.ExtractInt(json, "pageSize", 3));
+            }
+            SendToViewer(username, response);
         }
 
         private void HandleChat(string json)

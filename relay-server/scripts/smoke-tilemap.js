@@ -1017,7 +1017,11 @@ async function main() {
       y: mapBox.y + mapBox.height * 0.52,
     };
     const expectedMoveCell = await mapPointToCell(page, leftPoint, 'left click point');
-    await page.mouse.move(leftPoint.x, leftPoint.y);
+    await page.evaluate(point => {
+      document.getElementById('map-canvas')?.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: point.x, clientY: point.y, bubbles: true,
+      }));
+    }, leftPoint);
     const hoverAffordanceDebug = await waitFor(async () => {
       const debug = await readTileDebug(page);
       const tileState = debug?.state?.tileMap || debug?.rendererState || {};
@@ -1027,7 +1031,14 @@ async function main() {
         : null;
     }, 'tilemap hover affordance follows pointer cell');
     const moveCursor = hostMessages.length;
-    await page.mouse.click(leftPoint.x, leftPoint.y, { button: 'left' });
+    await page.evaluate(point => {
+      document.getElementById('map-canvas')?.dispatchEvent(new MouseEvent('mousedown', {
+        button: 0, clientX: point.x, clientY: point.y, bubbles: true, cancelable: true,
+      }));
+      window.dispatchEvent(new MouseEvent('mouseup', {
+        button: 0, clientX: point.x, clientY: point.y, bubbles: true, cancelable: true,
+      }));
+    }, leftPoint);
     const moveCommand = await waitForCommandAfter(
       hostMessages,
       moveCursor,

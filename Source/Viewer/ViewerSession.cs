@@ -26,6 +26,8 @@ namespace Overlord
         [System.NonSerialized]
         public int tacticalMapSeq;
         [System.NonSerialized]
+        public string mapTransportPreference;
+        [System.NonSerialized]
         public int tacticalEntityEpoch;
         [System.NonSerialized]
         public int tacticalEntitySeq;
@@ -132,6 +134,34 @@ namespace Overlord
         // True when the owned pawn exists but is temporarily off-map — control resumes
         // automatically when it respawns. Used to show "away" instead of "lost".
         public bool PawnAwayTemporarily => OwnsPawn && !assignedPawn.Spawned;
+
+        public bool TacticalMapTransportAvailable =>
+            OverlordMod.Settings?.allowViewerTacticalMap == true &&
+            OverlordMod.Settings?.mirrorHostCameraToViewers != true;
+
+        public string RequestedMapTransport =>
+            mapTransportPreference == "jpeg" || mapTransportPreference == "tile"
+                ? mapTransportPreference
+                : "auto";
+
+        public string SelectedMapTransport =>
+            RequestedMapTransport == "jpeg" || !TacticalMapTransportAvailable
+                ? "jpeg"
+                : "tile";
+
+        public bool UsesTacticalMapTransport => SelectedMapTransport == "tile";
+        public bool UsesJpegMapTransport => SelectedMapTransport == "jpeg";
+
+        public void SetMapTransportPreference(string requested)
+        {
+            string normalized = string.IsNullOrEmpty(requested) ? "auto" : requested.Trim().ToLowerInvariant();
+            if (normalized != "tile" && normalized != "jpeg")
+                normalized = "auto";
+            if (mapTransportPreference == normalized)
+                return;
+            mapTransportPreference = normalized;
+            ResetTacticalMapStream();
+        }
 
         public void ResetTacticalMapStream()
         {

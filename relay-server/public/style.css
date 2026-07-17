@@ -996,7 +996,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 #pawn-portrait { display: none; }
@@ -1405,7 +1405,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   position: absolute;
   right: 16px;
   bottom: 16px;
-  z-index: 30;
+  z-index: 35;
   width: min(580px, calc(100% - 32px));
   max-width: calc(100% - 32px);
   overflow: hidden;
@@ -1414,6 +1414,11 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 #bottom-panel.collapsed { max-height: 48px; }
 #bottom-panel.expanded  { max-height: min(50vh, 380px); }
+#bottom-panel.expanded  { z-index: 40; }
+#screen-main:has(#bottom-panel.expanded) #cmd-bar {
+  opacity: 0;
+  pointer-events: none;
+}
 
 #drawer-bar {
   display: flex;
@@ -4452,3 +4457,545 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   padding: 0; cursor: pointer;
 }
 .worn-dye-swatch:hover { border-color: var(--accent); }
+
+/* Compact pawn sheets: dense RimWorld-style information without drawer scroll. */
+.compact-pager {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  color: var(--parchment-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.compact-pager button {
+  min-width: 30px;
+  height: 19px;
+  padding: 0 5px;
+  border: 1px solid var(--parchment-rule);
+  border-radius: 0;
+  background: rgba(138, 104, 64, 0.16);
+  color: var(--parchment-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+}
+
+.compact-pager button:hover:not(:disabled) { background: rgba(138, 104, 64, 0.32); }
+.compact-pager button:disabled { opacity: 0.32; cursor: default; }
+
+/* Health: one bounded RPG character sheet. */
+#tab-health.active {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(240px, 1.1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "bio capacities"
+    "traits traits"
+    "body mind";
+  column-gap: 18px;
+  row-gap: 4px;
+  min-width: 0;
+}
+
+#health-profile { grid-area: bio; }
+#traits-list { grid-area: traits; }
+#health-list { grid-area: body; min-width: 0; }
+#capacities-list { grid-area: capacities; min-width: 0; }
+#thoughts-list { grid-area: mind; min-width: 0; }
+
+#tab-health .health-profile {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#tab-health .health-profile-portrait {
+  position: relative;
+  width: 52px;
+  height: 60px;
+  overflow: hidden;
+  border: 1px solid rgba(108, 78, 38, 0.58);
+  background: rgba(86, 61, 30, 0.16);
+  box-shadow: inset 0 0 0 2px rgba(236, 216, 172, 0.22);
+}
+
+#tab-health .health-profile-portrait svg,
+#tab-health .health-profile-portrait img {
+  position: absolute;
+  inset: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  object-fit: contain;
+}
+
+#health-pawn-portrait { display: none; }
+#health-pawn-portrait[src]:not([src=""]) { display: block; }
+
+#tab-health .bio-summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+#tab-health .bio-line {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#tab-health .bio-good-at {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  margin: 2px 0 0;
+}
+
+#tab-health .bio-skill-chip {
+  justify-content: space-between;
+  min-width: 0;
+  padding: 2px 5px;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#tab-health .health-traits {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 3px;
+  min-width: 0;
+  margin: 0;
+  padding: 5px 0;
+  border-top: 1px solid rgba(138, 104, 64, 0.28);
+  border-bottom: 1px solid rgba(138, 104, 64, 0.28);
+  overflow: visible;
+}
+
+#tab-health .health-traits::before { margin-right: 3px; font-size: 9px; }
+#tab-health .trait-chip { padding: 1px 5px; font-size: 10px; white-space: nowrap; }
+#tab-health .health-section-title { margin: 0 0 3px; padding-bottom: 2px; font-size: 11px; }
+#tab-health .hediff-row,
+#tab-health .thought-row { min-height: 21px; padding: 2px 0; font-size: 11px; }
+#tab-health .hediff-part { font-size: 9px; }
+#tab-health .hediff-sev,
+#tab-health .thought-mood { font-size: 10px; }
+#tab-health .capacity-board { max-width: none; gap: 1px; }
+#tab-health .cap-row { grid-template-columns: minmax(0, 1fr) 32px 60px; gap: 5px; padding: 1px 0; }
+#tab-health .cap-row .cap-name,
+#tab-health .cap-row .cap-val,
+#tab-health .cap-normal { font-size: 10px; }
+#tab-health .cap-row .cap-meter { height: 4px; }
+
+/* Gear: slots, nearby choices, and carried inventory share one fixed sheet. */
+#tab-gear.active {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.7fr) minmax(150px, 0.7fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+#tab-gear .stack-section { margin: 0; min-width: 0; }
+#tab-gear .gear-layout {
+  grid-template-columns: minmax(145px, 0.9fr) minmax(165px, 1.1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas:
+    "overview overview"
+    "slots slots"
+    "equipped nearby";
+  gap: 4px 10px;
+}
+
+#tab-gear .gear-overview-head {
+  grid-area: overview;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+  border-bottom: 1px solid rgba(108, 78, 38, 0.35);
+}
+
+#tab-gear .gear-overview-head > span { display: flex; align-items: baseline; gap: 6px; }
+#tab-gear .gear-overview-head strong { font-size: 11px; }
+#tab-gear .gear-overview-head small { color: var(--parchment-text-muted); font-size: 9px; }
+
+#tab-gear .gear-slot-tabs {
+  grid-area: slots;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  min-width: 0;
+}
+
+#tab-gear .gear-equipped-sheet { grid-area: equipped; min-width: 0; }
+#tab-gear .gear-nearby-sheet { grid-area: nearby; min-width: 0; }
+#tab-gear .gear-column-title {
+  min-height: 22px;
+  padding: 4px 0 2px;
+  border-bottom: 1px solid rgba(108, 78, 38, 0.35);
+  color: var(--parchment-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+#tab-gear .gear-slot {
+  min-height: 24px;
+  padding: 3px 4px;
+  border-color: rgba(108, 78, 38, 0.5);
+  background: rgba(232, 212, 168, 0.22);
+  color: var(--parchment-text-muted);
+}
+
+#tab-gear .gear-slot.empty {
+  min-height: 24px;
+  background: rgba(108, 78, 38, 0.08);
+  color: var(--parchment-text-muted);
+}
+
+#tab-gear .gear-slot.active {
+  border-color: #6c4e26;
+  background: rgba(138, 104, 64, 0.42);
+  color: var(--parchment-text);
+}
+
+#tab-gear .gear-slot.filled:hover { border-color: #6c4e26; color: var(--parchment-text); }
+#tab-gear .gear-slot-label { margin: 0; color: var(--parchment-text-muted); font-size: 9px; text-align: center; }
+#tab-gear .gear-kind { margin-bottom: 1px; color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .gear-slot-name { display: none; }
+/* Item names WRAP instead of nowrap-ellipsis: a two-line "Masterwork plasteel
+   longsword" is readable; "Masterwork plasteel longsw…" is not. The fixed
+   side-column widths crushed real RimWorld labels (quality + stuff prefixes)
+   at every drawer width incl. desktop 1280 (capture-gear-squish.js). */
+#tab-gear .gear-name,
+#tab-gear .gear-worn-row .gear-name,
+#tab-gear .inventory-row .gear-name {
+  color: var(--parchment-text);
+  font-size: 10px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.18;
+}
+#tab-gear .gear-sheet-head { padding-bottom: 3px; color: var(--parchment-text); font-size: 11px; }
+#tab-gear .gear-sheet-count { color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .gear-sheet-tools { display: inline-flex; align-items: center; gap: 6px; }
+#tab-gear .gear-source-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding-bottom: 3px;
+}
+#tab-gear .gear-source-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--parchment-rule);
+}
+#tab-gear .gear-source-toggle button {
+  min-height: 19px;
+  padding: 1px 5px;
+  border: 0;
+  border-right: 1px solid var(--parchment-rule);
+  border-radius: 0;
+  background: rgba(138, 104, 64, 0.12);
+  color: var(--parchment-text-muted);
+  font: inherit;
+  font-size: 8px;
+}
+#tab-gear .gear-source-toggle button:last-child { border-right: 0; }
+#tab-gear .gear-source-toggle button.active {
+  background: rgba(82, 68, 47, 0.9);
+  color: #f1e6c9;
+}
+#tab-gear [data-armory-search] {
+  width: min(96px, 46%);
+  min-width: 0;
+  height: 20px;
+  padding: 1px 4px;
+  border: 1px solid var(--parchment-rule);
+  border-radius: 2px;
+  background: rgba(244, 229, 190, 0.46);
+  color: var(--parchment-text);
+  font: inherit;
+  font-size: 8px;
+}
+#tab-gear [data-armory-search]::placeholder { color: var(--parchment-text-muted); }
+#tab-gear .gear-repair-button {
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--parchment-rule);
+  border-radius: 2px;
+  background: rgba(82, 68, 47, 0.9);
+  color: #f1e6c9;
+  font: inherit;
+  font-size: 8px;
+  white-space: nowrap;
+}
+#tab-gear .gear-repair-button:hover:not(:disabled) { background: rgba(62, 51, 36, 0.96); }
+#tab-gear .gear-repair-button:disabled { opacity: 0.46; cursor: not-allowed; }
+#tab-gear .gear-nearby-title {
+  margin-top: 0;
+  padding: 0 0 3px;
+  border-color: rgba(108, 78, 38, 0.35);
+  color: var(--parchment-text);
+  font-size: 9px;
+}
+
+#tab-gear .gear-nearby-title > span:first-child { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+#tab-gear .gear-sort-dropdown select {
+  max-width: 112px;
+  padding: 2px 19px 2px 5px;
+  border-color: var(--parchment-rule);
+  background: rgba(138, 104, 64, 0.22);
+  color: var(--parchment-text);
+  font-size: 9px;
+}
+
+#tab-gear .gear-row,
+#tab-gear .inventory-row {
+  grid-template-columns: minmax(0, 1fr) 48px auto;
+  gap: 5px;
+  min-height: 29px;
+  padding: 2px 0;
+  border-color: rgba(108, 78, 38, 0.26);
+}
+
+/* Condition is already written in each Gear row's metadata. Keeping a second
+   fixed-width meter here squeezed real equipped names down to three letters at
+   the normal 580px drawer width. */
+#tab-gear .gear-row { grid-template-columns: minmax(0, 1fr) auto; }
+#tab-gear .gear-row .condition { display: none; }
+
+@media (min-width: 761px) {
+  #bottom-panel.expanded:has(.tab[data-tab="gear"].active) {
+    width: min(700px, calc(100% - 32px));
+  }
+}
+
+/* Below ~560px the two side-by-side splits (gear-tab: equipped|carried; and
+   inside it equipped|nearby) starve every name column to a few chars. Stack
+   them to single-column so each item name gets the full drawer width. */
+@media (max-width: 560px) {
+  #tab-gear.active { grid-template-columns: minmax(0, 1fr); }
+  #tab-gear .gear-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "overview"
+      "slots"
+      "equipped"
+      "nearby";
+  }
+}
+
+#tab-gear .gear-meta-text,
+#tab-gear .condition-label { color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .condition { height: 3px; background: rgba(58, 42, 26, 0.22); }
+#tab-gear .gear-row-actions,
+#tab-gear .inv-actions { display: flex; gap: 3px; }
+#tab-gear .item-action { padding: 3px 5px; border-color: var(--parchment-rule); background: rgba(88, 72, 49, 0.74); color: #fffaf0; font-size: 9px; }
+#tab-gear .item-action.ghost { border-color: var(--parchment-rule); background: transparent; color: var(--parchment-text-muted); }
+
+#tab-gear .inventory-head,
+.events-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  border-bottom: 1px solid var(--parchment-rule);
+  color: var(--parchment-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#tab-gear .inventory-head small { color: var(--parchment-text-muted); font-size: 9px; }
+#tab-gear .inventory-grid { display: grid; grid-template-columns: 1fr; }
+#tab-gear .worn-dye-palette {
+  position: absolute;
+  z-index: 6;
+  right: 4px;
+  padding: 5px;
+  border: 1px solid #6c4e26;
+  background: var(--parchment);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.34);
+}
+#tab-gear .gear-sheet { position: relative; }
+
+/* Social: stable list with a compact selected-target action block. */
+#tab-social.active { min-width: 0; }
+#tab-social .social-board { grid-template-columns: minmax(250px, 1.15fr) minmax(220px, 0.85fr); gap: 14px; }
+#tab-social .social-list { gap: 3px; }
+#tab-social .social-sort { gap: 2px; }
+#tab-social .social-sort button {
+  height: 22px;
+  border-color: var(--parchment-rule);
+  background: rgba(138, 104, 64, 0.13);
+  color: var(--parchment-text-muted);
+  font-size: 9px;
+}
+#tab-social .social-sort button.active { border-color: #6c4e26; background: rgba(138, 104, 64, 0.38); color: var(--parchment-text); }
+#tab-social .social-person {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-color: rgba(108, 78, 38, 0.42);
+  border-radius: 0;
+  background: rgba(138, 104, 64, 0.10);
+  color: var(--parchment-text);
+}
+#tab-social .social-person.active { border-color: #6c4e26; background: rgba(138, 104, 64, 0.38); }
+#tab-social .social-person span,
+#tab-social .social-person strong { font-size: 10px; }
+#tab-social .social-person span { grid-column: 1; grid-row: 1; }
+#tab-social .social-person strong { grid-column: 3; grid-row: 1; }
+#tab-social .social-person small {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--parchment-text-muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+#tab-social .social-actions { gap: 7px; }
+#tab-social .social-actions-head { align-items: baseline; padding-bottom: 5px; color: var(--parchment-text); }
+#tab-social .social-actions-head small { color: var(--parchment-text-muted); }
+#tab-social .social-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+#tab-social .social-action-grid button {
+  height: 31px;
+  border-color: rgba(72, 57, 39, 0.86);
+  border-radius: 0;
+  background: rgba(88, 72, 49, 0.82);
+  color: #fffaf0;
+  font-size: 10px;
+}
+#tab-social .social-action-grid button:hover { border-color: #3b2c19; color: #fff; }
+#tab-social .social-list > .compact-pager { margin-top: 2px; }
+
+/* Events only exists when the host enables incident tickets (or a vote is active). */
+#event-buttons { display: block; }
+.events-sheet { display: grid; gap: 6px; }
+.events-head small { color: var(--parchment-text-muted); font-size: 9px; font-weight: 600; }
+.events-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.events-grid .evt-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 42px;
+  padding: 5px 7px;
+  border: 1px solid rgba(108, 78, 38, 0.5);
+  border-radius: 0;
+  background: rgba(138, 104, 64, 0.12);
+  color: var(--parchment-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.events-grid .evt-btn:hover:not(:disabled) { border-color: #6c4e26; background: rgba(138, 104, 64, 0.28); }
+.events-grid .evt-btn:disabled { opacity: 0.42; cursor: default; }
+.events-grid .evt-btn span { min-width: 0; }
+.events-grid .evt-btn strong,
+.events-grid .evt-btn small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.events-grid .evt-btn strong { font-size: 10px; }
+.events-grid .evt-btn small { color: var(--parchment-text-muted); font-size: 8px; font-weight: 400; }
+.events-grid .evt-btn b { color: #68471e; font-size: 10px; }
+
+@media (max-width: 760px) {
+  #tab-content { padding: 7px 10px 10px; }
+  #tab-health.active { grid-template-columns: minmax(200px, 0.9fr) minmax(220px, 1.1fr); }
+  #tab-gear.active { grid-template-columns: minmax(370px, 1.7fr) minmax(150px, 0.7fr); gap: 8px; }
+  #tab-gear .gear-layout { grid-template-columns: minmax(155px, 0.9fr) minmax(175px, 1.1fr); gap: 4px 7px; }
+  #tab-gear .gear-row,
+  #tab-gear .inventory-row { grid-template-columns: minmax(0, 1fr) auto; }
+  #tab-gear .gear-row .condition,
+  #tab-gear .inventory-row .condition,
+  #tab-gear .condition-label { display: none; }
+  #tab-social .social-board { grid-template-columns: minmax(220px, 1.1fr) minmax(200px, 0.9fr); gap: 9px; }
+}
+
+@media (max-width: 520px) {
+  #tab-health.active { display: block; }
+  #tab-health > * { margin-bottom: 7px; }
+  #tab-gear.active,
+  #tab-social .social-board { grid-template-columns: 1fr; }
+  #tab-gear .gear-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas: "overview" "slots" "equipped" "nearby";
+  }
+  #tab-gear .gear-slot-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  #tab-gear .inventory-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+}
+
+@media (max-height: 560px) {
+  #bottom-panel.expanded { max-height: min(72vh, 320px); }
+  #tab-content { height: min(52vh, 240px); }
+}
+
+/* Compact browser sources keep the profile and core pawn commands visible while
+   details are open. Previously all three surfaces occupied the same bottom edge,
+   so the higher-z drawer covered the other two. */
+@media (max-width: 520px), (max-width: 760px) and (max-height: 560px) {
+  #bottom-panel.expanded { max-height: min(72vh, 320px); }
+  #tab-content { height: min(52vh, 240px); }
+  #tab-content { padding: 3px 10px; }
+
+  #screen-main:has(#bottom-panel.expanded) #inspect-pane {
+    bottom: calc(min(72vh, 320px) + 32px);
+    width: 240px;
+    min-height: 58px;
+    padding: 5px 7px;
+    gap: 7px;
+    z-index: 45;
+    pointer-events: none;
+    contain: paint;
+  }
+
+  #screen-main:has(#bottom-panel.expanded) .inspect-portrait {
+    width: 48px;
+    height: 58px;
+    border-width: 5px;
+  }
+
+  #screen-main:has(#bottom-panel.expanded) .inspect-body { gap: 2px; }
+  #screen-main:has(#bottom-panel.expanded) .inspect-name { font-size: 13px; }
+  #screen-main:has(#bottom-panel.expanded) .inspect-job { font-size: 10px; }
+  #screen-main:has(#bottom-panel.expanded) .needs-panel { display: none; }
+
+  #screen-main:has(#bottom-panel.expanded) #cmd-bar {
+    left: 256px;
+    right: 8px;
+    bottom: calc(min(72vh, 320px) + 32px);
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 45;
+    contain: paint;
+  }
+
+  #bottom-panel.expanded { contain: paint; }
+
+  #screen-main:has(#bottom-panel.expanded) .cmd-btn {
+    width: auto;
+    min-width: 0;
+    height: 58px;
+    padding: 4px 2px;
+    border-width: 5px;
+    font-size: 10px;
+  }
+}
