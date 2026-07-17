@@ -89,6 +89,9 @@ namespace Overlord
         private static readonly MethodInfo PortraitGetMethod =
             ResolvePortraitGetMethod();
 
+        // One-shot guard so a per-frame portrait-render failure logs once, not 2/sec.
+        private static bool portraitRenderWarned;
+
         private static readonly PropertyInfo ColonistBarEntriesProperty =
             ResolveProperty(typeof(ColonistBar), "Entries");
 
@@ -957,30 +960,57 @@ namespace Overlord
 
             try
             {
+                // Build the argument array generically from the resolved method's
+                // real parameter list instead of hard-coding one signature. RimWorld
+                // has changed PortraitsCache.Get's arity across versions (5 params in
+                // 1.5, 13 in 1.6.9676: Pawn, Vector2, Rot4, Vector3 cameraOffset,
+                // float cameraZoom, bool supersample, bool compensateForUIScale,
+                // bool renderHeadgear, bool renderClothes, IReadOnlyDictionary<Apparel,Color>,
+                // Color? overrideHairColor, bool stylingStation, PawnHealthState?).
+                // Hard-coding Length==5 silently returned null on 1.6 -> no portrait
+                // ever sent. Fill the first three known args, default the rest by type,
+                // and turn on the render flags that make the portrait show gear/hair.
                 var parameters = PortraitGetMethod.GetParameters();
-                object[] args;
-
-                if (parameters.Length == 5 &&
-                    parameters[3].ParameterType == typeof(Vector3) &&
-                    parameters[4].ParameterType == typeof(float))
-                {
-                    args = new object[] { pawn, size, rotation, default(Vector3), 1f };
-                }
-                else if (parameters.Length == 5 &&
-                         parameters[3].ParameterType == typeof(Color[]) &&
-                         parameters[4].ParameterType == typeof(bool))
-                {
-                    args = new object[] { pawn, size, rotation, null, true };
-                }
-                else
-                {
+                if (parameters.Length < 3)
                     return null;
+
+                var args = new object[parameters.Length];
+                args[0] = pawn;
+                args[1] = size;
+                args[2] = rotation;
+
+                for (int i = 3; i < parameters.Length; i++)
+                {
+                    var p = parameters[i];
+                    var t = p.ParameterType;
+
+                    // A camera-zoom float of 0 renders nothing; default it to 1.
+                    if (t == typeof(float))
+                        args[i] = p.Name != null && p.Name.ToLowerInvariant().Contains("zoom") ? 1f : 0f;
+                    // renderHeadgear / renderClothes must be true for a full portrait;
+                    // supersample/compensate/stylingStation are fine either way -> true
+                    // is the "normal in-game portrait" choice for all bool flags.
+                    else if (t == typeof(bool))
+                        args[i] = true;
+                    else if (t == typeof(Vector3))
+                        args[i] = default(Vector3);
+                    else if (t.IsValueType && Nullable.GetUnderlyingType(t) == null)
+                        args[i] = Activator.CreateInstance(t); // non-nullable structs (e.g. Vector2)
+                    else
+                        args[i] = p.HasDefaultValue ? p.DefaultValue : null; // nullables, reference types
                 }
 
                 return PortraitGetMethod.Invoke(null, args) as RenderTexture;
             }
-            catch
+            catch (Exception ex)
             {
+                // Log once — this runs from the per-frame portrait queue, so an
+                // unconditional Warn would flood the streamer's log every 0.5s.
+                if (!portraitRenderWarned)
+                {
+                    portraitRenderWarned = true;
+                    LogUtil.Warn("Portrait render failed: " + ex.Message);
+                }
                 return null;
             }
         }
