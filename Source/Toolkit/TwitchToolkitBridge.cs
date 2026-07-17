@@ -794,11 +794,17 @@ namespace Overlord
 
         private static string DescribeToolkitCooldown(string username, PurchaseInfo info)
         {
-            string label = info?.label ?? info?.sku ?? "item";
-            string kind = string.Equals(info?.kind, "event", StringComparison.OrdinalIgnoreCase) ? "event" : "item";
-            // Toolkit chat often says "X item is maxed, wait N days" — we cannot always read N
-            // without Toolkit internals, so keep a clear Overlord-facing message.
-            return $"{GenText.CapitalizeFirst(label)} {kind} is on Toolkit cooldown or maxed. Wait for the limit to reset, or ask the streamer to raise store limits.";
+            // The block is a SHARED item/care-package cooldown across ALL item buys —
+            // not a limit on this specific item. The old message ("Duster is on
+            // cooldown") misled viewers into thinking the duster itself was capped
+            // when they'd actually just bought several items in quick succession.
+            bool isEvent = string.Equals(info?.kind, "event", StringComparison.OrdinalIgnoreCase);
+            if (isEvent)
+            {
+                string label = info?.label ?? info?.sku ?? "That event";
+                return $"{GenText.CapitalizeFirst(label)} is on Toolkit cooldown or maxed. Wait for the limit to reset, or ask the streamer to raise store limits.";
+            }
+            return "Item purchases are on a shared cooldown (you bought a few items quickly). Wait for it to reset, or ask the streamer to raise the Toolkit item limit.";
         }
 
         private static string FormatToolkitRejection(Exception ex)
