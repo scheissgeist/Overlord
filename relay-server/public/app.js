@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260716-gear-wrap-v1';
+const UI_BUILD = '20260716-buy-equip-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
