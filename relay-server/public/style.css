@@ -980,6 +980,14 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 /* Portrait sits in its own mid-wood carved frame, inset into the dark wood pane. */
 .inspect-portrait {
   position: relative;
+  /* Grid-stack the svg placeholder + img in one cell instead of absolute-
+     positioning them. An absolutely-positioned child (position:absolute;inset:0)
+     escapes to the viewport if any browser quirk breaks the container's
+     positioning context (iOS Safari + contain:paint + border-image did exactly
+     this: the portrait img floated to the top-right once it started rendering).
+     An in-flow grid child cannot escape. */
+  display: grid;
+  grid-template: 1fr / 1fr;
   width: 96px;
   height: 96px;
   flex-shrink: 0;
@@ -992,10 +1000,10 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 .inspect-portrait svg,
 .inspect-portrait img {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
   object-fit: contain;
 }
 
@@ -2441,6 +2449,9 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 /* Portrait: same carved wood-mid frame as inspect pane */
 .command-head-portrait {
   position: relative;
+  /* Grid-stack, not absolute-position — see .inspect-portrait note. */
+  display: grid;
+  grid-template: 1fr / 1fr;
   width: 48px;
   height: 48px;
   flex-shrink: 0;
@@ -2453,10 +2464,10 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 .command-head-portrait svg,
 .command-head-portrait img {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
   width: 100%;
   height: 100%;
+  min-width: 0;
   object-fit: cover;
 }
 
@@ -4562,8 +4573,14 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 #tab-health .health-profile-portrait {
   position: relative;
+  /* Grid-stack, not absolute-position — see .inspect-portrait note. The 2px
+     padding reproduces the former inset:2px inner border. overflow:hidden stays
+     as a belt-and-braces clip. */
+  display: grid;
+  grid-template: 1fr / 1fr;
   width: 52px;
   height: 60px;
+  padding: 2px;
   overflow: hidden;
   border: 1px solid rgba(108, 78, 38, 0.58);
   background: rgba(86, 61, 30, 0.16);
@@ -4572,10 +4589,10 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 #tab-health .health-profile-portrait svg,
 #tab-health .health-profile-portrait img {
-  position: absolute;
-  inset: 2px;
-  width: calc(100% - 4px);
-  height: calc(100% - 4px);
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
   object-fit: contain;
 }
 
