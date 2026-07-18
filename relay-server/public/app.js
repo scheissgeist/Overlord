@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260717-preferred-weapon-v1';
+const UI_BUILD = '20260717-social-roster-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -310,6 +310,7 @@ const COMMAND_MENU_SECTIONS = [
   { id: 'quick', label: 'Quick' },
   { id: 'buy', label: 'Buy' },
   { id: 'story', label: 'Story' },
+  { id: 'roster', label: 'Colonists' },
   { id: 'work', label: 'Work' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'policies', label: 'Policies' },
@@ -1798,6 +1799,7 @@ function handleMessage(msg) {
     case 'toolkit_state':    handleToolkitState(msg);    break;
     case 'armory_state':     handleArmoryState(msg);     break;
     case 'item_icons':       handleItemIcons(msg);       break;
+    case 'roster_state':     handleRosterState(msg);     break;
     case 'host_connected':
       const forceHostResync = hasSeenHostConnection;
       hasSeenHostConnection = true;
@@ -4228,12 +4230,18 @@ function renderSocial(s) {
       </div>
       ${visiblePeople.map(person => {
         const opinion = Number(person.opinion ?? 0);
+        const theirs = Number(person.opinionOf ?? 0);
         const distance = Number(person.distance);
         const cls = opinion > 0 ? 'positive' : opinion < 0 ? 'negative' : '';
+        const theirCls = theirs > 0 ? 'positive' : theirs < 0 ? 'negative' : '';
         const sign = opinion > 0 ? '+' : '';
+        const theirSign = theirs > 0 ? '+' : '';
         return `<button class="social-person${String(person.id) === String(active.id) ? ' active' : ''}" data-social-target="${escapeAttr(person.id)}">
           <span>${escapeHtml(person.pawn)}</span>
-          <strong class="${cls}">${sign}${escapeHtml(String(opinion))}</strong>
+          <strong>
+            <span class="${cls}">${sign}${escapeHtml(String(opinion))}</span>
+            <small class="social-theirs ${theirCls}" title="How they feel about you">/ ${theirSign}${escapeHtml(String(theirs))}</small>
+          </strong>
           <small>${escapeHtml([
             person.relation || 'colonist',
             Number.isFinite(distance) && distance > 0 ? `${Math.round(distance)} cells` : ''
@@ -4245,7 +4253,7 @@ function renderSocial(s) {
     <div class="social-actions">
       <div class="social-actions-head">
         <span>${escapeHtml(active.pawn)}</span>
-        <small>${escapeHtml(active.relation || 'colonist')} · ${opinionSign}${escapeHtml(String(opinion))}${Number.isFinite(distance) && distance > 0 ? ` · ${Math.round(distance)} cells` : ''}</small>
+        <small>${escapeHtml(active.relation || 'colonist')} · You ${opinionSign}${escapeHtml(String(opinion))} · Them ${Number(active.opinionOf ?? 0) > 0 ? '+' : ''}${escapeHtml(String(Number(active.opinionOf ?? 0)))}${Number.isFinite(distance) && distance > 0 ? ` · ${Math.round(distance)} cells` : ''}</small>
       </div>
       <div class="social-action-grid">
         <button data-social-interaction="KindWords" ${blocked ? 'disabled' : ''}>Compliment</button>
@@ -4266,6 +4274,7 @@ function buildSocialPeople(s) {
       id: item.id,
       pawn: item.pawn || 'colonist',
       opinion: Number(item.opinion ?? 0),
+      opinionOf: Number(item.opinionOf ?? 0), // how they feel back (reciprocal)
       distance: Number(item.distance ?? 0),
       relation: ''
     });
@@ -4327,6 +4336,38 @@ function bindSocialButtons(root) {
       sendSocialInteraction(activeSocialTargetId, btn.dataset.socialInteraction);
     });
   });
+}
+
+// ── Colony roster (all colonists: gender, age, significant relations) ─────────
+let rosterState = null;      // last roster_state payload
+let rosterRequestedAt = 0;   // throttle re-requests to one per 5s
+
+function requestRoster() {
+  const now = Date.now();
+  if (now - rosterRequestedAt < 5000) return;
+  rosterRequestedAt = now;
+  send({ type: 'request_roster' });
+}
+
+function handleRosterState(msg) {
+  rosterState = msg;
+  if (activeCommandMenu === 'roster') renderCommandCenter();
+}
+
+function renderColonyRoster() {
+  const rows = getArray(rosterState?.colonists);
+  if (!rows.length) {
+    return `<div class="quiet-empty">${rosterState ? 'No colonists.' : 'Loading colonists…'}</div>`;
+  }
+  const genderMark = g => g === 'Female' ? '♀' : g === 'Male' ? '♂' : '—';
+  return `<div class="roster-list">
+    ${rows.map(c => `<div class="roster-row">
+      <span class="roster-name">${escapeHtml(c.name || 'colonist')}</span>
+      <span class="roster-meta">${genderMark(c.gender)} ${escapeHtml(String(c.age ?? '?'))}</span>
+      <span class="roster-relations">${escapeHtml(getArray(c.relations).join(' · ') || '—')}</span>
+      ${c.viewer ? `<span class="roster-viewer">${escapeHtml(c.viewer)}</span>` : '<span></span>'}
+    </div>`).join('')}
+  </div>`;
 }
 
 function sendSocialInteraction(targetId, interaction) {
@@ -4667,6 +4708,10 @@ function renderCommandMenuContent() {
     case 'story':
       commandMenuContent.innerHTML = `<div class="command-page">${renderStoryControls(pawnState)}</div>`;
       requestToolkitState();
+      break;
+    case 'roster':
+      commandMenuContent.innerHTML = `<div class="command-page">${renderColonyRoster()}</div>`;
+      requestRoster();
       break;
     case 'work':
       commandMenuContent.innerHTML = `<div class="command-page">${renderWorkControls(pawnState)}</div>`;

@@ -556,11 +556,18 @@ namespace Overlord
                         try
                         {
                             int opinion = pawn.relations.OpinionOf(other);
+                            // Reciprocal: how THEY feel about this pawn. Viewers could
+                            // only see one direction ("can't see relations both ways").
+                            // Full Serialize only runs on change (diff-gated), and the
+                            // hot signature path is untouched, so cost is fine.
+                            int opinionOf = 0;
+                            try { opinionOf = other.relations?.OpinionOf(pawn) ?? 0; } catch { }
                             opinions.Add(new Dictionary<string, object>
                             {
                                 ["id"] = other.thingIDNumber,
                                 ["pawn"] = other.LabelShort ?? "unknown",
                                 ["opinion"] = opinion,
+                                ["opinionOf"] = opinionOf,
                                 ["distance"] = (int)other.Position.DistanceTo(pawn.Position)
                             });
                         }

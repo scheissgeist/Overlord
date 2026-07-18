@@ -716,6 +716,9 @@ namespace Overlord
                 // becomes available in the colony (grab-if-available, keep-current).
                 PreferredWeaponController.Evaluate(session, pawn, now);
 
+                // Walk-to-target social: fire or expire a pending interaction intent.
+                SocialInteractionController.Resolve(session, pawn, now);
+
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";
                 if (!string.IsNullOrEmpty(jobLabel) && jobLabel != session.lastJobLabel)

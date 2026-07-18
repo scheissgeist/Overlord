@@ -26,6 +26,7 @@ namespace Overlord
         public const string ToolkitState = "toolkit_state";
         public const string ArmoryState = "armory_state";
         public const string ItemIcons = "item_icons";
+        public const string RosterState = "roster_state";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";
@@ -34,6 +35,7 @@ namespace Overlord
         public const string StateResyncRequest = "state_resync_request";
         public const string RequestArmory = "request_armory";
         public const string RequestIcons = "request_icons";
+        public const string RequestRoster = "request_roster";
         public const string CmdSetPreferredWeapon = "set_preferred_weapon";
 
         // --- Relay coordination ---

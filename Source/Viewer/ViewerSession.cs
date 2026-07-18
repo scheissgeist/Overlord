@@ -115,6 +115,13 @@ namespace Overlord
         // unreachable/claimed — remember the last tick we tried.
         public int lastPreferredWeaponTick = -999;
 
+        // Pending social interaction: the pawn is walking to a target to interact.
+        // Resolved on the per-pawn sweep when the pawn reaches the target. Transient
+        // (a walk-in-progress) — intentionally NOT persisted across save/load.
+        public int pendingSocialTargetId = -1;
+        public string pendingSocialInteraction;
+        public int pendingSocialExpireTick = -1;
+
         public ViewerSession()
         {
             permissions = new ViewerPermissions();

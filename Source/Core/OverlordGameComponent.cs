@@ -250,6 +250,7 @@ namespace Overlord
                         break;
                     case StateProtocol.RequestArmory:  HandleRequestArmory(json); break;
                     case StateProtocol.RequestIcons:   HandleRequestIcons(json); break;
+                    case StateProtocol.RequestRoster:  HandleRequestRoster(json); break;
                     case StateProtocol.Assign:         if (IsAdminMessage(json)) HandleAssign(json);       break;
                     case StateProtocol.Unassign:       if (IsAdminMessage(json)) HandleUnassign(json);     break;
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
@@ -549,6 +550,67 @@ namespace Overlord
                     ["type"] = StateProtocol.ItemIcons,
                     ["icons"] = pair.Value
                 });
+        }
+
+        // Colony roster: all free colonists with basic identity + significant
+        // relations, for the viewer's "who is everyone" window. On-demand only
+        // (fires when a viewer opens the window) — no per-tick cost.
+        private void HandleRequestRoster(string json)
+        {
+            string username = JsonHelper.ExtractLastString(json, "username");
+            if (string.IsNullOrEmpty(username))
+                return;
+
+            var rows = new List<Dictionary<string, object>>();
+            var maps = Find.Maps;
+            if (maps != null)
+            {
+                foreach (var map in maps)
+                {
+                    if (map?.mapPawns == null || !map.IsPlayerHome && map != Find.CurrentMap)
+                        continue;
+                    foreach (var p in map.mapPawns.FreeColonists)
+                    {
+                        if (p == null || p.Dead) continue;
+                        if (rows.Count >= 60) break;
+
+                        var rels = new List<string>();
+                        try
+                        {
+                            var direct = p.relations?.DirectRelations;
+                            if (direct != null)
+                            {
+                                foreach (var rel in direct)
+                                {
+                                    if (rel?.def == null || rel.otherPawn == null || rel.otherPawn.Dead) continue;
+                                    if (rels.Count >= 6) break;
+                                    rels.Add($"{rel.def.label ?? rel.def.defName}: {rel.otherPawn.LabelShort}");
+                                }
+                            }
+                        }
+                        catch { }
+
+                        string viewer = null;
+                        try { viewer = viewerManager?.GetSessionForPawn(p)?.displayName; } catch { }
+
+                        rows.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = p.thingIDNumber,
+                            ["name"] = p.LabelShort ?? "colonist",
+                            ["gender"] = p.gender.ToString(),
+                            ["age"] = p.ageTracker?.AgeBiologicalYears ?? 0,
+                            ["relations"] = rels,
+                            ["viewer"] = viewer,
+                        });
+                    }
+                }
+            }
+
+            SendToViewer(username, new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.RosterState,
+                ["colonists"] = rows
+            });
         }
 
         private void HandleChat(string json)

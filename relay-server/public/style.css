@@ -4875,6 +4875,27 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-gear .gear-prefer { min-width: 22px; padding: 3px 4px; background: transparent; color: var(--parchment-text-muted); }
 #tab-gear .gear-prefer.active { color: #f0c24a; border-color: rgba(240, 194, 74, 0.6); }
 
+/* Reciprocal opinion ("/ +5" = how they feel back) — smaller, muted next to yours */
+.social-person .social-theirs { font-size: 10px; font-weight: 500; opacity: 0.85; }
+
+/* Colony roster (Command Center section) */
+.roster-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) 60px minmax(0, 2fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(56, 64, 54, 0.42);
+}
+.roster-name { font-weight: 700; overflow-wrap: anywhere; }
+.roster-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.roster-relations { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.roster-viewer { color: var(--accent-strong); font-size: 10px; white-space: nowrap; }
+@media (max-width: 560px) {
+  .roster-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .roster-relations { grid-column: 1 / -1; }
+}
+
 #tab-gear .inventory-head,
 .events-head {
   display: flex;

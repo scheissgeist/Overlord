@@ -252,7 +252,7 @@ namespace Overlord
                     return ExecuteContextAction(pawn, json);
 
                 case StateProtocol.CmdSocialInteract:
-                    return ExecuteSocialInteract(pawn, json);
+                    return ExecuteSocialInteract(session, pawn, json);
 
                 default:
                     return ErrorResult($"Unknown action: {action}");
@@ -1071,7 +1071,12 @@ namespace Overlord
             return SuccessResult($"Dropped {thing.LabelShort ?? "item"}");
         }
 
-        private static Dictionary<string, object> ExecuteSocialInteract(Pawn pawn, string json)
+        // Walk-to-target social: viewers clicked Compliment/Insult/etc. and got
+        // "Cannot interact right now" ~always, because RimWorld requires the pawns
+        // to be adjacent AND free at that instant. Now: if close enough, interact
+        // immediately; otherwise order a walk to the target and remember a pending
+        // interaction that SocialInteractionController fires on arrival.
+        private static Dictionary<string, object> ExecuteSocialInteract(ViewerSession session, Pawn pawn, string json)
         {
             if (pawn?.interactions == null)
                 return ErrorResult("Pawn cannot socially interact");
@@ -1096,19 +1101,27 @@ namespace Overlord
             if (interaction == null)
                 return ErrorResult("Unknown interaction");
 
-            try
-            {
-                if (!pawn.interactions.CanInteractNowWith(target, interaction))
-                    return ErrorResult("Cannot interact with that pawn right now");
-                if (!pawn.interactions.TryInteractWith(target, interaction))
-                    return ErrorResult("Interaction failed");
-            }
-            catch (Exception ex)
-            {
-                return ErrorResult("Interaction failed: " + ex.Message);
-            }
+            // Close enough already → do it now.
+            if (SocialInteractionController.TryInteractNow(pawn, target, interaction, out string doneMsg, out string failMsg))
+                return SuccessResult(doneMsg);
+            if (failMsg != null)
+                return ErrorResult(failMsg);
 
-            return SuccessResult($"{interaction.label ?? interaction.defName} with {target.LabelShort ?? "colonist"}");
+            // Too far → walk over and remember the intent for the sweep to resolve.
+            if (pawn.Downed || pawn.Dead)
+                return ErrorResult("Your colonist can't move right now");
+            var job = JobMaker.MakeJob(JobDefOf.Goto, target);
+            job.locomotionUrgency = LocomotionUrgency.Jog;
+            if (!pawn.jobs.TryTakeOrderedJob(job))
+                return ErrorResult("Could not order your colonist to walk over");
+
+            if (session != null)
+            {
+                session.pendingSocialTargetId = targetId;
+                session.pendingSocialInteraction = interactionName;
+                session.pendingSocialExpireTick = Find.TickManager.TicksGame + SocialInteractionController.PendingExpireTicks;
+            }
+            return SuccessResult($"Walking over to {target.LabelShort ?? "colonist"} to {interaction.label ?? interactionName}…");
         }
 
         private static Dictionary<string, object> ExecuteContextMenu(Pawn pawn, string json, ViewerManager vm)
