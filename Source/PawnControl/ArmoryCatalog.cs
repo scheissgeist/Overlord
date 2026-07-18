@@ -194,6 +194,45 @@ namespace Overlord
             }
         }
 
+        /// <summary>
+        /// Finds a spawned weapon of the given def that this pawn could equip right
+        /// now (validates + not claimed by another pawn), preferring the closest.
+        /// Used by the preferred-weapon standing order. Returns null if none available.
+        /// Scans ThingsInGroup(Weapon) (bounded) — safe on the ~2s per-pawn sweep.
+        /// </summary>
+        public static Thing FindEquippableWeaponOfDef(Pawn pawn, string weaponDefName)
+        {
+            if (pawn?.Map == null || !pawn.Spawned || string.IsNullOrEmpty(weaponDefName))
+                return null;
+
+            Thing best = null;
+            float bestDistSq = float.MaxValue;
+            foreach (Thing thing in pawn.Map.listerThings.ThingsInGroup(ThingRequestGroup.Weapon))
+            {
+                if (thing?.def == null || thing.def.defName != weaponDefName)
+                    continue;
+                if (thing.Destroyed || !thing.Spawned)
+                    continue;
+                // Skip weapons another pawn already holds/carries.
+                if (thing.ParentHolder is Pawn_EquipmentTracker || thing.ParentHolder is Pawn_InventoryTracker)
+                    continue;
+                if (!ValidateEquipTarget(pawn, thing, out _))
+                    continue;
+                // Respect an active equip claim by a different pawn.
+                if (equipClaims.TryGetValue(thing.thingIDNumber, out EquipClaim claim) &&
+                    claim.pawnId != pawn.thingIDNumber && claim.expiresAt > Time.realtimeSinceStartup)
+                    continue;
+
+                float d = (thing.Position - pawn.Position).LengthHorizontalSquared;
+                if (d < bestDistSq)
+                {
+                    bestDistSq = d;
+                    best = thing;
+                }
+            }
+            return best;
+        }
+
         private static bool IsStoredCandidate(Thing thing)
         {
             if (thing?.def == null || thing.Destroyed || !thing.Spawned)

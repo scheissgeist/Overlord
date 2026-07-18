@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260717-portrait-nofloat-v1';
+const UI_BUILD = '20260717-preferred-weapon-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -108,6 +108,7 @@ let activeGearSlot = 'weapon';
 let gearSortMode = 'distance';
 let gearNearbyPage = 0;
 let gearSourceMode = 'nearby';
+let preferredWeaponDef = ''; // viewer's standing-order preferred weapon defName
 let armoryState = null;
 let armoryLoading = false;
 let armorySearch = '';
@@ -2057,6 +2058,8 @@ function handlePawnState(msg) {
   if (!s) return;
   // State may arrive as a JSON string (RawJson wrapper) — parse it
   if (typeof s === 'string') { try { s = JSON.parse(s); } catch { return; } }
+  // Per-session standing order carried on the envelope (not per-pawn state).
+  preferredWeaponDef = msg.preferredWeapon || '';
   const previousState = pawnState;
   const wasNull = previousState === null;
   markHostOnline('pawn_state');
@@ -2435,7 +2438,8 @@ function renderGear(s) {
         source: gearSourceMode, nearbyPage: gearNearbyPage,
         armory: armoryState, armoryLoading, armorySearch, armoryPage, repairEntry,
         toolkitCoins: toolkitState?.coins, toolkitUnlimited: toolkitState?.unlimitedCoins,
-        toolkitAvailable: toolkitState?.available, toolkitConnected: toolkitState?.chatConnected
+        toolkitAvailable: toolkitState?.available, toolkitConnected: toolkitState?.chatConnected,
+        preferredWeapon: preferredWeaponDef
       })) return;
   const items = buildGearItems(s);
   const nearby = buildNearbyGearItems(s);
@@ -2643,6 +2647,7 @@ function buildNearbyGearItems(s) {
       ].filter(Boolean);
       return {
       id: item?.id,
+      defName: item?.defName || '',
       type: item?.type || (slotKey === 'weapon' ? 'weapon' : 'apparel'),
       slotKey,
       slotLabel: gearSlotLabel(slotKey),
@@ -2674,6 +2679,7 @@ function buildArmoryGearItems(state) {
     ].filter(Boolean);
     return {
       id: item?.id,
+      defName: item?.defName || '',
       type: item?.type || (item?.slotKey === 'weapon' ? 'weapon' : 'apparel'),
       slotKey: item?.slotKey || 'other',
       slotLabel: gearSlotLabel(item?.slotKey),
@@ -2769,12 +2775,20 @@ function renderNearbyGearRow(item) {
   const stackBadge = item.stackCount > 1
     ? `<span class="gear-stack-badge">x${item.stackCount}</span>`
     : '';
+  // Weapons with a known defName get a "prefer" star — sets a standing order to
+  // auto-equip this weapon type whenever one is available in the colony.
+  const canPrefer = item.type === 'weapon' && item.defName;
+  const isPreferred = canPrefer && item.defName === preferredWeaponDef;
+  const preferBtn = canPrefer
+    ? `<button class="item-action gear-prefer${isPreferred ? ' active' : ''}" data-prefer-weapon="${escapeAttr(item.defName)}" title="${isPreferred ? 'Preferred — click to clear' : 'Auto-equip this weapon when available'}">${isPreferred ? '★' : '☆'}</button>`
+    : '';
   return `<div class="gear-row">
     <div class="gear-row-main">
       <span class="gear-name">${escapeHtml(item.label)}${stackBadge}</span>
       <span class="gear-meta-text">${escapeHtml(item.meta)}</span>
     </div>
     <span class="condition ${conditionClass(hp)}"><span style="width:${hp}%"></span></span>
+    ${preferBtn}
     <button class="item-action" data-equip-thing-id="${escapeAttr(item.id)}" ${blocked ? 'disabled' : ''} title="${escapeAttr(blocked)}">Equip</button>
   </div>`;
 }
@@ -2888,6 +2902,14 @@ function bindGearButtons(root) {
       sendEquipAction(btn.dataset.equipThingId);
     });
   });
+  // Preferred-weapon star: toggle the standing order for this weapon def.
+  root.querySelectorAll('[data-prefer-weapon]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const def = btn.dataset.preferWeapon;
+      // Clicking the already-preferred weapon clears it.
+      sendPreferredWeapon(def === preferredWeaponDef ? '' : def);
+    });
+  });
   // Dye: toggle the swatch palette open/closed for one worn item.
   root.querySelectorAll('[data-dye-toggle]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2925,6 +2947,19 @@ function sendEquipAction(thingId) {
   if (!Number.isFinite(id)) return;
   markCommandSent('equip', 'Equip sent');
   send({ type: 'command', action: 'equip', thingId: id });
+}
+
+// Standing order: set (or clear, when defName is '') the preferred weapon. The
+// pawn auto-equips a matching weapon when one is available in the colony.
+function sendPreferredWeapon(defName) {
+  const blocked = getActionBlockedReason('equip');
+  if (blocked) { appendLog(blocked); return; }
+  // Optimistic local update so the star flips immediately.
+  preferredWeaponDef = defName || '';
+  invalidatePanel('gear');
+  renderGear(pawnState);
+  markCommandSent('set_preferred_weapon', defName ? 'Preferred weapon set' : 'Preferred weapon cleared');
+  send({ type: 'command', action: 'set_preferred_weapon', defName: defName || '' });
 }
 
 // ─── Tile Map ─────────────────────────────────────────────────────────────────

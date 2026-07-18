@@ -227,6 +227,9 @@ namespace Overlord
                 case StateProtocol.CmdEquip:
                     return ExecuteEquip(pawn, json);
 
+                case StateProtocol.CmdSetPreferredWeapon:
+                    return ExecuteSetPreferredWeapon(session, pawn, json);
+
                 case StateProtocol.CmdDrop:
                     return ExecuteDrop(pawn, json);
 
@@ -722,6 +725,36 @@ namespace Overlord
             if (PawnPolicyController.SetArea(pawn, areaLabel))
                 return SuccessResult($"Set area to {areaLabel}");
             return ErrorResult($"Area '{areaLabel}' not found");
+        }
+
+        // Standing order: set/clear the viewer's preferred weapon def. An empty
+        // defName clears the preference. The actual auto-equip happens on the
+        // per-pawn sweep (PreferredWeaponController); we kick one immediate attempt
+        // here so a viewer setting it while a match is on the ground gets a fast
+        // response instead of waiting for the next sweep.
+        private static Dictionary<string, object> ExecuteSetPreferredWeapon(ViewerSession session, Pawn pawn, string json)
+        {
+            if (session == null)
+                return ErrorResult("No viewer session");
+
+            string defName = JsonHelper.ExtractString(json, "defName");
+            if (string.IsNullOrEmpty(defName))
+            {
+                session.preferredWeaponDef = null;
+                return SuccessResult("Preferred weapon cleared");
+            }
+
+            var def = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+            if (def == null || !def.IsWeapon)
+                return ErrorResult("That weapon is not available");
+
+            session.preferredWeaponDef = defName;
+            session.lastPreferredWeaponTick = -999; // allow an immediate attempt
+            if (pawn != null && Find.TickManager != null)
+                PreferredWeaponController.Evaluate(session, pawn, Find.TickManager.TicksGame);
+
+            string label = def.label ?? defName;
+            return SuccessResult($"Preferred weapon set: {label}. Your pawn will equip one when available.");
         }
 
         private static Dictionary<string, object> ExecuteEquip(Pawn pawn, string json)

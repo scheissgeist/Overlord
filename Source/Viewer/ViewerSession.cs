@@ -107,6 +107,14 @@ namespace Overlord
         // One no-cost self-service hairstyle/gender change per viewer.
         public bool freeAppearanceUsed = false;
 
+        // Standing order: preferred weapon defName. When set, the per-pawn sweep
+        // auto-equips a matching unclaimed weapon that exists in the colony if the
+        // pawn isn't already holding one. Empty/null = no preference. Persisted.
+        public string preferredWeaponDef;
+        // Throttle: don't re-attempt the auto-equip every sweep while the weapon is
+        // unreachable/claimed — remember the last tick we tried.
+        public int lastPreferredWeaponTick = -999;
+
         public ViewerSession()
         {
             permissions = new ViewerPermissions();
@@ -197,6 +205,7 @@ namespace Overlord
             Scribe_Values.Look(ref cameraCenterX, "cameraCenterX", 0f);
             Scribe_Values.Look(ref cameraCenterZ, "cameraCenterZ", 0f);
             Scribe_Values.Look(ref freeAppearanceUsed, "freeAppearanceUsed", false);
+            Scribe_Values.Look(ref preferredWeaponDef, "preferredWeaponDef");
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit)
             {

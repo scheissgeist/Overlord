@@ -712,6 +712,10 @@ namespace Overlord
                         pawn, MessageTypeDefOf.CautionInput, historical: false);
                 }
 
+                // Standing order: auto-equip the viewer's preferred weapon if one
+                // becomes available in the colony (grab-if-available, keep-current).
+                PreferredWeaponController.Evaluate(session, pawn, now);
+
                 // ── Action log detection ──────────────────────────────────────
                 string jobLabel = pawn.jobs?.curDriver?.GetReport() ?? "";
                 if (!string.IsNullOrEmpty(jobLabel) && jobLabel != session.lastJobLabel)
@@ -761,6 +765,10 @@ namespace Overlord
                         ["type"]  = StateProtocol.PawnState,
                         ["state"] = new JsonHelper.RawJson(stateJson)
                     };
+                    // Per-session standing order (not part of per-pawn state) — the
+                    // client shows it in the Gear tab and can clear/change it.
+                    if (!string.IsNullOrEmpty(session.preferredWeaponDef))
+                        msg["preferredWeapon"] = session.preferredWeaponDef;
                     comp?.SendToViewerPublic(session.username, msg);
                 }
 

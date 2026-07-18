@@ -4871,6 +4871,9 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-gear .inv-actions { display: flex; gap: 3px; }
 #tab-gear .item-action { padding: 3px 5px; border-color: var(--parchment-rule); background: rgba(88, 72, 49, 0.74); color: #fffaf0; font-size: 9px; }
 #tab-gear .item-action.ghost { border-color: var(--parchment-rule); background: transparent; color: var(--parchment-text-muted); }
+/* Preferred-weapon star — quiet until active, then gold. */
+#tab-gear .gear-prefer { min-width: 22px; padding: 3px 4px; background: transparent; color: var(--parchment-text-muted); }
+#tab-gear .gear-prefer.active { color: #f0c24a; border-color: rgba(240, 194, 74, 0.6); }
 
 #tab-gear .inventory-head,
 .events-head {

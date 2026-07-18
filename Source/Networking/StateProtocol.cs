@@ -34,6 +34,7 @@ namespace Overlord
         public const string StateResyncRequest = "state_resync_request";
         public const string RequestArmory = "request_armory";
         public const string RequestIcons = "request_icons";
+        public const string CmdSetPreferredWeapon = "set_preferred_weapon";
 
         // --- Relay coordination ---
         public const string HostConnected = "host_connected";
