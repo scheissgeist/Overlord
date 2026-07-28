@@ -988,7 +988,7 @@ namespace Overlord
                 Pawn newPawn = PawnGenerator.GeneratePawn(request);
 
                 // Spawn near map center
-                IntVec3 spawnCell = CellFinder.RandomClosewalkCellNear(map.Center, map, 10);
+                IntVec3 spawnCell = RimWorldCompat.FindColonistSpawnCell(map);
                 GenSpawn.Spawn(newPawn, spawnCell, map, Rot4.South, WipeMode.Vanish);
 
                 // Assign to viewer if specified

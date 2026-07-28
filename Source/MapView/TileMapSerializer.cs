@@ -85,6 +85,17 @@ namespace Overlord
         }
 
         /// <summary>
+        /// Palette lookup exposed for the dev-mode terrain audit. Byte 0 means the
+        /// terrain renders to viewers as near-black "unknown", so the audit can
+        /// list coverage gaps (including from other mods) without duplicating the
+        /// mapping logic here.
+        /// </summary>
+        public static byte DebugTerrainByte(TerrainDef def)
+        {
+            return GetTerrainByte(def);
+        }
+
+        /// <summary>
         /// Serialize the full terrain grid as a compact byte array (base64).
         /// Called once per viewer on assignment or map change.
         /// </summary>

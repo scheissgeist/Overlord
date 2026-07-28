@@ -1254,6 +1254,81 @@ namespace Overlord
             return null;
         }
 
+        /// <summary>
+        /// Pick a safe cell to drop a newly-created colonist on.
+        ///
+        /// The old behaviour was RandomClosewalkCellNear(map.Center, ...), which
+        /// assumes the middle of the map is standable. That holds for a normal
+        /// surface map but not for Odyssey space maps or a gravship in flight,
+        /// where the centre can be open vacuum and the hull is a small island
+        /// somewhere on the map. Anchor on an existing colonist (or the player's
+        /// home base) first, and only fall back to the centre when there is
+        /// nothing better, so a spawn during flight lands on the ship instead of
+        /// in space.
+        /// </summary>
+        public static IntVec3 FindColonistSpawnCell(Map map, Pawn preferNear = null)
+        {
+            if (map == null)
+                return IntVec3.Invalid;
+
+            try
+            {
+                // 1. Next to a specific pawn (the viewer's own colonist) when given.
+                if (preferNear != null && preferNear.Spawned && preferNear.Map == map)
+                {
+                    IntVec3 near = CellFinder.RandomClosewalkCellNear(preferNear.Position, map, 6);
+                    if (near.IsValid && near.Standable(map))
+                        return near;
+                }
+
+                // 2. Next to any living colonist already on this map — on a gravship
+                //    that is by definition somewhere inside the hull.
+                var anchors = map.mapPawns?.FreeColonistsSpawned;
+                if (anchors != null)
+                {
+                    foreach (Pawn anchor in anchors)
+                    {
+                        if (anchor == null || !anchor.Spawned || anchor.Dead)
+                            continue;
+                        IntVec3 near = CellFinder.RandomClosewalkCellNear(anchor.Position, map, 6);
+                        if (near.IsValid && near.Standable(map))
+                            return near;
+                    }
+                }
+
+                // 3. A player-owned building (bed, workbench, the gravship console).
+                var buildings = map.listerBuildings?.allBuildingsColonist;
+                if (buildings != null)
+                {
+                    foreach (Building building in buildings)
+                    {
+                        if (building == null || !building.Spawned)
+                            continue;
+                        IntVec3 near = CellFinder.RandomClosewalkCellNear(building.Position, map, 6);
+                        if (near.IsValid && near.Standable(map))
+                            return near;
+                    }
+                }
+
+                // 4. Vanilla fallback: centre of the map, as before.
+                IntVec3 center = CellFinder.RandomClosewalkCellNear(map.Center, map, 10);
+                if (center.IsValid && center.Standable(map))
+                    return center;
+
+                // 5. Last resort: any standable cell at all. Better than dropping
+                //    the pawn into vacuum or failing the spawn outright.
+                IntVec3 any;
+                if (CellFinderLoose.TryGetRandomCellWith(c => c.Standable(map), map, 1000, out any))
+                    return any;
+
+                return center;
+            }
+            catch
+            {
+                return CellFinder.RandomClosewalkCellNear(map.Center, map, 10);
+            }
+        }
+
         public static IDisposable TemporarilySetCurrentMap(Map map)
         {
             var game = Current.Game;
