@@ -333,6 +333,10 @@ namespace Overlord
             session.ResetTacticalMapEntities();
             AnnotateTacticalMapMessage(session, map, fullMap, snapshot: true);
             session.tacticalMapChunkSeq = 0;
+            // Record which map this baseline belongs to so SendTacticalMapDelta
+            // can detect a map change. Without this the change guard would never
+            // clear and every cycle would re-send a full map.
+            session.tacticalMapUniqueId = map.uniqueID;
             session.tacticalMapChunkHashes = TileMapSerializer.BuildChunkHashSnapshot(map);
             comp.SendToViewerPublic(username, fullMap);
 
@@ -357,6 +361,15 @@ namespace Overlord
                 return false;
 
             if (session.tacticalMapEpoch <= 0 || session.tacticalMapSeq <= 0)
+                return SendTacticalMapSnapshot(session.username);
+
+            // The pawn changed maps (Odyssey gravship launch, caravan, pod drop).
+            // Deltas and chunk hashes are keyed by cell coords only, so streaming
+            // them now would paint the new map's entities onto the old map's
+            // cached terrain and let stale chunk hashes suppress real changes.
+            // Force a fresh baseline instead; the snapshot bumps the epoch, which
+            // is what tells the browser to drop its canvas.
+            if (session.tacticalMapUniqueId != pawn.Map.uniqueID)
                 return SendTacticalMapSnapshot(session.username);
 
             HashSet<int> entityIds;

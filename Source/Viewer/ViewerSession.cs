@@ -37,6 +37,13 @@ namespace Overlord
         public Dictionary<int, int> tacticalEntityHashes;
         [System.NonSerialized]
         public int tacticalMapChunkSeq;
+        // Which map this viewer's cached terrain/chunk hashes belong to. Deltas
+        // and chunk hashes are keyed by cell coords with no map identity, so a
+        // pawn moving between maps (Odyssey gravship launch, caravan, pod drop)
+        // would otherwise apply the new map's deltas onto the old map's canvas.
+        // -1 = nothing sent yet.
+        [System.NonSerialized]
+        public int tacticalMapUniqueId = -1;
         [System.NonSerialized]
         public Dictionary<string, int> tacticalMapChunkHashes;
 
@@ -185,6 +192,7 @@ namespace Overlord
             tacticalEntityEpoch = 0;
             tacticalEntitySeq = 0;
             tacticalMapChunkSeq = 0;
+            tacticalMapUniqueId = -1;
             ResetTacticalMapEntities();
             ResetTacticalMapChunks();
         }
