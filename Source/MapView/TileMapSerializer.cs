@@ -38,20 +38,49 @@ namespace Overlord
             ["WoodPlankFloor"] = 30, ["MetalTile"] = 31, ["SterileTile"] = 32,
             ["PavedTile"] = 33, ["CarpetDark"] = 34, ["FlagstoneGranite"] = 35,
             ["ConcreteTile"] = 33,
+            // Odyssey (1.6). Verified against Data/Odyssey/Defs/TerrainDefs on
+            // RimWorld 1.6.4871. Without these, 19 of the expansion's 30 terrains
+            // fell through to byte 0, so a gravship or orbital platform rendered
+            // to viewers as a near-black void with pawns standing on nothing.
+            // 40-block = space/structure, 45-block = lava, 50-block = toxic/misc.
+            ["Space"] = 40, ["Substructure"] = 41,
+            ["OrbitalPlatform"] = 42, ["MechanoidPlatform"] = 42,
+            ["AncientMegastructure"] = 43,
+            ["HeavyBridge"] = 44, ["AncientHeavyBridge"] = 44,
+            ["FlagstoneVacstone"] = 35,
+            ["LavaDeep"] = 45, ["LavaShallow"] = 46, ["CooledLava"] = 47,
+            ["VolcanicRock"] = 7, ["DryLakeBed"] = 2,
+            ["InsectSludge"] = 50, ["HotSpring"] = 21,
+            ["ThinIce"] = 6,
+            ["MarshFlood"] = 4, ["SpringFlood"] = 21,
+            ["ToxicFlood"] = 51, ["ToxicWaterDeep"] = 51,
+            ["ToxicWaterOceanDeep"] = 52, ["ToxicWaterShallow"] = 53,
+            ["ToxicWaterOceanShallow"] = 53, ["ToxicWaterMovingShallow"] = 53,
+            ["ToxicWaterMovingChestDeep"] = 51,
         };
 
         private static byte GetTerrainByte(TerrainDef def)
         {
             if (def == null) return 0;
             if (terrainPalette.TryGetValue(def.defName, out byte val)) return val;
-            // Fallback heuristics
+            // Fallback heuristics. Odyssey-era terms come first: an unlisted
+            // space/lava terrain must not fall through to 0, because byte 0 is
+            // drawn as near-black "unknown" and is indistinguishable from empty
+            // space — that reads to a viewer as walkable ground over vacuum/lava.
             string name = def.defName.ToLower();
+            if (name.Contains("lava")) return name.Contains("deep") ? (byte)45 : (byte)46;
+            if (name.Contains("space") || name.Contains("vacuum")) return 40;
+            if (name.Contains("substructure")) return 41;
+            if (name.Contains("platform")) return 42;
+            if (name.Contains("toxic")) return name.Contains("shallow") ? (byte)53 : (byte)51;
             if (name.Contains("water")) return 20;
             if (name.Contains("sand")) return 3;
             if (name.Contains("rough")) return 7;
             if (name.Contains("smooth")) return 10;
             if (name.Contains("carpet") || name.Contains("floor") || name.Contains("tile")) return 30;
             if (name.Contains("soil") || name.Contains("dirt")) return 1;
+            if (name.Contains("ice")) return 6;
+            if (name.Contains("bridge")) return 44;
             return 0;
         }
 

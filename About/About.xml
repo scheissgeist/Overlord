@@ -12,6 +12,14 @@ Inspired by Puppeteer (Andreas Pardeike / Brrainz). New codebase for RimWorld 1.
     </supportedVersions>
     <loadAfter>
         <li>ludeon.rimworld</li>
+        <!-- Expansions are optional, not dependencies: Overlord must keep
+             working for streamers who own none of them. loadAfter only orders
+             load if present, so listing them is safe either way. -->
+        <li>ludeon.rimworld.royalty</li>
+        <li>ludeon.rimworld.ideology</li>
+        <li>ludeon.rimworld.biotech</li>
+        <li>ludeon.rimworld.anomaly</li>
+        <li>ludeon.rimworld.odyssey</li>
         <li>brrainz.harmony</li>
         <li>nry.toolkitcore</li>
         <li>nry.twitchtoolkit</li>

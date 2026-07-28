@@ -25,6 +25,20 @@ const TILE_COLORS = {
   33: '#666666', // paved
   34: '#3a2222', // carpet
   35: '#5a5a5a', // flagstone
+  // Odyssey. Space reads darker than byte 0 "unknown" and structure reads
+  // lighter, so a gravship hull is legible against the vacuum around it.
+  40: '#05060d', // space / vacuum
+  41: '#8c8f96', // substructure (gravship floor)
+  42: '#6e7279', // orbital / mechanoid platform
+  43: '#4a4f57', // ancient megastructure
+  44: '#6a5a3f', // heavy bridge
+  45: '#c2410c', // deep lava
+  46: '#ea6a1e', // shallow lava
+  47: '#2c2320', // cooled lava
+  50: '#6b7a3a', // insect sludge
+  51: '#4a5c2a', // toxic water deep
+  52: '#33421d', // toxic ocean deep
+  53: '#6a7d3d', // toxic water shallow
 };
 
 const PAWN_COLORS = {
