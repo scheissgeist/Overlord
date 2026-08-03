@@ -3222,9 +3222,10 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 .toolkit-rate {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: 11px;
   line-height: 1.35;
+  white-space: nowrap;
 }
 
 .toolkit-empty {
@@ -3306,17 +3307,23 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 .buy-arg-input,
+/* Sits inline in .buy-meta beside the buttons. Full-width under the name it
+   made every apparel/buildable row taller than its neighbours, breaking the
+   alignment down the list. */
 .buy-stuff-select {
-  width: 100%;
-  max-width: 100%;
-  margin-top: 4px;
+  width: auto;
+  min-width: 0;
+  max-width: 92px;
+  flex: 0 1 auto;
+  height: 28px;
+  margin: 0;
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(232, 212, 168, 0.18);
   border-radius: 2px;
   color: #f3e7c4;
-  padding: 5px 8px;
+  padding: 0 6px;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .buy-arg-input:focus,
@@ -3398,19 +3405,25 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font-weight: 500;
 }
 
+/* Multi-column once there's room. A shop row is ~320px of real content; on a
+   1280px desktop the old single column left half the row empty and pushed the
+   catalog off-screen. */
 .buy-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(316px, 1fr));
   gap: 4px;
 }
 
+/* Row shape: [icon] [name + price] [actions] on ONE baseline. The previous
+   layout stacked price / qty / Buy / Buy&Equip into a right-hand column, which
+   cost 130px of height per item — about 3 items per phone screen. */
 .buy-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(7.5rem, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 8px 10px;
+  padding: 7px 9px;
   border: 1px solid rgba(232, 212, 168, 0.12);
   border-radius: 2px;
   background: rgba(0, 0, 0, 0.28);
@@ -3424,7 +3437,8 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 .buy-main {
   min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  align-content: center;
 }
 
 .buy-main strong {
@@ -3433,9 +3447,19 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   color: #f3e7c4;
   font-size: 13px;
   font-weight: 650;
-  line-height: 1.2;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Price sits directly under the name so the two read as one object. It used to
+   live in a right-hand column with nothing tying it to the item it prices. */
+.buy-main .buy-price {
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .buy-main span {
@@ -3453,11 +3477,12 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 .buy-meta {
-  display: grid;
-  justify-items: end;
-  align-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 5px;
-  min-width: 108px;
+  min-width: 0;
 }
 
 .buy-price {
@@ -3477,16 +3502,16 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 .buy-quantity {
   display: grid;
-  grid-template-columns: 22px 44px 22px;
-  gap: 3px;
+  grid-template-columns: 22px 32px 22px;
+  gap: 2px;
   align-items: center;
   justify-content: end;
 }
 
 .buy-quantity input {
   min-width: 0;
-  width: 44px;
-  height: 24px;
+  width: 32px;
+  height: 26px;
   padding: 0 4px;
   border: 1px solid rgba(232, 212, 168, 0.18);
   border-radius: 2px;
@@ -3498,7 +3523,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 .buy-quantity button {
-  height: 24px;
+  height: 26px;
   width: 22px;
   border: 1px solid rgba(232, 212, 168, 0.18);
   border-radius: 2px;
@@ -3515,15 +3540,14 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 .buy-actions {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 4px;
-  justify-items: end;
 }
 
 /* Item thumbnails (buy / gear / inventory). image-rendering:pixelated keeps
    RimWorld's low-res sprites crisp instead of blurring them. */
 .item-icon,
-.buy-icon,
 .gear-icon {
   display: inline-block;
   width: 22px;
@@ -3534,20 +3558,37 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   flex: 0 0 auto;
 }
 
-.buy-icon { margin-right: 6px; }
+/* Shop icons get their own grid column at 34px. At 22px inline they were
+   smaller than the text beside them and read as smudges rather than as the
+   item — which is the one job a shop thumbnail has. */
+.buy-icon {
+  display: block;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
 
 .item-icon-empty,
-.buy-icon-empty,
 .gear-icon-empty {
   background: rgba(232, 212, 168, 0.06);
   border: 1px solid rgba(232, 212, 168, 0.08);
   border-radius: 2px;
 }
 
+/* Placeholder keeps the icon column from collapsing when an item has no
+   thumbnail, so names stay aligned down the list. */
+.buy-icon-empty {
+  background: rgba(232, 212, 168, 0.05);
+  border: 1px solid rgba(232, 212, 168, 0.08);
+  border-radius: 2px;
+}
+
 .buy-meta button {
-  min-width: 72px;
+  min-width: 0;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 11px;
   border: 1px solid rgba(210, 169, 93, 0.45);
   border-radius: 2px;
   background: rgba(210, 169, 93, 0.14);
@@ -3562,7 +3603,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 /* Buy & Equip = "to your colonist" — a green tint distinguishes destination
    (pawn vs colony) without adding a new accent hue to the whole view. */
 .buy-actions .buy-equip {
-  min-width: 96px;
+  min-width: 0;
   border-color: rgba(122, 168, 96, 0.5);
   background: rgba(122, 168, 96, 0.14);
   color: #cfe6b4;
@@ -5025,6 +5066,18 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   }
   #tab-gear .gear-slot-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   #tab-gear .inventory-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+
+  /* Phone: reclaim width so name + price + actions stay on ONE line. The
+     desktop 7.5rem name floor and 34px icon push the Buy button to a second
+     row here, which is the height cost the shop was rebuilt to remove. */
+  .buy-item {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  .buy-icon { width: 28px; height: 28px; }
+  .buy-meta { flex-wrap: nowrap; }
+  .buy-meta button { padding: 0 9px; }
 }
 
 @media (max-height: 560px) {

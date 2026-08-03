@@ -5105,16 +5105,15 @@ function renderBuyControls() {
         <span><strong>${escapeHtml(formatKarma(karma))}</strong> karma</span>
         <span class="buy-wallet-sep">·</span>
         <span class="buy-wallet-status ${connected ? 'ok' : 'warn'}">${escapeHtml(status)}</span>
+        ${canBuy ? renderToolkitRate() : ''}
       </div>
       <button class="toolkit-refresh" data-command-action="toolkit-refresh">Refresh</button>
     </div>
-    ${canBuy ? renderToolkitRate() : ''}
     ${feedback}
     ${!available ? `<div class="buy-banner">Twitch Toolkit is not loaded on the host.</div>` : ''}
     ${available && !connected ? `<div class="buy-banner warn">Toolkit chat is offline on the host — purchases stay locked until it reconnects in RimWorld.</div>` : ''}
     <div class="buy-toolbar">
       <input class="buy-search" type="search" data-buy-search value="${escapeAttr(buySearchQuery)}" placeholder="Search…" aria-label="Search store">
-      <span class="buy-toolbar-count">${escapeHtml(String(decorated.length))}</span>
     </div>
     <div class="buy-shop-tabs">
       ${renderBuyShopTab('all', decorated.length, affordable.length)}
@@ -5122,7 +5121,7 @@ function renderBuyControls() {
     </div>
     <div class="buy-shops">
       ${selectedShopKeys.length
-        ? selectedShopKeys.map(key => renderBuyShopGroup(key, shops.get(key) || [], canBuy)).join('')
+        ? selectedShopKeys.map(key => renderBuyShopGroup(key, shops.get(key) || [], canBuy, selectedShopKeys.length > 1)).join('')
         : `<div class="toolkit-empty slim">${query ? 'No matches.' : 'Store is empty.'}</div>`}
     </div>
   </div>`;
@@ -5159,14 +5158,16 @@ function renderBuyShopTab(key, total, available) {
   </button>`;
 }
 
-function renderBuyShopGroup(key, rows, canBuy) {
+// showHeading is false when one shop tab is selected — the active tab already
+// names the section, so the header just repeated it.
+function renderBuyShopGroup(key, rows, canBuy, showHeading = true) {
   const info = BUY_SHOPS[key] || BUY_SHOPS.other;
   const available = rows.filter(row => row.state.listedAffordable && !row.state.needsInput).length;
   return `<div class="buy-group">
-    <div class="buy-group-head">
+    ${showHeading ? `<div class="buy-group-head">
       <span>${escapeHtml(info.label)}</span>
       <small>${available}/${rows.length}</small>
-    </div>
+    </div>` : ''}
     <div class="buy-grid">
       ${rows.length ? rows.map(row => renderBuyItem(row.item, canBuy, row.state)).join('') : '<div class="toolkit-empty slim">Nothing here.</div>'}
     </div>
@@ -5178,7 +5179,9 @@ function renderToolkitRate() {
   const amount = Number(toolkitState.coinAmount ?? 0);
   const interval = Number(toolkitState.coinInterval ?? 0);
   if (!amount || !interval) return '';
-  return `<div class="toolkit-rate">Earning ${escapeHtml(formatNumber(amount))} coins every ${escapeHtml(formatNumber(interval))} minute${interval === 1 ? '' : 's'} before karma and viewer bonuses.</div>`;
+  // Rides on the wallet line as a compact rate rather than its own sentence —
+  // as a paragraph it ate a line of vertical space above every shop view.
+  return `<span class="buy-wallet-sep">·</span><span class="toolkit-rate">+${escapeHtml(formatNumber(amount))}/${escapeHtml(formatNumber(interval))}min</span>`;
 }
 
 function getBuyShop(item) {
@@ -5314,27 +5317,36 @@ function renderBuyItem(item, canBuy, state = null) {
         return `<option value="${escapeAttr(value)}" ${value === selectedStuff ? 'selected' : ''}>${escapeHtml(label)}</option>`;
       }).join('')}
     </select>` : '';
-  const qtyControls = buyState.isItem ? `<div class="buy-quantity" aria-label="Quantity">
+  // Only stackable goods (steel, meals, medicine) get a quantity stepper. A
+  // weapon or a worn vest is bought one at a time, so showing "- 1 +" on those
+  // rows was a control nobody could use costing a line of height each.
+  const qtyControls = buyState.isItem && isStackableBuyItem(item) ? `<div class="buy-quantity" aria-label="Quantity">
       <button data-buy-qty-step="-1" data-buy-qty-sku="${escapeAttr(sku)}" ${buyState.quantity <= 1 ? 'disabled' : ''}>-</button>
       <input data-buy-qty-input="${escapeAttr(sku)}" type="text" inputmode="numeric" pattern="[0-9]*" value="${escapeAttr(getBuyQuantityInputValue(item))}" aria-label="Quantity for ${escapeAttr(item?.label || sku)}">
       <button data-buy-qty-step="1" data-buy-qty-sku="${escapeAttr(sku)}" ${buyState.quantity >= 100 ? 'disabled' : ''}>+</button>
     </div>` : '';
   const argInput = buyState.needsInput ? `<input class="buy-arg-input" data-buy-arg-input="${escapeAttr(sku)}" type="text" value="${escapeAttr(buyArgumentDrafts.get(sku) || '')}" placeholder="${escapeAttr(buyState.syntax || 'Argument')}" aria-label="Argument for ${escapeAttr(item?.label || sku)}">` : '';
   const buyIcon = item?.defName ? itemIconHtml(item.defName, selectedStuff || '', 'buy-icon') : '';
+  // "Equip" rather than "Buy & Equip": it sits beside the Buy button, so the
+  // buy verb is already established and the long label forced a second line.
+  const equipButton = isPersonalBuyItem(item)
+    ? `<button class="buy-equip" data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" data-buy-equip="1" ${disabled ? 'disabled' : ''} title="${escapeAttr(disabled ? (blockReason || '') : 'Buy & Equip — goes to your colonist')}">${escapeHtml(disabled ? (blockReason || 'Locked') : 'Equip')}</button>`
+    : '';
   return `<div class="buy-item${disabled ? ' disabled' : ''}">
+    ${buyIcon || '<span class="buy-icon buy-icon-empty"></span>'}
     <div class="buy-main">
-      ${buyIcon}<strong>${escapeHtml(item?.label || sku)}</strong>
+      <strong>${escapeHtml(item?.label || sku)}</strong>
+      <span class="buy-price">${escapeHtml(priceLine)}<small> coins</small></span>
       ${item?.mustResearchFirst && item?.researched === false ? `<span class="buy-warning">${escapeHtml(item?.researchProject ? `Needs ${item.researchProject}` : 'Needs research')}</span>` : ''}
       ${buyState.needsInput && buyState.syntax ? `<span class="buy-syntax">${escapeHtml(buyState.syntax)}</span>` : ''}
-      ${stuffSelector}
       ${argInput}
     </div>
     <div class="buy-meta">
-      <span class="buy-price">${escapeHtml(priceLine)}<small> coins</small></span>
+      ${stuffSelector}
       ${qtyControls}
       <div class="buy-actions">
         <button data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" ${disabled ? 'disabled' : ''} title="${escapeAttr(blockReason || 'Buy — drops at colony')}">${escapeHtml(buttonLabel)}</button>
-        ${isPersonalBuyItem(item) ? `<button class="buy-equip" data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" data-buy-equip="1" ${disabled ? 'disabled' : ''} title="${escapeAttr(disabled ? (blockReason || '') : 'Buy & Equip — goes to your colonist')}">${escapeHtml(disabled ? (blockReason || 'Locked') : 'Buy & Equip')}</button>` : ''}
+        ${equipButton}
       </div>
     </div>
   </div>`;
@@ -5348,6 +5360,15 @@ function isPersonalBuyItem(item) {
   if (!item || item.kind !== 'item') return false;
   if (item.isWeapon || item.isApparel) return true;
   return false;
+}
+
+// Stackable = bought by the dozen (steel, wood, meals, medicine). Weapons,
+// apparel and buildings are bought singly, so they don't get a qty stepper.
+// isWeapon/isApparel/isBuildable come from the host
+// (Source/Toolkit/TwitchToolkitBridge.cs).
+function isStackableBuyItem(item) {
+  if (!item || item.kind !== 'item') return false;
+  return !item.isWeapon && !item.isApparel && !item.isBuildable;
 }
 
 function formatPrice(value) {
