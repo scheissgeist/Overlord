@@ -503,15 +503,13 @@ namespace Overlord
                 if (string.IsNullOrEmpty(sku) || price <= 0) continue;
 
                 ThingDef def = ResolveThingDef(defName);
-                // Live animals are PawnKindDefs, so ResolveThingDef returns null
-                // and the text classifier matched their "meat" thing category —
-                // a muffalo listed under Food, with no way to browse animals at
-                // all. Resolve the race first and categorise it honestly.
-                PawnKindDef kind = ResolveLivestockKind(defName, sku);
-                string label = kind != null
-                    ? (kind.label ?? kind.defName)
-                    : LabelForThing(def, defName, sku);
-                string category = kind != null
+                // Animals are ordinary ThingDefs in Toolkit's store (verified
+                // against TwitchToolkit 1.6 — see IsAnimalStoreEntry), but their
+                // thingCategories include meat/leather, so the text classifier
+                // filed a muffalo under Food with no way to browse animals.
+                bool isAnimal = IsAnimalStoreEntry(def);
+                string label = LabelForThing(def, defName, sku);
+                string category = isAnimal
                     ? "animals"
                     : CategoryForThing(def, defName, label);
                 var stuffOptions = BuildStuffOptions(def);
@@ -538,7 +536,7 @@ namespace Overlord
                     // shared stuffCatalog. Inlining the full option objects on
                     // every entry was what forced the old low item caps.
                     ["stuffRefs"] = CollectStuffRefs(stuffOptions),
-                    ["isAnimal"] = kind != null,
+                    ["isAnimal"] = isAnimal,
                     ["isWeapon"] = def?.IsWeapon == true,
                     ["isApparel"] = def?.apparel != null,
                     ["isBuildable"] = def != null && (def.building != null || def.Minifiable || def.category == ThingCategory.Building),
@@ -1838,34 +1836,33 @@ namespace Overlord
         }
 
         /// <summary>
-        /// Resolves a store entry to a purchasable ANIMAL race, or null if the
-        /// entry is not an animal. Toolkit lists live animals by PawnKindDef
-        /// name, which ResolveThingDef cannot see — so without this they fell
-        /// through to the text classifier and matched their "meat" thing
-        /// category, landing under Food.
+        /// True when a store entry is a live ANIMAL rather than an item.
+        ///
+        /// Verified against the real TwitchToolkit 1.6 assembly rather than
+        /// assumed: Store_ItemEditor.GetDefaultItems() filters
+        /// DefDatabase&lt;ThingDef&gt; and admits animals through its
+        /// "t.race != null" clause, and Item.PutItemInCargoPod resolves the
+        /// entry with ThingDef.Named(defname) + ThingMaker.MakeThing. So the
+        /// store's defname is ALWAYS a ThingDef — the animal's race ThingDef
+        /// (e.g. "Muffalo"), never a PawnKindDef.
+        ///
+        /// def.race.Animal is therefore the whole test. An earlier version of
+        /// this looked animals up in DefDatabase&lt;PawnKindDef&gt;, which would
+        /// have missed every one of them.
+        ///
+        /// Why it matters: an animal ThingDef's thingCategories include meat/
+        /// leather, so the text classifier filed a muffalo under Food.
         /// </summary>
-        private static PawnKindDef ResolveLivestockKind(string defName, string sku)
+        private static bool IsAnimalStoreEntry(ThingDef def)
         {
             try
             {
-                foreach (string candidate in new[] { defName, sku })
-                {
-                    if (string.IsNullOrEmpty(candidate)) continue;
-                    PawnKindDef found = DefDatabase<PawnKindDef>.GetNamedSilentFail(candidate);
-                    if (found == null)
-                    {
-                        found = DefDatabase<PawnKindDef>.AllDefsListForReading
-                            .FirstOrDefault(k => k != null
-                                && (string.Equals(k.defName, candidate, StringComparison.OrdinalIgnoreCase)
-                                 || string.Equals(k.label, candidate, StringComparison.OrdinalIgnoreCase)));
-                    }
-                    // Only animals — humanlike pawn kinds are not shop stock.
-                    if (found?.RaceProps != null && found.RaceProps.Animal)
-                        return found;
-                }
+                // race != null covers animals AND humanlikes; RaceProps.Animal
+                // excludes humanlikes (Toolkit already drops "Human" explicitly,
+                // but modded humanlike races would otherwise slip through).
+                return def?.race != null && def.race.Animal;
             }
-            catch { }
-            return null;
+            catch { return false; }
         }
 
         private static string CategoryForThing(ThingDef def, string defName, string label)
