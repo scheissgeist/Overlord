@@ -72,6 +72,12 @@ namespace Overlord
         // draw commands and the toggle both run there), so no volatile needed.
         private static bool unlitViewerFrames = true;
 
+        // Below this CurSkyGlow, skipping the lighting overlay is worth the flatter
+        // look; at or above it the map is readable and the overlay stays, so daylight
+        // frames keep RimWorld's normal shading and colour. Dusk sits around 0.6-0.7
+        // and is still legible, so the cut is below that.
+        private const float UnlitSkyGlowThreshold = 0.45f;
+
         // ── Adaptive bandwidth pressure (main-thread only) ──────────────────────
         // Viewer COUNT is the wrong axis for load: 8 wide-viewport viewers backed the
         // send queue up worse than 15 narrow ones (2026-07-10 telemetry). The real
@@ -661,11 +667,19 @@ namespace Overlord
         /// </summary>
         private int GetFramePixelBudget(int activeViewerCount)
         {
+            // Tiers raised 2026-08-04 after a viewer reported "the resolution is
+            // terrible" at 10 viewers. The session log showed why the old numbers
+            // were too conservative: at viewers=10 the frame sat pinned at
+            // px=699k/700k while pressure=0.00, sendQueue=0, skipped=0 and
+            // avgRenderMs=2-4 — headcount was throttling a pipe with idle headroom,
+            // and crossing 8→9 viewers cost 26% of the resolution in one step.
+            // Congestion is handled by the pressure multiplier below, which is the
+            // measured signal; headcount is only a coarse prior.
             int budget;
-            if (activeViewerCount > 12)      budget = 480_000;   // ~900x540
-            else if (activeViewerCount > 8)  budget = 700_000;   // ~1120x625
-            else if (activeViewerCount > 4)  budget = 950_000;   // ~1300x730
-            else if (activeViewerCount > 2)  budget = 1_300_000; // ~1520x855
+            if (activeViewerCount > 12)      budget = 700_000;   // ~1120x625
+            else if (activeViewerCount > 8)  budget = 950_000;   // ~1300x730
+            else if (activeViewerCount > 4)  budget = 1_300_000; // ~1520x855
+            else if (activeViewerCount > 2)  budget = 1_700_000; // ~1740x980
             else                             budget = 2_100_000; // solo/duo can be sharp
             // Congestion shrinks the frame too, not just quality/interval.
             budget = Mathf.RoundToInt(budget * Mathf.Lerp(1f, 0.55f, bandwidthPressure));
@@ -920,8 +934,16 @@ namespace Overlord
             // early-returns when !Visible (verified against Assembly-CSharp), so
             // this cleanly omits the darkness mesh for our draw only. Restored in
             // finally — the streamer's own view must be untouched.
+            // Gate on ACTUAL darkness. Shipping this unconditionally (2026-08-03)
+            // stripped the lighting overlay from daylight frames too, which reads as
+            // flat and washed-out — reported by a viewer the next session. The
+            // overlay is only worth removing when it is the thing making the frame
+            // unreadable, so only skip it once the sky is genuinely dark.
+            // CurSkyGlow: ~1.0 full day, ~0.0 deep night. Pure field read, no cost.
             bool prevLightingOverlay = DebugViewSettings.drawLightingOverlay;
-            if (unlitViewerFrames)
+            bool skipLighting = unlitViewerFrames
+                && (map.skyManager?.CurSkyGlow ?? 1f) < UnlitSkyGlowThreshold;
+            if (skipLighting)
                 DebugViewSettings.drawLightingOverlay = false;
             try
             {
