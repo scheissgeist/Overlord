@@ -113,6 +113,141 @@ namespace Overlord
         /// thread. topDown = buffer row 0 is the visual TOP (D3D readback layout);
         /// false = row 0 is the bottom (GL / Texture2D layout).
         /// </summary>
+        // ── Viewer frame brightness ─────────────────────────────────────────────
+        // Reported 2026-08-03: "when it's night and there's lots of enemies the
+        // Overlord window gets really black, it's hard to see."
+        //
+        // Cause is not the capture — it is the game itself. The capture draws
+        // gameConditionManager (night/eclipse/toxic fallout darkening), so a
+        // viewer frame is as dark as the streamer's own screen. The streamer can
+        // live with that because they have the whole UI for context; a viewer
+        // staring at a 1400px JPEG of a night map cannot see their pawn at all.
+        //
+        // A FIXED gamma is the wrong fix — it would blow out daylight frames to
+        // wash. This measures the frame's own luminance and only lifts what is
+        // actually dark, so day frames pass through ~untouched and night frames
+        // get pulled up to a readable floor. Applied on the SEND WORKER, on a
+        // CPU buffer that already exists, immediately before JPEG encode: zero
+        // main-thread cost, which PROJECT_NORTH_STAR requires.
+        //
+        // Runs on a subsample (every Nth pixel) to measure, then one linear pass
+        // to apply through a 256-entry lookup table — no per-pixel pow().
+
+        /// Frames whose mean luma sits below this are considered "dark" and lifted.
+        private const float DarkFrameLumaThreshold = 0.42f;
+        /// Target mean luma for a fully-dark frame. Not 1.0 — night should still
+        /// READ as night, just legibly.
+        private const float DarkFrameTargetLuma = 0.46f;
+        /// Hard cap on correction so a near-black frame cannot be amplified into
+        /// pure noise (JPEG artifacts in shadow amplify badly).
+        private const float MaxGammaLift = 2.2f;
+        /// Measure every Nth pixel. 37 is coprime with common widths so the
+        /// sample walks across columns instead of sampling one vertical stripe.
+        private const int LumaSampleStride = 37;
+
+        /// <summary>
+        /// Measures mean luminance of an RGBA32 buffer and, if the frame is dark,
+        /// applies an adaptive gamma lift in place. Returns the gamma used (1.0 =
+        /// untouched) so callers can log/telemeter it.
+        /// Thread-safe: touches only the caller's buffer.
+        /// </summary>
+        public static float ApplyAdaptiveBrightness(byte[] rgba, int pixelCount, bool enabled)
+        {
+            if (!enabled || rgba == null || pixelCount <= 0)
+                return 1f;
+
+            // ── measure ──
+            long lumaSum = 0;
+            int samples = 0;
+            for (int p = 0; p < pixelCount; p += LumaSampleStride)
+            {
+                int idx = p * 4;
+                if (idx + 2 >= rgba.Length) break;
+                // Rec.601 luma in integer space (r*299 + g*587 + b*114) / 1000.
+                lumaSum += (rgba[idx] * 299 + rgba[idx + 1] * 587 + rgba[idx + 2] * 114) / 1000;
+                samples++;
+            }
+            if (samples == 0)
+                return 1f;
+
+            float meanLuma = (lumaSum / (float)samples) / 255f;
+            if (meanLuma >= DarkFrameLumaThreshold || meanLuma <= 0.0005f)
+                return 1f; // bright enough, or a black frame with nothing to recover
+
+            // ── choose gamma ──
+            // Solve mean^(1/g) = target  =>  g = ln(mean) / ln(target).
+            float gamma = Mathf.Log(meanLuma) / Mathf.Log(DarkFrameTargetLuma);
+            if (float.IsNaN(gamma) || float.IsInfinity(gamma) || gamma <= 1f)
+                return 1f;
+            gamma = Mathf.Min(gamma, MaxGammaLift);
+
+            // ── apply ──
+            // 256-entry LUT: one pow per level instead of one per subpixel.
+            var lut = new byte[256];
+            float invGamma = 1f / gamma;
+            for (int v = 0; v < 256; v++)
+                lut[v] = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Pow(v / 255f, invGamma) * 255f), 0, 255);
+
+            int end = Math.Min(pixelCount * 4, rgba.Length - 3);
+            for (int idx = 0; idx <= end; idx += 4)
+            {
+                rgba[idx] = lut[rgba[idx]];
+                rgba[idx + 1] = lut[rgba[idx + 1]];
+                rgba[idx + 2] = lut[rgba[idx + 2]];
+                // alpha untouched
+            }
+            return gamma;
+        }
+
+        /// <summary>
+        /// Texture2D variant for the legacy synchronous capture path (RGB24, no
+        /// alpha). Main thread only — Texture2D access requires it.
+        /// </summary>
+        public static void ApplyAdaptiveBrightnessToTexture(Texture2D tex, bool enabled)
+        {
+            if (!enabled || tex == null)
+                return;
+
+            var pixels = tex.GetPixels32();
+            if (pixels == null || pixels.Length == 0)
+                return;
+
+            long lumaSum = 0;
+            int samples = 0;
+            for (int p = 0; p < pixels.Length; p += LumaSampleStride)
+            {
+                var c = pixels[p];
+                lumaSum += (c.r * 299 + c.g * 587 + c.b * 114) / 1000;
+                samples++;
+            }
+            if (samples == 0) return;
+
+            float meanLuma = (lumaSum / (float)samples) / 255f;
+            if (meanLuma >= DarkFrameLumaThreshold || meanLuma <= 0.0005f)
+                return;
+
+            float gamma = Mathf.Log(meanLuma) / Mathf.Log(DarkFrameTargetLuma);
+            if (float.IsNaN(gamma) || float.IsInfinity(gamma) || gamma <= 1f)
+                return;
+            gamma = Mathf.Min(gamma, MaxGammaLift);
+
+            var lut = new byte[256];
+            float invGamma = 1f / gamma;
+            for (int v = 0; v < 256; v++)
+                lut[v] = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Pow(v / 255f, invGamma) * 255f), 0, 255);
+
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                var c = pixels[i];
+                c.r = lut[c.r];
+                c.g = lut[c.g];
+                c.b = lut[c.b];
+                pixels[i] = c;
+            }
+            tex.SetPixels32(pixels);
+            tex.Apply(false);
+        }
+
         public static void RasterizeToBuffer(byte[] rgba, int w, int h, bool topDown, List<DrawOp> ops)
         {
             for (int i = 0; i < ops.Count; i++)

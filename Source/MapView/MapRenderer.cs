@@ -63,6 +63,11 @@ namespace Overlord
         private bool asyncSupported;              // SystemInfo, resolved once on main thread
         private bool gpuTopDown;                  // D3D readback rows are top-down
 
+        // Snapshotted on the main thread each pump. The encode runs on the send
+        // worker, and OverlordMod.Settings is main-thread state — reading it from
+        // the worker would be a cross-thread read of mutable data.
+        private volatile bool brightenFrames = true;
+
         // ── Adaptive bandwidth pressure (main-thread only) ──────────────────────
         // Viewer COUNT is the wrong axis for load: 8 wide-viewport viewers backed the
         // send queue up worse than 15 narrow ones (2026-07-10 telemetry). The real
@@ -625,6 +630,8 @@ namespace Overlord
             preferredRenderHeight = Mathf.Clamp(s.mapImageSize, 360, 1440);
             preferredJpegQuality = Mathf.Clamp(s.mapImageQuality, 45, 88);
             updateInterval = Mathf.Max(s.mapUpdateInterval, 0.08f);
+            // Snapshot for the send worker — see the field's comment.
+            brightenFrames = s.brightenDarkFrames;
         }
 
         private int GetEffectiveRenderHeight(int activeViewerCount, float cameraZoom = 1f, int viewportHeight = 0)
@@ -1249,6 +1256,9 @@ namespace Overlord
                                 pixels, r * cropStride, cropStride);
                         }
 
+                        // Brightness BEFORE overlays: the pawn ring / hostile dots
+                        // are fixed reference colours and must not be gamma-shifted.
+                        MapOverlayPainter.ApplyAdaptiveBrightness(pixels, crop.width * crop.height, brightenFrames);
                         MapOverlayPainter.RasterizeToBuffer(pixels, crop.width, crop.height, topDown, crop.ops);
                         if (!topDown)
                             MapOverlayPainter.FlipRowsInPlace(pixels, crop.width, crop.height);
@@ -1400,6 +1410,8 @@ namespace Overlord
                 byte[] jpeg;
                 try
                 {
+                    // Brightness BEFORE overlays so marker colours stay reference.
+                    MapOverlayPainter.ApplyAdaptiveBrightness(pixels, width * height, brightenFrames);
                     MapOverlayPainter.RasterizeToBuffer(pixels, width, height, topDown, ops);
                     // EncodeArrayToJPG consumes image rows top-down. D3D readbacks
                     // already use that layout; GL readbacks are bottom-up and must be
@@ -1467,6 +1479,11 @@ namespace Overlord
 
             try
             {
+                // Legacy main-thread fallback path. Same brightness treatment as
+                // the async paths so a driver that forces this fallback doesn't
+                // silently lose the night-legibility fix — before overlays, so
+                // marker colours stay reference.
+                MapOverlayPainter.ApplyAdaptiveBrightnessToTexture(tex, brightenFrames);
                 MapOverlayPainter.RasterizeToTexture(tex, ops);
             }
             catch { }

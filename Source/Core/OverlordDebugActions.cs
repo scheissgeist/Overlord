@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using UnityEngine;
 using LudeonTK;
 using RimWorld;
 using Verse;
@@ -22,6 +23,43 @@ namespace Overlord
     /// </summary>
     public static class OverlordDebugActions
     {
+        /// Runs the REAL brightness pass over synthetic frames spanning the full
+        /// luminance range and reports measured mean before/after, so the curve
+        /// can be checked without waiting for nightfall. Numbers only — the
+        /// eyes-on check is opening the viewer page during an actual night.
+        [DebugAction("Overlord", "Test viewer frame brightness", allowedGameStates = AllowedGameStates.Playing)]
+        public static void TestFrameBrightness()
+        {
+            const int w = 160, h = 90;
+            var sb = new StringBuilder();
+            sb.AppendLine("[Overlord] Frame brightness (mean luma before -> after, gamma):");
+
+            foreach (float level in new[] { 0.02f, 0.06f, 0.12f, 0.22f, 0.35f, 0.45f, 0.70f })
+            {
+                var rgba = new byte[w * h * 4];
+                // Flat field plus a little structure, so the measurement isn't a
+                // degenerate single-value buffer.
+                for (int i = 0; i < w * h; i++)
+                {
+                    byte v = (byte)Mathf.Clamp(Mathf.RoundToInt(level * 255f) + ((i % 17 == 0) ? 12 : 0), 0, 255);
+                    rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255;
+                }
+                float before = MeanLuma(rgba);
+                float gamma = MapOverlayPainter.ApplyAdaptiveBrightness(rgba, w * h, true);
+                float after = MeanLuma(rgba);
+                sb.AppendLine($"  {before:F3} -> {after:F3}   gamma {gamma:F3}{(gamma <= 1f ? "  (untouched)" : "")}");
+            }
+            Log.Message(sb.ToString());
+        }
+
+        private static float MeanLuma(byte[] rgba)
+        {
+            long sum = 0; int n = rgba.Length / 4;
+            for (int i = 0; i < n; i++)
+                sum += (rgba[i * 4] * 299 + rgba[i * 4 + 1] * 587 + rgba[i * 4 + 2] * 114) / 1000;
+            return n == 0 ? 0f : (sum / (float)n) / 255f;
+        }
+
         /// Exercises auto-reconnect without waiting for a viewer to actually
         /// rejoin: drops each assigned viewer's pawn (as a restart would), then
         /// runs the reconnect path and reports whether each got the SAME pawn

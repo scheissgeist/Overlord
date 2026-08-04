@@ -129,6 +129,8 @@ namespace Overlord
 
             listing.Label($"Frame interval: {Settings.mapUpdateInterval:F2}s (~{(1f / Mathf.Max(Settings.mapUpdateInterval, 0.01f)):F0} FPS target; lower is smoother, heavier)");
             Settings.mapUpdateInterval = listing.Slider(Settings.mapUpdateInterval, 0.08f, 1f);
+            listing.CheckboxLabeled("Brighten dark viewer frames (night, eclipse, fallout)", ref Settings.brightenDarkFrames,
+                "Lifts viewer map frames that measure dark, so a night raid is still readable in the browser. Adaptive: bright frames are left alone. Your own game view is never affected.");
             listing.CheckboxLabeled("Fallback: mirror host world camera to viewers", ref Settings.mirrorHostCameraToViewers);
             listing.CheckboxLabeled("Expose full tactical map data to viewers (recommended smooth / low-lag path)", ref Settings.allowViewerTacticalMap);
             listing.CheckboxLabeled("Expose colony resource readout to assigned viewers (stock totals)", ref Settings.allowViewerResourceReadout);

@@ -22,6 +22,13 @@ namespace Overlord
         public bool allowViewerTacticalMap = false;
         public bool allowViewerResourceReadout = false;
 
+        // Viewer frames get an adaptive gamma lift when the frame itself measures
+        // dark (night, eclipse, toxic fallout). The streamer's own view is
+        // untouched — this only affects the JPEG sent to viewers, who have no
+        // surrounding UI for context and otherwise cannot see their pawn at all.
+        // Day frames measure bright and pass through unchanged.
+        public bool brightenDarkFrames = true;
+
         // Troubleshooting: pause ALL live map capture (viewer frames + spectator).
         // Viewers keep pawn control; they just lose the live map. Lets the streamer
         // isolate capture-pipeline issues in seconds without disabling the mod.
@@ -76,6 +83,7 @@ namespace Overlord
             Scribe_Values.Look(ref disableMapCapture, "disableMapCapture", false);
             Scribe_Values.Look(ref captureBisectLevel, "captureBisectLevel", 0);
             Scribe_Values.Look(ref allowViewerResourceReadout, "allowViewerResourceReadout", false);
+            Scribe_Values.Look(ref brightenDarkFrames, "brightenDarkFrames", true);
             Scribe_Values.Look(ref allowDraft, "allowDraft", true);
             Scribe_Values.Look(ref allowMove, "allowMove", true);
             Scribe_Values.Look(ref allowAttack, "allowAttack", true);
