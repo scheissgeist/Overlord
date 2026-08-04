@@ -29,6 +29,15 @@ namespace Overlord
         // Day frames measure bright and pass through unchanged.
         public bool brightenDarkFrames = true;
 
+        // Render viewer frames WITHOUT RimWorld's lighting-overlay mesh, so a
+        // night map arrives lit instead of black. This is the real fix for the
+        // "can't see anything at night" report: a real night frame measured mean
+        // luma 0.0023 (99% of pixels under 0.05), which no amount of gamma can
+        // recover — the JPEG encode had already destroyed the shadow detail.
+        // The streamer's own view is never affected; the flag is restored
+        // immediately after our draw.
+        public bool unlitViewerFrames = true;
+
         // Troubleshooting: pause ALL live map capture (viewer frames + spectator).
         // Viewers keep pawn control; they just lose the live map. Lets the streamer
         // isolate capture-pipeline issues in seconds without disabling the mod.
@@ -84,6 +93,7 @@ namespace Overlord
             Scribe_Values.Look(ref captureBisectLevel, "captureBisectLevel", 0);
             Scribe_Values.Look(ref allowViewerResourceReadout, "allowViewerResourceReadout", false);
             Scribe_Values.Look(ref brightenDarkFrames, "brightenDarkFrames", true);
+            Scribe_Values.Look(ref unlitViewerFrames, "unlitViewerFrames", true);
             Scribe_Values.Look(ref allowDraft, "allowDraft", true);
             Scribe_Values.Look(ref allowMove, "allowMove", true);
             Scribe_Values.Look(ref allowAttack, "allowAttack", true);

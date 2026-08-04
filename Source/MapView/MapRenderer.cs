@@ -68,6 +68,10 @@ namespace Overlord
         // the worker would be a cross-thread read of mutable data.
         private volatile bool brightenFrames = true;
 
+        // Static because QueueMapDrawCommands is static. Main-thread only (the
+        // draw commands and the toggle both run there), so no volatile needed.
+        private static bool unlitViewerFrames = true;
+
         // ── Adaptive bandwidth pressure (main-thread only) ──────────────────────
         // Viewer COUNT is the wrong axis for load: 8 wide-viewport viewers backed the
         // send queue up worse than 15 narrow ones (2026-07-10 telemetry). The real
@@ -632,6 +636,7 @@ namespace Overlord
             updateInterval = Mathf.Max(s.mapUpdateInterval, 0.08f);
             // Snapshot for the send worker — see the field's comment.
             brightenFrames = s.brightenDarkFrames;
+            unlitViewerFrames = s.unlitViewerFrames;
         }
 
         private int GetEffectiveRenderHeight(int activeViewerCount, float cameraZoom = 1f, int viewportHeight = 0)
@@ -901,11 +906,35 @@ namespace Overlord
                 map.mapDrawer?.MapMeshDrawerUpdate_First();
             }
 
-            map.mapDrawer?.DrawMapMesh();
-            if (bisect == 2) return;
-            map.dynamicDrawManager?.DrawDynamicThings();
-            if (bisect == 3) return;
-            map.gameConditionManager?.GameConditionManagerDraw(map);
+            // Viewer frames skip RimWorld's lighting-overlay mesh so they render
+            // LIT AT SOURCE instead of being blackened and then rescued.
+            //
+            // Why not post-process: a real night capture (2026-08-03) measured
+            // mean luma 0.0023 with 99% of pixels below 0.05. Reaching a readable
+            // 0.46 needs gamma ~7.8, and at that lift the JPEG's shadow chroma
+            // noise amplifies into red/blue blocks — the detail was already
+            // destroyed by the quality-68 encode. There is nothing to recover.
+            //
+            // SectionLayer_LightingOverlay.Visible reads
+            // DebugViewSettings.drawLightingOverlay, and SectionLayer.DrawLayer
+            // early-returns when !Visible (verified against Assembly-CSharp), so
+            // this cleanly omits the darkness mesh for our draw only. Restored in
+            // finally — the streamer's own view must be untouched.
+            bool prevLightingOverlay = DebugViewSettings.drawLightingOverlay;
+            if (unlitViewerFrames)
+                DebugViewSettings.drawLightingOverlay = false;
+            try
+            {
+                map.mapDrawer?.DrawMapMesh();
+                if (bisect == 2) return;
+                map.dynamicDrawManager?.DrawDynamicThings();
+                if (bisect == 3) return;
+                map.gameConditionManager?.GameConditionManagerDraw(map);
+            }
+            finally
+            {
+                DebugViewSettings.drawLightingOverlay = prevLightingOverlay;
+            }
             // Keep the capture draw set minimal. Edge clippers, designations, and
             // overlays have screen-space side effects that are more likely to leak
             // into other cameras or visible UI when several viewer frames are active.
