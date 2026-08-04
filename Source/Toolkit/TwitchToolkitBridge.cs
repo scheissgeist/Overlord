@@ -87,6 +87,14 @@ namespace Overlord
                 msg["coinAmount"] = coinAmount;
                 msg["coinInterval"] = coinInterval;
                 msg["minimumPurchase"] = minimumPurchase;
+                // Purchases failed 6 of 9 times in the 2026-08-03 play session,
+                // every one a Toolkit cooldown/limit rejection AFTER the viewer
+                // had already tapped Buy. Sending the block state lets the shop
+                // disable the button up front instead of accepting a doomed tap
+                // — repeated rejections read as "the shop is broken".
+                // Toolkit exposes only a boolean here (no remaining time), so
+                // this is "blocked / not blocked", not a countdown.
+                msg["purchasesOnCooldown"] = ToolkitItemBlockedByCooldown(username);
                 // Order matters: the catalog is populated while entries build.
                 msg["entries"] = BuildStoreEntries(coins, unlimited);
                 msg["stuffCatalog"] = BuildStuffCatalogMessage();

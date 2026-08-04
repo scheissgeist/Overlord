@@ -157,7 +157,13 @@ namespace Overlord
                 int now = Find.TickManager.TicksGame;
                 if (now - session.lastCommandTick < cooldownTicks)
                 {
+                    // Round UP, never down. With the default 20-tick cooldown a
+                    // 1-2 tick remainder is 0.017-0.033s, which :F1 printed as
+                    // "wait 0.0s" — telling a viewer to wait for zero seconds
+                    // reads as a broken control (seen on attack and
+                    // context_action in the 2026-08-03 play session).
                     float secondsLeft = (cooldownTicks - (now - session.lastCommandTick)) / 60f;
+                    secondsLeft = Mathf.Max(0.1f, Mathf.Ceil(secondsLeft * 10f) / 10f);
                     return ErrorResult($"Too fast — wait {secondsLeft:F1}s");
                 }
                 session.lastCommandTick = now;
@@ -612,21 +618,28 @@ namespace Overlord
                         if (!TargetCellAllowed(pawn, cell, out string areaMessage))
                             return ErrorResult(areaMessage);
 
-                        // Find closest attackable thing at or near the cell
-                        target = map.thingGrid.ThingsAt(cell)
-                            .FirstOrDefault(t => t is Pawn p && !p.Dead && p.Faction != null &&
-                                FactionUtility.HostileTo(p.Faction, pawn.Faction));
+                        // Find the CLOSEST hostile within a small radius of the
+                        // clicked cell. The old search was the cell plus its 8
+                        // neighbours — a 3x3 box, which on a zoomed-out viewer
+                        // map is only a few screen pixels. In the 2026-08-03 play
+                        // session 9 of 16 attacks returned "No target found",
+                        // clustered like someone fighting an over-tight hitbox.
+                        //
+                        // Radius is deliberately modest: large enough to forgive
+                        // a near-miss click, small enough that it can't retarget
+                        // to a hostile the viewer didn't mean. Closest-wins so a
+                        // wider net never picks a worse target than the old code.
+                        target = FindNearestHostile(map, pawn, cell, AttackClickRadius, out float hitDistance);
                         if (target == null)
                         {
-                            // Check adjacent cells
-                            foreach (var adj in GenAdj.CellsAdjacent8Way(cell, Rot4.North, IntVec2.One))
-                            {
-                                if (!adj.InBounds(map)) continue;
-                                target = map.thingGrid.ThingsAt(adj)
-                                    .FirstOrDefault(t => t is Pawn p && !p.Dead && p.Faction != null &&
-                                        FactionUtility.HostileTo(p.Faction, pawn.Faction));
-                                if (target != null) break;
-                            }
+                            // Diagnostic for the miss: how far away WAS the
+                            // nearest hostile? Small distances mean the radius is
+                            // still too tight; large ones mean the viewer clicked
+                            // empty ground and the control is fine.
+                            var nearestAnywhere = FindNearestHostile(map, pawn, cell, 40, out float missDistance);
+                            LogUtil.Log(nearestAnywhere != null
+                                ? $"attack miss: no hostile within {AttackClickRadius} cells of ({cell.x},{cell.z}); nearest was {missDistance:F1} cells away"
+                                : $"attack miss: no hostile within 40 cells of ({cell.x},{cell.z})");
                         }
                     }
                 }
@@ -661,6 +674,49 @@ namespace Overlord
 
             pawn.jobs.TryTakeOrderedJob(job);
             return SuccessResult($"Attacking {target.LabelShort ?? "target"}");
+        }
+
+        /// How far from the clicked cell an attack will look for a hostile.
+        /// 3 cells forgives a near-miss on a zoomed-out viewer map without
+        /// letting the click grab a target the viewer never aimed at.
+        private const int AttackClickRadius = 3;
+
+        /// <summary>
+        /// Nearest live hostile pawn to <paramref name="cell"/> within
+        /// <paramref name="radius"/> cells, or null. Returns the distance out so
+        /// callers can log how badly a miss missed.
+        /// Scans a bounded square — no allocation-heavy map-wide sweep.
+        /// </summary>
+        private static Thing FindNearestHostile(Map map, Pawn attacker, IntVec3 cell, int radius, out float distance)
+        {
+            Thing best = null;
+            float bestSq = float.MaxValue;
+            distance = -1f;
+            if (map == null || attacker == null) return null;
+
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                for (int dz = -radius; dz <= radius; dz++)
+                {
+                    var probe = new IntVec3(cell.x + dx, 0, cell.z + dz);
+                    if (!probe.InBounds(map)) continue;
+
+                    float distSq = dx * dx + dz * dz;
+                    if (distSq > radius * radius || distSq >= bestSq) continue;
+
+                    foreach (var thing in map.thingGrid.ThingsAt(probe))
+                    {
+                        if (!(thing is Pawn p) || p.Dead || p.Faction == null) continue;
+                        if (!FactionUtility.HostileTo(p.Faction, attacker.Faction)) continue;
+                        best = thing;
+                        bestSq = distSq;
+                        break;
+                    }
+                }
+            }
+
+            if (best != null) distance = Mathf.Sqrt(bestSq);
+            return best;
         }
 
         private static Dictionary<string, object> ExecuteSetWork(Pawn pawn, string json)

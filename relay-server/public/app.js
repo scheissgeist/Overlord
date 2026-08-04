@@ -5220,7 +5220,12 @@ function renderBuyControls() {
   const status = available
     ? (connected ? 'Connected' : 'Toolkit offline')
     : 'Not loaded';
-  const canBuy = available && connected;
+  // Toolkit's per-viewer cooldown blocks EVERY purchase, so surface it up front
+  // rather than letting the viewer tap Buy and get rejected (6 of 9 purchases
+  // failed that way in the 2026-08-03 session). Host sends a boolean — Toolkit
+  // exposes no remaining time — so this states the block, not a countdown.
+  const purchasesOnCooldown = toolkitState?.purchasesOnCooldown === true;
+  const canBuy = available && connected && !purchasesOnCooldown;
   const query = String(buySearchQuery || '').trim().toLowerCase();
   const decorated = entries
     .map(item => ({ item, state: getBuyItemState(item), shop: getBuyShop(item) }))
@@ -5262,6 +5267,7 @@ function renderBuyControls() {
     ${feedback}
     ${!available ? `<div class="buy-banner">Twitch Toolkit is not loaded on the host.</div>` : ''}
     ${available && !connected ? `<div class="buy-banner warn">Toolkit chat is offline on the host — purchases stay locked until it reconnects in RimWorld.</div>` : ''}
+    ${available && connected && purchasesOnCooldown ? `<div class="buy-banner warn">Purchases are on Toolkit's cooldown — buying resumes automatically once it resets.</div>` : ''}
     <div class="buy-toolbar">
       <input class="buy-search" type="search" data-buy-search value="${escapeAttr(buySearchQuery)}" placeholder="Search…" aria-label="Search store">
       ${renderBuyTruncationNote(entries.length)}
@@ -5491,7 +5497,8 @@ function renderBuyItem(item, canBuy, state = null) {
           ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
           : `Min ${formatNumber(buyState.minimumPurchase)}`)
         : (buyState.researchBlocked ? 'Research locked'
-          : (!buyState.affordable ? 'Not enough coins' : (!canBuy ? 'Offline' : ''))))));
+          : (!buyState.affordable ? 'Not enough coins'
+            : (toolkitState?.purchasesOnCooldown === true ? 'On cooldown' : (!canBuy ? 'Offline' : '')))))));
   const buttonLabel = canReachMinimum
     ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
     : (disabled ? (blockReason || 'Locked') : 'Buy');

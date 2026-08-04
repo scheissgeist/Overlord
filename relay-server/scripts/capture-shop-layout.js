@@ -279,6 +279,35 @@ async function main() {
       }
       shopChecks.push({ vp: vp.name, ...checks });
 
+      // Toolkit cooldown must disable buying UP FRONT rather than letting the
+      // viewer tap Buy and be rejected (6 of 9 purchases failed that way in the
+      // 2026-08-03 play session).
+      hostWs.send(JSON.stringify({
+        type: 'toolkit_state', target: VIEWER_LOGIN, available: true, toolkitLoaded: true,
+        toolkitUtilsLoaded: true, chatConnected: true, status: 'connected', username: VIEWER_LOGIN,
+        coins: REPORT_COINS, karma: REPORT_KARMA, unlimitedCoins: false, earningCoins: true,
+        coinAmount: 30, coinInterval: 2, minimumPurchase: MINIMUM_PURCHASE,
+        entries: ENTRIES.concat([ANIMAL_ENTRY, CHEAP_ENTRY, REF_ENTRY]),
+        stuffCatalog: STUFF_CATALOG, itemCount: 900,
+        purchasesOnCooldown: true,
+      }));
+      await wait(400);
+      const cooldownState = await page.evaluate(() => {
+        const banner = Array.from(document.querySelectorAll('.buy-banner'))
+          .map(b => b.textContent.trim()).find(t => /cooldown/i.test(t)) || null;
+        const buttons = Array.from(document.querySelectorAll('.buy-actions button'));
+        return {
+          banner,
+          total: buttons.length,
+          enabled: buttons.filter(b => !b.disabled).length,
+        };
+      });
+      if (!cooldownState.banner) failures.push(`${vp.name}: cooldown active but no banner shown`);
+      if (cooldownState.enabled !== 0) {
+        failures.push(`${vp.name}: cooldown active but ${cooldownState.enabled}/${cooldownState.total} buy buttons still enabled`);
+      }
+      shopChecks.push({ vp: vp.name, cooldown: cooldownState });
+
       // (B) Narrowed by search, like the reported screenshot.
       await page.evaluate(q => {
         const input = document.querySelector('[data-buy-search]');
