@@ -118,7 +118,6 @@ let armorySearchTimer = null;
 let inventoryPage = 0;
 let activeSocialTargetId = null;
 let socialSortMode = 'alpha';
-let socialPage = 0;
 let thoughtPage = 0;
 let viewerTickets = null;
 let activeVote = false;
@@ -435,7 +434,6 @@ const GEAR_SLOT_DEFS = [
 ];
 const GEAR_NEARBY_PAGE_SIZE = 3;
 const INVENTORY_PAGE_SIZE = 3;
-const SOCIAL_PAGE_SIZE = 4;
 const THOUGHT_PAGE_SIZE = 4;
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
@@ -1276,7 +1274,6 @@ function resetAssignedState() {
   clearTimeout(armorySearchTimer);
   armorySearchTimer = null;
   inventoryPage = 0;
-  socialPage = 0;
   thoughtPage = 0;
   viewerTickets = null;
   exitMoveMode();
@@ -4357,9 +4354,11 @@ function renderSocial(s) {
     el.innerHTML = '<span style="color:var(--text-muted)">No relationships</span>';
     return;
   }
-  const pageCount = Math.max(1, Math.ceil(people.length / SOCIAL_PAGE_SIZE));
-  socialPage = Math.min(socialPage, pageCount - 1);
-  const visiblePeople = people.slice(socialPage * SOCIAL_PAGE_SIZE, (socialPage + 1) * SOCIAL_PAGE_SIZE);
+  // The whole roster renders; the list scrolls instead of paging (viewer request,
+  // 2026-08-04). At SOCIAL_PAGE_SIZE=4 a normal colony was 3-4 pages of Prev/Next
+  // to find one pawn, and paging also meant the selected target could scroll out
+  // of the page and get silently reassigned.
+  const visiblePeople = people;
   if (!visiblePeople.some(person => String(person.id) === String(activeSocialTargetId))) {
     activeSocialTargetId = visiblePeople[0]?.id ?? people[0].id;
   }
@@ -4368,9 +4367,6 @@ function renderSocial(s) {
   const opinion = Number(active.opinion ?? 0);
   const opinionSign = opinion > 0 ? '+' : '';
   const distance = Number(active.distance);
-  const pager = pageCount > 1
-    ? `<span class="compact-pager"><button data-social-page="${socialPage - 1}" ${socialPage <= 0 ? 'disabled' : ''}>Prev</button><span>${socialPage + 1}/${pageCount}</span><button data-social-page="${socialPage + 1}" ${socialPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
-    : '';
   el.innerHTML = `<div class="social-board">
     <div class="social-list">
       <div class="social-sort">
@@ -4378,6 +4374,7 @@ function renderSocial(s) {
         <button class="${socialSortMode === 'distance' ? 'active' : ''}" data-social-sort="distance">Near</button>
         <button class="${socialSortMode === 'opinion' ? 'active' : ''}" data-social-sort="opinion">Opinion</button>
       </div>
+      <div class="social-scroll">
       ${visiblePeople.map(person => {
         const opinion = Number(person.opinion ?? 0);
         const theirs = Number(person.opinionOf ?? 0);
@@ -4398,7 +4395,7 @@ function renderSocial(s) {
           ].filter(Boolean).join(' - '))}</small>
         </button>`;
       }).join('')}
-      ${pager}
+      </div>
     </div>
     <div class="social-actions">
       <div class="social-actions-head">
@@ -4463,14 +4460,6 @@ function bindSocialButtons(root) {
   root.querySelectorAll('[data-social-sort]').forEach(btn => {
     btn.addEventListener('click', () => {
       socialSortMode = btn.dataset.socialSort || 'alpha';
-      socialPage = 0;
-      activeSocialTargetId = null;
-      renderSocial(pawnState);
-    });
-  });
-  root.querySelectorAll('[data-social-page]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      socialPage = Math.max(0, Number(btn.dataset.socialPage) || 0);
       activeSocialTargetId = null;
       renderSocial(pawnState);
     });

@@ -1933,15 +1933,58 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   grid-template-columns: minmax(150px, 0.85fr) minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
+  /* Bound the ROW, not either column. Both columns stretch to the tallest, so an
+     uncapped roster grows the action column with it and overflows the drawer
+     (measured: roster made .social-actions 246px inside a 235px pane). The
+     container supplies the height; the roster scrolls inside its share. */
+  max-height: 100%;
+  min-height: 0;
 }
 
-.social-list,
 .social-actions {
   display: grid;
   align-content: start;
   gap: 6px;
   min-width: 0;
+  min-height: 0;
 }
+
+/* Sort row is fixed; the roster takes the rest and scrolls. Grid children default
+   to min-height:auto and refuse to shrink below content — min-height:0 on both
+   this and the scroll row is what actually allows the overflow to engage. */
+.social-list {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Replaced Prev/Next paging (viewer request, 2026-08-04). The sort row stays
+   pinned above; only the roster scrolls. max-height is what makes it scroll at
+   all — without it the grid just grows and the page scrolls instead. */
+.social-scroll {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  /* No fixed height: .social-board caps the row and min-height:0 above lets this
+     shrink, so the roster takes whatever the sort row leaves. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 104, 64, 0.5) transparent;
+}
+
+.social-scroll::-webkit-scrollbar { width: 7px; }
+.social-scroll::-webkit-scrollbar-track { background: transparent; }
+.social-scroll::-webkit-scrollbar-thumb {
+  background: rgba(138, 104, 64, 0.5);
+  border-radius: 3px;
+}
+.social-scroll::-webkit-scrollbar-thumb:hover { background: rgba(138, 104, 64, 0.72); }
 
 .social-sort {
   display: grid;
@@ -5075,9 +5118,15 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-gear .gear-sheet { position: relative; }
 
 /* Social: stable list with a compact selected-target action block. */
-#tab-social.active { min-width: 0; }
+#tab-social.active { min-width: 0; min-height: 0; max-height: 100%; overflow: hidden; }
 #tab-social .social-board { grid-template-columns: minmax(250px, 1.15fr) minmax(220px, 0.85fr); gap: 14px; }
 #tab-social .social-list { gap: 3px; }
+/* #tab-social is the SAME element in the compact drawer (~235px) and the tall
+   layout, so this cannot carry a fixed height — a 340px value here silently beat
+   the base rule by specificity and overflowed the drawer. Fill the pane instead
+   and let each layout's own height decide. */
+#tab-social .social-board { max-height: 100%; min-height: 0; }
+#tab-social .social-scroll { gap: 3px; }
 #tab-social .social-sort { gap: 2px; }
 #tab-social .social-sort button {
   height: 22px;
@@ -5122,7 +5171,6 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font-size: 10px;
 }
 #tab-social .social-action-grid button:hover { border-color: #3b2c19; color: #fff; }
-#tab-social .social-list > .compact-pager { margin-top: 2px; }
 
 /* Events only exists when the host enables incident tickets (or a vote is active). */
 #event-buttons { display: block; }
@@ -5171,6 +5219,13 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   #tab-health > * { margin-bottom: 7px; }
   #tab-gear.active,
   #tab-social .social-board { grid-template-columns: 1fr; }
+  /* Stacked single column: the columns are now rows, so the board cap no longer
+     bounds the roster by itself — give the scroller its own height and let the
+     board grow to fit both it and the actions below. */
+  #tab-social .social-board,
+  .social-board { max-height: none; }
+  #tab-social .social-scroll,
+  .social-scroll { max-height: 168px; }
   #tab-gear .gear-layout {
     grid-template-columns: 1fr;
     grid-template-areas: "overview" "slots" "equipped" "nearby";
