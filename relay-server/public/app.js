@@ -132,6 +132,9 @@ const buyQuantityDrafts = new Map();
 const buyStuffSelections = new Map();
 const buyArgumentDrafts = new Map();
 const storyPurchaseSelections = new Map();
+// Per-item colour-wheel position (itemId -> {h,s,v}). Kept out of the render
+// path's state so dragging doesn't require a full re-render per frame.
+const dyeWheelState = new Map();
 const COMMAND_FEEDBACK_CLEAR_MS = 2200;
 const ARMORY_PAGE_SIZE = 3;
 const MAP_RESYNC_THROTTLE_MS = 1500;
@@ -2564,6 +2567,74 @@ function dyeAllowed() {
   return !getActionBlockedReason('set_appearance') && Array.isArray(hostCapabilities?.dyePalette);
 }
 
+// Hosts before the colour-wheel build advertise no dyeGamut; those still get
+// the swatch grid only, so an older host never receives a colorHex it would
+// reject.
+function dyeWheelAllowed() {
+  return dyeAllowed() && hostCapabilities?.dyeCustomColors === true;
+}
+
+// Mirrors ClampToGameGamut on the host (PawnCommandRouter.cs) so the swatch the
+// viewer drags matches what actually lands on the pawn. Hue is free; saturation
+// and value are capped to keep colonists in RimWorld's muted register instead
+// of neon on the streamer's frame. The host re-clamps regardless — this is for
+// preview fidelity, not trust.
+function dyeGamut() {
+  const g = hostCapabilities?.dyeGamut || {};
+  return {
+    maxSaturation: Number.isFinite(Number(g.maxSaturation)) ? Number(g.maxSaturation) : 0.72,
+    minValue: Number.isFinite(Number(g.minValue)) ? Number(g.minValue) : 0.14,
+    maxValue: Number.isFinite(Number(g.maxValue)) ? Number(g.maxValue) : 0.90,
+  };
+}
+
+function hsvToHex(h, s, v) {
+  const f = n => {
+    const k = (n + h * 6) % 6;
+    const c = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    return Math.round(Math.max(0, Math.min(1, c)) * 255);
+  };
+  return `#${[f(5), f(3), f(1)].map(x => x.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Wheel geometry: angle = hue, radius = saturation. Value gets its own slider
+// because a 2D wheel can't carry three axes.
+function dyeWheelColor(itemId) {
+  const st = dyeWheelState.get(String(itemId)) || { h: 0, s: 0, v: 0.6 };
+  const g = dyeGamut();
+  return hsvToHex(st.h, Math.min(st.s, g.maxSaturation), Math.min(Math.max(st.v, g.minValue), g.maxValue));
+}
+
+// One renderer for both dye surfaces (worn list + gear sheet). These were two
+// identical copies; the wheel would have made it three.
+function renderDyePalette(itemId) {
+  const swatches = hostCapabilities.dyePalette.map(c =>
+    `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}"
+       data-dye-apply="${itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('');
+  if (!dyeWheelAllowed()) {
+    return `<div class="worn-dye-palette hidden" data-dye-palette="${itemId}">${swatches}</div>`;
+  }
+  const st = dyeWheelState.get(String(itemId)) || { h: 0, s: 0, v: 0.6 };
+  const g = dyeGamut();
+  const hex = dyeWheelColor(itemId);
+  return `<div class="worn-dye-palette hidden" data-dye-palette="${itemId}">
+    <div class="dye-swatches">${swatches}</div>
+    <div class="dye-wheel-row">
+      <div class="dye-wheel" data-dye-wheel="${itemId}" role="slider" tabindex="0"
+           aria-label="Colour wheel: drag to pick hue and saturation"
+           aria-valuetext="${escapeAttr(hex)}">
+        <span class="dye-wheel-cursor" data-dye-cursor="${itemId}"></span>
+      </div>
+      <div class="dye-wheel-side">
+        <span class="dye-preview" data-dye-preview="${itemId}" style="background:${escapeAttr(hex)}"></span>
+        <input class="dye-value" type="range" min="${g.minValue}" max="${g.maxValue}" step="0.01"
+               value="${st.v}" data-dye-value="${itemId}" aria-label="Brightness">
+        <button class="dye-apply" data-dye-apply-custom="${itemId}">Apply</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderWornRow(item) {
   const swatch = item.color
     ? `<span class="worn-swatch" style="background:${escapeAttr(item.color)}"></span>` : '';
@@ -2571,11 +2642,7 @@ function renderWornRow(item) {
   const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
   const dyeBtn = canDye
     ? `<button class="worn-dye-btn" data-dye-toggle="${item.itemId}">Dye</button>` : '';
-  const palette = canDye ? `<div class="worn-dye-palette hidden" data-dye-palette="${item.itemId}">
-      ${hostCapabilities.dyePalette.map(c =>
-        `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}"
-           data-dye-apply="${item.itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('')}
-    </div>` : '';
+  const palette = canDye ? renderDyePalette(item.itemId) : '';
   return `<div class="gear-worn-row">
       <span class="worn-name">${swatch}${escapeHtml(item.label || item.defName || '')}${hp}</span>${dyeBtn}
     </div>${palette}`;
@@ -2584,6 +2651,11 @@ function renderWornRow(item) {
 function sendDye(itemId, colorId) {
   markCommandSent('dye_apparel', 'Dyeing…');
   send({ type: 'command', action: 'dye_apparel', itemId: Number(itemId), colorId });
+}
+
+function sendDyeHex(itemId, colorHex) {
+  markCommandSent('dye_apparel', 'Dyeing…');
+  send({ type: 'command', action: 'dye_apparel', itemId: Number(itemId), colorHex });
 }
 
 function buildGearItems(s) {
@@ -2756,10 +2828,7 @@ function renderGearRow(item) {
   const blocked = item.blocked || '';
   const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
   const dyeButton = canDye ? `<button class="item-action ghost" data-dye-toggle="${item.itemId}">Dye</button>` : '';
-  const palette = canDye ? `<div class="worn-dye-palette hidden" data-dye-palette="${item.itemId}">
-    ${hostCapabilities.dyePalette.map(c =>
-      `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}" data-dye-apply="${item.itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('')}
-  </div>` : '';
+  const palette = canDye ? renderDyePalette(item.itemId) : '';
   return `<div class="gear-row equipped">
     <div class="gear-row-main">
       <span class="gear-name">${escapeHtml(item.label)}</span>
@@ -2925,6 +2994,82 @@ function bindGearButtons(root) {
   root.querySelectorAll('[data-dye-apply]').forEach(btn => {
     btn.addEventListener('click', () => {
       sendDye(btn.dataset.dyeApply, btn.dataset.dyeColor);
+    });
+  });
+  bindDyeWheels(root);
+}
+
+// Wheel drag updates the cursor + preview in place. Re-rendering the gear panel
+// on every pointermove would rebuild the DOM under the pointer and drop the
+// drag, so state lives in dyeWheelState and only the two affected nodes move.
+function bindDyeWheels(root) {
+  root.querySelectorAll('[data-dye-wheel]').forEach(wheel => {
+    const id = String(wheel.dataset.dyeWheel);
+    if (!dyeWheelState.has(id)) dyeWheelState.set(id, { h: 0, s: 0, v: 0.6 });
+
+    const paint = () => {
+      const st = dyeWheelState.get(id);
+      const g = dyeGamut();
+      const s = Math.min(st.s, g.maxSaturation);
+      const hex = dyeWheelColor(id);
+      const cursor = root.querySelector(`[data-dye-cursor="${id}"]`);
+      if (cursor) {
+        // Cursor rides the picked hue/saturation; radius is normalised against
+        // the clamped max so it can't sit outside the reachable ring.
+        const r = (s / g.maxSaturation) * 50;
+        cursor.style.left = `${50 + r * Math.cos(st.h * Math.PI * 2)}%`;
+        cursor.style.top = `${50 + r * Math.sin(st.h * Math.PI * 2)}%`;
+      }
+      const preview = root.querySelector(`[data-dye-preview="${id}"]`);
+      if (preview) preview.style.background = hex;
+      wheel.setAttribute('aria-valuetext', hex);
+    };
+
+    const pick = event => {
+      const rect = wheel.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = event.clientX - cx;
+      const dy = event.clientY - cy;
+      const radius = Math.min(rect.width, rect.height) / 2;
+      const g = dyeGamut();
+      const st = dyeWheelState.get(id);
+      let h = Math.atan2(dy, dx) / (Math.PI * 2);
+      if (h < 0) h += 1;
+      st.h = h;
+      st.s = Math.min(1, Math.hypot(dx, dy) / radius) * g.maxSaturation;
+      paint();
+    };
+
+    wheel.addEventListener('pointerdown', e => {
+      markCommandInteraction(8000);
+      wheel.setPointerCapture(e.pointerId);
+      pick(e);
+    });
+    wheel.addEventListener('pointermove', e => {
+      if (!wheel.hasPointerCapture(e.pointerId)) return;
+      markCommandInteraction(8000);
+      pick(e);
+    });
+    paint();
+  });
+
+  root.querySelectorAll('[data-dye-value]').forEach(slider => {
+    const id = String(slider.dataset.dyeValue);
+    slider.addEventListener('input', () => {
+      markCommandInteraction(8000);
+      const st = dyeWheelState.get(id) || { h: 0, s: 0, v: 0.6 };
+      st.v = Number(slider.value);
+      dyeWheelState.set(id, st);
+      const preview = root.querySelector(`[data-dye-preview="${id}"]`);
+      if (preview) preview.style.background = dyeWheelColor(id);
+    });
+  });
+
+  root.querySelectorAll('[data-dye-apply-custom]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = String(btn.dataset.dyeApplyCustom);
+      sendDyeHex(id, dyeWheelColor(id));
     });
   });
 }

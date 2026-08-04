@@ -4549,12 +4549,104 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 .worn-dye-palette {
   display: flex; flex-wrap: wrap; gap: 4px;
   padding: 6px 2px 8px; border-bottom: 1px solid var(--border-soft);
+  max-width: 100%; min-width: 0; box-sizing: border-box;
+  overflow: hidden;
 }
 .worn-dye-swatch {
   width: 20px; height: 20px; border: 1px solid var(--border);
   padding: 0; cursor: pointer;
 }
 .worn-dye-swatch:hover { border-color: var(--accent); }
+
+/* Colour wheel: the fixed swatches stay as one-tap presets above it, the wheel
+   is for viewers who want their own colour. */
+.dye-swatches { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+
+/* The wheel needs ~200px; the gear panel's equipped column is ~145px, so the
+   row wraps rather than overflowing its column and painting over the layout. */
+.dye-wheel-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  width: 100%; max-width: 100%; min-width: 0;
+  padding-top: 8px;
+  box-sizing: border-box;
+}
+
+/* conic = hue, radial white core = saturation. The radial stop is at 72% so
+   the outer ring matches the host's MaxDyeSaturation clamp — the wheel never
+   shows a colour it won't actually apply. */
+.dye-wheel {
+  position: relative;
+  width: 88px; height: 88px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+  touch-action: none;
+  background:
+    radial-gradient(circle closest-side, #fff 0%, rgba(255,255,255,0) 72%),
+    conic-gradient(from 90deg,
+      #b31f1f, #b35120, #d18c2e, #d1a85c, #6b7033,
+      #336138, #29706f, #29386b, #3d57a8, #663d80,
+      #6b3357, #c76b7a, #b31f1f);
+}
+
+.dye-wheel-cursor {
+  position: absolute;
+  width: 11px; height: 11px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.6);
+  pointer-events: none;
+}
+
+.dye-wheel-side {
+  display: grid; gap: 6px; justify-items: stretch;
+  min-width: 96px; flex: 1 1 96px;
+}
+
+.dye-preview {
+  display: block; height: 16px;
+  border: 1px solid var(--border);
+}
+
+/* The default range widget renders bright browser-blue, which reads as a stray
+   OS control against the parchment UI. Track and thumb are restyled to the
+   same wood/brass register as the rest of the panel. */
+.dye-value {
+  width: 100%; height: 16px; margin: 0;
+  appearance: none; -webkit-appearance: none;
+  background: transparent; cursor: pointer;
+}
+.dye-value::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, #241a10, #cbb489);
+}
+.dye-value::-moz-range-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, #241a10, #cbb489);
+}
+.dye-value::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 12px; height: 12px; margin-top: -4px;
+  border: 1px solid #6b5636; border-radius: 50%;
+  background: #e8d4a8;
+}
+.dye-value::-moz-range-thumb {
+  width: 12px; height: 12px;
+  border: 1px solid #6b5636; border-radius: 50%;
+  background: #e8d4a8;
+}
+
+.dye-apply {
+  height: 24px; padding: 0 10px;
+  border: 1px solid #8a6f3f;
+  border-radius: 2px;
+  background: #4c3814;
+  color: #ffeec2;
+  cursor: pointer; font: inherit; font-size: 12px; font-weight: 650;
+}
+.dye-apply:hover { background: #63481a; border-color: #c8a45e; }
 
 /* Compact pawn sheets: dense RimWorld-style information without drawer scroll. */
 .compact-pager {
@@ -4952,10 +5044,16 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 #tab-gear .inventory-head small { color: var(--parchment-text-muted); font-size: 9px; }
 #tab-gear .inventory-grid { display: grid; grid-template-columns: 1fr; }
+/* Floating popover anchored to the gear sheet. With the colour wheel it is
+   wider than the swatch grid was, so it is clamped to the sheet's width and
+   left-bounded — otherwise it ran off the right edge of the panel. */
 #tab-gear .worn-dye-palette {
   position: absolute;
   z-index: 6;
   right: 4px;
+  left: auto;
+  max-width: calc(100% - 8px);
+  width: max-content;
   padding: 5px;
   border: 1px solid #6c4e26;
   background: var(--parchment);

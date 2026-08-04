@@ -194,7 +194,12 @@ namespace Overlord
                 ["toolkitUtilsLoaded"] = TwitchToolkitBridge.IsToolkitUtilsLoaded,
                 ["toolkitChatConnected"] = TwitchToolkitBridge.IsChatConnected,
                 // Fixed dye swatch palette for the viewer gear panel.
-                ["dyePalette"] = PawnCommandRouter.BuildDyePaletteMessage()
+                ["dyePalette"] = PawnCommandRouter.BuildDyePaletteMessage(),
+                // Free colour picking via a wheel. The gamut bounds let the
+                // client clamp as it drags so the preview matches what the host
+                // will actually apply; the host re-clamps regardless.
+                ["dyeCustomColors"] = true,
+                ["dyeGamut"] = PawnCommandRouter.BuildDyeGamutMessage()
             };
         }
 

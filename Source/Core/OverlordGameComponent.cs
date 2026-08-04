@@ -154,7 +154,18 @@ namespace Overlord
             LogUtil.Log("Overlord initialized");
         }
 
+        // RimWorld does not call GameComponentTick while the game is paused, but
+        // it does keep calling GameComponentUpdate. Everything viewer-facing
+        // therefore lives on Update: with command dispatch on Tick, every queued
+        // command (work priorities, schedule, gear, purchases) stalled until the
+        // streamer unpaused — reported as "I have to wait for you to unpause for
+        // it to change" — and viewers saw frozen pawn state alongside a map that
+        // was still updating.
         public override void GameComponentTick()
+        {
+        }
+
+        public override void GameComponentUpdate()
         {
             if (!initialized)
                 return;
@@ -163,12 +174,13 @@ namespace Overlord
             embeddedQueue.DrainTo(action => action());
             TwitchToolkitBridge.ProcessQueuedPawnLinks();
             TwitchToolkitBridge.ProcessQueuedChatCommands(viewerManager);
-            viewerManager?.Tick();
-        }
 
-        public override void GameComponentUpdate()
-        {
-            if (!initialized || viewerManager == null || mapRenderer == null)
+            // Self-paced on realtimeSinceStartup (StateSyncIntervalSeconds), so
+            // driving it from Update does not raise its rate — it just stops it
+            // from freezing while paused.
+            viewerManager?.Tick();
+
+            if (viewerManager == null || mapRenderer == null)
                 return;
 
             mapRenderer.Update(viewerManager);

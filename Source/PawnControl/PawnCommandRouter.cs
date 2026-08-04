@@ -908,6 +908,16 @@ namespace Overlord
             ("black",     "Black",      0.08f, 0.08f, 0.09f),
         };
 
+        public static Dictionary<string, object> BuildDyeGamutMessage()
+        {
+            return new Dictionary<string, object>
+            {
+                ["maxSaturation"] = MaxDyeSaturation,
+                ["minValue"] = MinDyeValue,
+                ["maxValue"] = MaxDyeValue
+            };
+        }
+
         public static List<object> BuildDyePaletteMessage()
         {
             var list = new List<object>();
@@ -930,12 +940,29 @@ namespace Overlord
 
             int itemId = JsonHelper.ExtractInt(json, "itemId", -1);
             string colorId = JsonHelper.ExtractString(json, "colorId");
-            if (itemId < 0 || string.IsNullOrEmpty(colorId))
+            string colorHex = JsonHelper.ExtractString(json, "colorHex");
+            if (itemId < 0 || (string.IsNullOrEmpty(colorId) && string.IsNullOrEmpty(colorHex)))
                 return ErrorResult("Pick an item and a color");
 
-            var swatch = DyePalette.FirstOrDefault(c => c.id == colorId);
-            if (swatch.id == null)
-                return ErrorResult("Unknown color");
+            Color dyeColor;
+            string dyeLabel;
+            if (!string.IsNullOrEmpty(colorHex))
+            {
+                // Free-picked color from the viewer's wheel. Clamped into the
+                // game's register before use — see ClampToGameGamut.
+                if (!TryParseHexColor(colorHex, out dyeColor))
+                    return ErrorResult("Unknown color");
+                dyeColor = ClampToGameGamut(dyeColor);
+                dyeLabel = DescribeColor(dyeColor);
+            }
+            else
+            {
+                var swatch = DyePalette.FirstOrDefault(c => c.id == colorId);
+                if (swatch.id == null)
+                    return ErrorResult("Unknown color");
+                dyeColor = new Color(swatch.r, swatch.g, swatch.b);
+                dyeLabel = swatch.label;
+            }
 
             var apparel = pawn.apparel.WornApparel.FirstOrDefault(a => a.thingIDNumber == itemId);
             if (apparel == null)
@@ -945,7 +972,7 @@ namespace Overlord
             if (colorable == null)
                 return ErrorResult($"{apparel.LabelShort} can't be dyed");
 
-            colorable.SetColor(new Color(swatch.r, swatch.g, swatch.b));
+            colorable.SetColor(dyeColor);
             // Refresh the pawn's drawn graphics + the viewer's portrait/state.
             pawn.Drawer?.renderer?.SetAllGraphicsDirty();
             PortraitsCache.SetDirty(pawn);
@@ -955,7 +982,59 @@ namespace Overlord
             if (!string.IsNullOrEmpty(session.username))
                 comp?.HandleRequestStatePublic(session.username);
 
-            return SuccessResult($"Dyed {apparel.LabelShort} {swatch.label}");
+            return SuccessResult($"Dyed {apparel.LabelShort} {dyeLabel}");
+        }
+
+        // The wheel gives viewers any hue, but full RGB puts #00FF00 colonists
+        // in the streamer's frame. Hue passes through untouched; saturation and
+        // value are clamped so everything lands in the same muted register as
+        // the fixed DyePalette (whose swatches sit around S 0.35-0.75,
+        // V 0.16-0.92). Cheap: one RGBToHSV + one HSVToRGB per dye command.
+        private const float MaxDyeSaturation = 0.72f;
+        private const float MinDyeValue = 0.14f;
+        private const float MaxDyeValue = 0.90f;
+
+        internal static Color ClampToGameGamut(Color c)
+        {
+            float h, s, v;
+            Color.RGBToHSV(c, out h, out s, out v);
+            // Near-greyscale picks (white/black/charcoal) keep their neutrality
+            // rather than being pushed to a minimum saturation.
+            s = Mathf.Min(s, MaxDyeSaturation);
+            v = Mathf.Clamp(v, MinDyeValue, MaxDyeValue);
+            return Color.HSVToRGB(h, s, v);
+        }
+
+        internal static bool TryParseHexColor(string hex, out Color color)
+        {
+            color = Color.white;
+            if (string.IsNullOrEmpty(hex)) return false;
+            string s = hex.Trim();
+            if (s.StartsWith("#")) s = s.Substring(1);
+            if (s.Length != 6) return false;
+            int r, g, b;
+            if (!int.TryParse(s.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out r)) return false;
+            if (!int.TryParse(s.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out g)) return false;
+            if (!int.TryParse(s.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out b)) return false;
+            color = new Color(r / 255f, g / 255f, b / 255f);
+            return true;
+        }
+
+        // Names the nearest fixed swatch so the action log reads "Dyed shirt
+        // near Teal" instead of a hex string nobody can picture.
+        private static string DescribeColor(Color c)
+        {
+            string best = null;
+            float bestDist = float.MaxValue;
+            foreach (var sw in DyePalette)
+            {
+                float dr = sw.r - c.r, dg = sw.g - c.g, db = sw.b - c.b;
+                float dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) { bestDist = dist; best = sw.label; }
+            }
+            // Exact-ish match reads as the swatch itself; otherwise "near X".
+            if (best == null) return "a custom color";
+            return bestDist <= 0.002f ? best : $"near {best}";
         }
 
         private static Dictionary<string, object> ExecuteSpawnColonist(string username, string json, ViewerManager vm)
