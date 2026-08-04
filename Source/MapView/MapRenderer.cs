@@ -45,6 +45,16 @@ namespace Overlord
         private bool captureInProgress;
         private int initFailCount;
 
+        // Circuit breaker for map capture. A map that fails to build keeps
+        // failing, so retrying every frame just burns main-thread time and
+        // floods the log; this stops trying for a cooldown, then allows one
+        // probe. Reset on any successful render.
+        private const int RenderFailLogLimit = 5;          // stop logging after this many
+        private const int RenderFailBreakerTrip = 10;      // stop rendering at this many
+        private const float RenderBreakerCooldownSeconds = 10f;
+        private bool renderBreakerOpen;
+        private float renderBreakerUntilRealtime;
+
         // ── Async capture pipeline ──────────────────────────────────────────────
         // AsyncGPUReadback removes the ReadPixels GPU→CPU pipeline stall, and the
         // JPEG encode runs on the send worker via ImageConversion.EncodeArrayToJPG
@@ -254,7 +264,10 @@ namespace Overlord
             }
             catch (Exception ex)
             {
-                LogUtil.Warn($"Map end-of-frame capture error: {ex.Message}");
+                // Rate-limited: this fires once per frame while a map is broken,
+                // and unbounded logging was itself part of the 2026-08-03 stall.
+                if (initFailCount <= RenderFailLogLimit)
+                    LogUtil.Warn($"Map end-of-frame capture error: {ex.Message}");
             }
             finally
             {
@@ -374,6 +387,19 @@ namespace Overlord
                 return;
             }
 
+            // Circuit breaker: after repeated render failures (a half-built map
+            // keeps throwing every frame), stop capturing entirely for a
+            // cooldown rather than re-entering the failing path each pump.
+            if (renderBreakerOpen)
+            {
+                if (Time.realtimeSinceStartup < renderBreakerUntilRealtime)
+                    return;
+                // Cooldown elapsed — allow ONE probe render. If it fails the
+                // catch re-opens the breaker; if it succeeds the counters reset.
+                renderBreakerOpen = false;
+                initFailCount = RenderFailBreakerTrip - 1;
+            }
+
             // Backpressure counts frames still in flight on the GPU (async readbacks)
             // as well as frames waiting on the encode/send worker.
             int queueDepth = sendQueue.Count + pendingReadbacks;
@@ -397,14 +423,20 @@ namespace Overlord
                 try
                 {
                     RenderHostCameraFrame(activeSessions);
+                    initFailCount = 0;
                     MaybeLogStats(activeSessions.Count, sendQueue.Count, effectiveInterval);
                 }
                 catch (Exception ex)
                 {
-                    LogUtil.Warn($"Map host-camera render error: {ex.Message}");
                     initFailCount++;
-                    if (initFailCount > 5)
-                        LogUtil.Warn("Map renderer: repeated host-camera errors");
+                    if (initFailCount <= RenderFailLogLimit)
+                        LogUtil.Warn($"Map host-camera render error: {ex.Message}");
+                    if (initFailCount >= RenderFailBreakerTrip && !renderBreakerOpen)
+                    {
+                        renderBreakerOpen = true;
+                        renderBreakerUntilRealtime = Time.realtimeSinceStartup + RenderBreakerCooldownSeconds;
+                        LogUtil.Warn($"Map renderer: {initFailCount} consecutive host-camera errors — pausing map capture for {RenderBreakerCooldownSeconds:0}s");
+                    }
                 }
                 return;
             }
@@ -479,6 +511,9 @@ namespace Overlord
                 {
                     RenderGroup(group);
                     rendered++;
+                    // A successful render clears the failure streak, so the
+                    // breaker only ever trips on CONSECUTIVE failures.
+                    initFailCount = 0;
                     // Stamp members as served only after the render actually ran, so a
                     // transient failure retries next pump instead of waiting a full
                     // interval for the whole group.
@@ -492,12 +527,23 @@ namespace Overlord
                 }
                 catch (Exception ex)
                 {
-                    LogUtil.Warn($"Map render error (group of {group.Count}): {ex.Message}");
                     initFailCount++;
-                    if (initFailCount > 5)
+                    // Back off instead of retrying every frame forever. When a
+                    // map fails to build (2026-08-03: a vanilla NRE while
+                    // settling a caravan in an empty tile left a half-created
+                    // map), the old code logged every failure and RESET the
+                    // counter at 5, so it never actually stopped — unbounded
+                    // per-frame render attempts and log spam piled onto a game
+                    // already struggling. Now it trips and stays off until a
+                    // render succeeds.
+                    if (initFailCount <= RenderFailLogLimit)
+                        LogUtil.Warn($"Map render error (group of {group.Count}): {ex.Message}");
+
+                    if (initFailCount >= RenderFailBreakerTrip && !renderBreakerOpen)
                     {
-                        initFailCount = 0;
-                        LogUtil.Warn("Map renderer: repeated render errors");
+                        renderBreakerOpen = true;
+                        renderBreakerUntilRealtime = UnityEngine.Time.realtimeSinceStartup + RenderBreakerCooldownSeconds;
+                        LogUtil.Warn($"Map renderer: {initFailCount} consecutive render errors — pausing map capture for {RenderBreakerCooldownSeconds:0}s");
                     }
                 }
             }
