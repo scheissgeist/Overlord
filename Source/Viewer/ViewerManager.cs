@@ -123,6 +123,65 @@ namespace Overlord
             return session;
         }
 
+        /// <summary>
+        /// Reattaches a returning viewer to the colonist they previously owned,
+        /// with no new approval prompt. Safe because it grants nothing new: the
+        /// pairing is one the STREAMER ALREADY APPROVED, recorded as
+        /// (pawn.thingIDNumber -> normalized login) and saved with the colony.
+        ///
+        /// Deliberately NOT name-based. Overlord renames pawns to viewer display
+        /// names, Toolkit and other mods rename colonists too, and display names
+        /// can collide between viewers — so a name match would let one viewer
+        /// inherit another's colonist. The login comes from the authenticated
+        /// session and cannot be spoofed by the viewer.
+        ///
+        /// Returns the reclaimed pawn, or null if there was nothing to restore.
+        /// </summary>
+        public Pawn TryReconnectPreviousPawn(string username)
+        {
+            username = NormalizeUsername(username);
+            if (username == null) return null;
+
+            // Explicit, not inherited: a viewer banned or timed out while holding
+            // a colonist must not get it back by rejoining.
+            if (IsBanned(username) || IsInTimeout(username, out _))
+                return null;
+
+            var session = GetSession(username);
+            if (session == null || session.assignedPawn != null)
+                return null; // no session, or already holding a pawn
+
+            if (lastOwnerByPawnId == null || lastOwnerByPawnId.Count == 0)
+                return null;
+
+            foreach (var pair in lastOwnerByPawnId)
+            {
+                if (!string.Equals(pair.Value, username, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var pawn = FindPawnById(pair.Key);
+                // Must still be a live, spawned colonist. A dead pawn stays with
+                // ReviveManager's flow rather than being silently re-handed out.
+                if (pawn == null || pawn.Dead || pawn.Destroyed || !pawn.Spawned)
+                    continue;
+                // Never steal: if anyone currently holds it, leave it alone.
+                if (GetSessionForPawn(pawn) != null)
+                    continue;
+                if (!pawn.IsColonist)
+                    continue;
+
+                if (AssignPawn(username, pawn))
+                {
+                    LogUtil.Log($"Auto-reconnected {username} to {pawn.LabelShort}");
+                    ActionLog.Append(ActionLogKind.Assignment, username, "reconnect",
+                        $"Auto-reconnected to {pawn.LabelShort}", pawn.thingIDNumber);
+                    return pawn;
+                }
+            }
+
+            return null;
+        }
+
         public void MarkDisconnected(string username)
         {
             username = NormalizeUsername(username);
@@ -239,6 +298,14 @@ namespace Overlord
             // corruption (null slots / stuck apparel) before their commands hit it.
             PawnCommandRouter.RepairEquipmentTracker(pawn);
             pawnToViewer[pawn.thingIDNumber] = username;
+            // Record ownership on ASSIGNMENT, not just on death. This is what
+            // lets a returning viewer be reconnected to the same colonist after
+            // a restart without re-asking the streamer for approval. Keyed on
+            // thingIDNumber + normalized login, never on the pawn's NAME —
+            // Overlord renames pawns to display names (below), Toolkit and other
+            // mods rename them too, and display names can collide, so a name is
+            // a derived label rather than an identity.
+            RememberLastOwner(pawn.thingIDNumber, username);
             pendingClaims.Remove(username);
             foreach (var claim in pendingClaims.Values.Where(c => c.pawnId == pawn.thingIDNumber).ToList())
                 pendingClaims.Remove(claim.username);

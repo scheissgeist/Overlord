@@ -306,6 +306,26 @@ namespace Overlord
             var session = viewerManager.GetOrCreateSession(username, displayName);
             session?.SetMapTransportPreference(JsonHelper.ExtractString(json, "mapTransport"));
             LogUtil.Log($"Viewer joined: {displayName} ({username})");
+
+            // Returning viewers get their previous colonist back automatically.
+            // This re-establishes a pairing the streamer already approved (see
+            // ViewerManager.TryReconnectPreviousPawn) rather than granting
+            // anything new, so it does not need a fresh approval prompt — and it
+            // must run BEFORE the "waiting for a colonist" alert below, or the
+            // streamer gets pinged about a viewer who was just reconnected.
+            if (session != null && !session.OwnsPawn
+                && OverlordMod.Settings?.autoReconnectPreviousPawn != false)
+            {
+                var restored = viewerManager.TryReconnectPreviousPawn(username);
+                if (restored != null)
+                {
+                    Messages.Message(
+                        $"[Overlord] {displayName} reconnected to {restored.LabelShort}.",
+                        restored, MessageTypeDefOf.NeutralEvent, historical: false
+                    );
+                }
+            }
+
             viewerManager.SendColonistList(username);
             SendHostCapabilities(username);
             SendMapTransportSelection(username, session);

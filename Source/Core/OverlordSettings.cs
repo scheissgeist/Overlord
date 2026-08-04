@@ -51,6 +51,11 @@ namespace Overlord
         public int commandCooldownTicks = 20; // ~0.33 seconds between commands
         public bool enforceAreaRestrictions = true;
 
+        // Reconnect: hand a returning viewer back the colonist they already
+        // owned, without re-prompting the streamer. Only restores a pairing the
+        // streamer previously approved — never assigns anyone a new pawn.
+        public bool autoReconnectPreviousPawn = true;
+
         // Respawn
         public int startTickets = 3;
         public int respawnCooldownTicks = 2500;  // ~42 seconds
@@ -89,6 +94,7 @@ namespace Overlord
             Scribe_Values.Look(ref respawnCooldownTicks, "respawnCooldownTicks", 2500);
             Scribe_Values.Look(ref maxTickets, "maxTickets", 5);
             Scribe_Values.Look(ref ticketEarnIntervalTicks, "ticketEarnIntervalTicks", 180000);
+            Scribe_Values.Look(ref autoReconnectPreviousPawn, "autoReconnectPreviousPawn", true);
             base.ExposeData();
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit && liveCameraModeVersion < 2)

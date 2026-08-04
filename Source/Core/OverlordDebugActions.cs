@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using LudeonTK;
@@ -21,6 +22,53 @@ namespace Overlord
     /// </summary>
     public static class OverlordDebugActions
     {
+        /// Exercises auto-reconnect without waiting for a viewer to actually
+        /// rejoin: drops each assigned viewer's pawn (as a restart would), then
+        /// runs the reconnect path and reports whether each got the SAME pawn
+        /// back. Also names anyone the reconnect deliberately refused.
+        [DebugAction("Overlord", "Test viewer auto-reconnect", allowedGameStates = AllowedGameStates.PlayingOnMap)]
+        public static void TestViewerAutoReconnect()
+        {
+            var vm = OverlordGameComponent.Instance?.Viewers;
+            if (vm == null)
+            {
+                Log.Warning("[Overlord] No viewer manager — is the mod running?");
+                return;
+            }
+
+            var before = new List<KeyValuePair<string, Pawn>>();
+            foreach (var s in vm.AllSessions)
+            {
+                if (s?.assignedPawn != null)
+                    before.Add(new KeyValuePair<string, Pawn>(s.username, s.assignedPawn));
+            }
+
+            if (before.Count == 0)
+            {
+                Log.Message("[Overlord] Auto-reconnect test: no viewers currently hold a colonist.");
+                return;
+            }
+
+            // Simulate the restart: release every pawn, keeping the persisted
+            // owner record that reconnect is supposed to read.
+            foreach (var pair in before)
+                vm.UnassignPawn(pair.Key);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"[Overlord] Auto-reconnect test ({before.Count} viewer(s)):");
+            int restored = 0;
+            foreach (var pair in before)
+            {
+                var got = vm.TryReconnectPreviousPawn(pair.Key);
+                bool same = got == pair.Value;
+                if (same) restored++;
+                sb.AppendLine($"  {pair.Key}: had {pair.Value.LabelShort} -> " +
+                    (got == null ? "REFUSED (banned/timed out/pawn gone)" : $"{got.LabelShort}{(same ? " OK" : " MISMATCH")}"));
+            }
+            sb.AppendLine($"  restored {restored}/{before.Count}");
+            Log.Message(sb.ToString());
+        }
+
         [DebugAction("Overlord", "Report viewer map state", allowedGameStates = AllowedGameStates.PlayingOnMap)]
         public static void ReportViewerMapState()
         {

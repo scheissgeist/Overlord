@@ -157,6 +157,9 @@ namespace Overlord
             listing.Label($"Command cooldown: {Settings.commandCooldownTicks / 60f:F2}s per command");
             Settings.commandCooldownTicks = (int)listing.Slider(Settings.commandCooldownTicks, 0, 300);
             listing.CheckboxLabeled("Enforce pawn area restrictions for viewer commands", ref Settings.enforceAreaRestrictions);
+            listing.CheckboxLabeled("Auto-reconnect returning viewers to their own colonist",
+                ref Settings.autoReconnectPreviousPawn,
+                "When a viewer rejoins, hand them back the colonist they already had — no approval prompt. Only restores pairings you previously approved; never gives anyone a new colonist, and never takes one that someone else holds.");
 
             listing.GapLine();
             listing.Label("Respawn");
