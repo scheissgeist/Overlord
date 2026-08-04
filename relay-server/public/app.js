@@ -135,6 +135,9 @@ const storyPurchaseSelections = new Map();
 // Per-item colour-wheel position (itemId -> {h,s,v}). Kept out of the render
 // path's state so dragging doesn't require a full re-render per frame.
 const dyeWheelState = new Map();
+// Lazily built defName -> material lookup over toolkitState.stuffCatalog.
+// Nulled on every toolkit_state so it can never serve a stale catalog.
+let buyStuffCatalog = null;
 const COMMAND_FEEDBACK_CLEAR_MS = 2200;
 const ARMORY_PAGE_SIZE = 3;
 const MAP_RESYNC_THROTTLE_MS = 1500;
@@ -335,13 +338,14 @@ const PAWN_TARGETED_SKUS = new Set([
   'repairgear'
 ]);
 
-const BUY_SHOP_ORDER = ['medical', 'food', 'weapons', 'apparel', 'buildables', 'events', 'pawn', 'items', 'other'];
+const BUY_SHOP_ORDER = ['medical', 'food', 'weapons', 'apparel', 'animals', 'buildables', 'events', 'pawn', 'items', 'other'];
 const BUY_SHOPS = {
   all: { label: 'All' },
   medical: { label: 'Medical' },
   food: { label: 'Food' },
   weapons: { label: 'Weapons' },
   apparel: { label: 'Apparel' },
+  animals: { label: 'Animals' },
   buildables: { label: 'Buildables' },
   events: { label: 'Events' },
   pawn: { label: 'Pawn' },
@@ -3880,6 +3884,7 @@ function handleMapTransport(msg) {
 
 function handleToolkitState(msg) {
   toolkitState = msg || null;
+  buyStuffCatalog = null; // rebuilt lazily from the new state's stuffCatalog
   invalidatePanel('gear');
   if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
   renderCommandCenterFromState();
@@ -5259,6 +5264,7 @@ function renderBuyControls() {
     ${available && !connected ? `<div class="buy-banner warn">Toolkit chat is offline on the host — purchases stay locked until it reconnects in RimWorld.</div>` : ''}
     <div class="buy-toolbar">
       <input class="buy-search" type="search" data-buy-search value="${escapeAttr(buySearchQuery)}" placeholder="Search…" aria-label="Search store">
+      ${renderBuyTruncationNote(entries.length)}
     </div>
     <div class="buy-shop-tabs">
       ${renderBuyShopTab('all', decorated.length, affordable.length)}
@@ -5319,6 +5325,15 @@ function renderBuyShopGroup(key, rows, canBuy, showHeading = true) {
   </div>`;
 }
 
+// The store can exceed what one payload carries. Say so out loud: viewers
+// previously saw a shop that looked complete while !buy and !lookup reached
+// items it never listed, which read as the shop being broken.
+function renderBuyTruncationNote(shownCount) {
+  const total = Number(toolkitState?.itemCount ?? 0);
+  if (!Number.isFinite(total) || total <= 0 || shownCount >= total) return '';
+  return `<span class="buy-truncation" title="The store has more items than the shop can list. Everything is still reachable with !buy in chat.">${escapeHtml(formatNumber(shownCount))} of ${escapeHtml(formatNumber(total))}</span>`;
+}
+
 function renderToolkitRate() {
   if (!toolkitState?.earningCoins) return '';
   const amount = Number(toolkitState.coinAmount ?? 0);
@@ -5343,6 +5358,9 @@ function getBuyShop(item) {
     explicit
   ].filter(Boolean).join(' ');
 
+  // Animals first: the host flags them explicitly, and their thing categories
+  // contain "meat", so any earlier text rule would swallow them into Food.
+  if (item?.isAnimal === true) return 'animals';
   if (textHasAny(text, ['medicine', 'medical', 'heal', 'revive', 'rescue', 'injury', 'disease', 'infection', 'drug'])) return 'medical';
   if (textHasAny(text, ['meal', 'food', 'meat', 'vegetable', 'fruit', 'milk', 'egg', 'pemmican', 'nutrition'])) return 'food';
   if (textHasAny(text, ['weapon', 'gun', 'rifle', 'pistol', 'revolver', 'bow', 'sword', 'knife', 'mace', 'spear', 'grenade', 'launcher'])) return 'weapons';
@@ -5410,6 +5428,13 @@ function getBuyItemState(item) {
   const missingArgument = needsInput && !argument;
   const hasPrice = unitCost != null;
   const meetsMinimum = !isItem || !hasPrice || !minimumPurchase || totalCost >= minimumPurchase;
+  // Toolkit's MinimumPurchasePrice is a COIN floor, not a quantity floor, so a
+  // cheap item silently demands a huge stack (a 10-coin bookcase against a
+  // 600-coin minimum = 60 bookcases). Compute the smallest qty that clears it
+  // so the UI can offer that directly instead of making viewers do the maths.
+  const minQtyForMinimum = (isItem && hasPrice && minimumPurchase && unitCost > 0)
+    ? Math.ceil(minimumPurchase / unitCost)
+    : 1;
   const affordable = unlimited || (hasPrice && coins >= totalCost);
   const listedAffordable = !!item?.affordable || (hasPrice && (unlimited || coins >= unitCost));
   const researchBlocked = isItem && item?.mustResearchFirst === true && item?.researched === false;
@@ -5426,6 +5451,8 @@ function getBuyItemState(item) {
     missingArgument,
     hasPrice,
     meetsMinimum,
+    minQtyForMinimum,
+    minimumPurchase,
     affordable,
     listedAffordable,
     researchBlocked,
@@ -5439,20 +5466,39 @@ function renderBuyItem(item, canBuy, state = null) {
   const sku = buyState.sku;
   const unitCost = buyState.unitCost;
   const totalCost = buyState.totalCost;
-  const disabled = !canBuy || !buyState.hasPrice || !buyState.affordable || !buyState.meetsMinimum || buyState.missingArgument || buyState.researchBlocked || buyState.needsAssignedPawn;
+  // Failing the coin minimum is RECOVERABLE — the viewer just needs a bigger
+  // stack — so it doesn't disable the button like the other block reasons do.
+  // Instead the button bumps the quantity to the smallest one that qualifies
+  // (and stays enabled only if they can afford that stack).
+  // Only offer the stack bump for goods that make sense in bulk. Suggesting
+  // "buy 2 rifles" or "buy 4 muffalo" to clear a coin floor is nonsense — for
+  // those the honest answer is that the item is under the store's minimum.
+  const canReachMinimum = !buyState.meetsMinimum
+    && buyState.hasPrice
+    && (isStackableBuyItem(item) || item?.isBuildable === true)
+    && buyState.minQtyForMinimum <= 100
+    && (toolkitState?.unlimitedCoins || Number(toolkitState?.coins ?? 0) >= buyState.unitCost * buyState.minQtyForMinimum);
+  const disabled = !canBuy || !buyState.hasPrice
+    || (buyState.meetsMinimum ? !buyState.affordable : !canReachMinimum)
+    || buyState.missingArgument || buyState.researchBlocked || buyState.needsAssignedPawn;
   const blockReason = buyState.needsAssignedPawn
     ? 'Needs assigned colonist'
     : (buyState.missingArgument
     ? 'Needs argument'
     : (!buyState.hasPrice ? 'No price'
-      : (!buyState.meetsMinimum ? `Min ${formatNumber(toolkitState?.minimumPurchase ?? 0)}`
+      : (!buyState.meetsMinimum
+        ? (canReachMinimum
+          ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
+          : `Min ${formatNumber(buyState.minimumPurchase)}`)
         : (buyState.researchBlocked ? 'Research locked'
           : (!buyState.affordable ? 'Not enough coins' : (!canBuy ? 'Offline' : ''))))));
-  const buttonLabel = disabled ? (blockReason || 'Locked') : 'Buy';
+  const buttonLabel = canReachMinimum
+    ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
+    : (disabled ? (blockReason || 'Locked') : 'Buy');
   const priceLine = buyState.isItem && buyState.quantity > 1
     ? `${formatNumber(unitCost)} × ${buyState.quantity} = ${formatNumber(totalCost)}`
     : formatNumber(totalCost ?? unitCost);
-  const stuffOptions = getArray(item?.stuffOptions);
+  const stuffOptions = getBuyStuffOptions(item);
   const selectedStuff = buyStuffSelections.has(sku) ? buyStuffSelections.get(sku) : '';
   const stuffSelector = buyState.isItem && stuffOptions.length ? `<select class="buy-stuff-select" data-buy-stuff-select="${escapeAttr(sku)}" aria-label="Material for ${escapeAttr(item?.label || sku)}">
       <option value="" ${selectedStuff ? '' : 'selected'}>Random material</option>
@@ -5465,7 +5511,10 @@ function renderBuyItem(item, canBuy, state = null) {
   // Only stackable goods (steel, meals, medicine) get a quantity stepper. A
   // weapon or a worn vest is bought one at a time, so showing "- 1 +" on those
   // rows was a control nobody could use costing a line of height each.
-  const qtyControls = buyState.isItem && isStackableBuyItem(item) ? `<div class="buy-quantity" aria-label="Quantity">
+  // Exception: anything below the store's coin minimum needs a stack to be
+  // buyable at all, so it keeps the stepper regardless of type.
+  const showQty = buyState.isItem && (isStackableBuyItem(item) || canReachMinimum || buyState.quantity > 1);
+  const qtyControls = showQty ? `<div class="buy-quantity" aria-label="Quantity">
       <button data-buy-qty-step="-1" data-buy-qty-sku="${escapeAttr(sku)}" ${buyState.quantity <= 1 ? 'disabled' : ''}>-</button>
       <input data-buy-qty-input="${escapeAttr(sku)}" type="text" inputmode="numeric" pattern="[0-9]*" value="${escapeAttr(getBuyQuantityInputValue(item))}" aria-label="Quantity for ${escapeAttr(item?.label || sku)}">
       <button data-buy-qty-step="1" data-buy-qty-sku="${escapeAttr(sku)}" ${buyState.quantity >= 100 ? 'disabled' : ''}>+</button>
@@ -5474,8 +5523,11 @@ function renderBuyItem(item, canBuy, state = null) {
   const buyIcon = item?.defName ? itemIconHtml(item.defName, selectedStuff || '', 'buy-icon') : '';
   // "Equip" rather than "Buy & Equip": it sits beside the Buy button, so the
   // buy verb is already established and the long label forced a second line.
-  const equipButton = isPersonalBuyItem(item)
-    ? `<button class="buy-equip" data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" data-buy-equip="1" ${disabled ? 'disabled' : ''} title="${escapeAttr(disabled ? (blockReason || '') : 'Buy & Equip — goes to your colonist')}">${escapeHtml(disabled ? (blockReason || 'Locked') : 'Equip')}</button>`
+  // When the row is blocked, the Buy button already states the reason — a
+  // second button repeating it verbatim just doubled the width of the actions
+  // column and pushed into the item name.
+  const equipButton = isPersonalBuyItem(item) && !disabled
+    ? `<button class="buy-equip" data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" data-buy-equip="1" title="Buy &amp; Equip — goes to your colonist">Equip</button>`
     : '';
   return `<div class="buy-item${disabled ? ' disabled' : ''}">
     ${buyIcon || '<span class="buy-icon buy-icon-empty"></span>'}
@@ -5490,11 +5542,30 @@ function renderBuyItem(item, canBuy, state = null) {
       ${stuffSelector}
       ${qtyControls}
       <div class="buy-actions">
-        <button data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" ${disabled ? 'disabled' : ''} title="${escapeAttr(blockReason || 'Buy — drops at colony')}">${escapeHtml(buttonLabel)}</button>
+        <button data-buy-sku="${escapeAttr(sku)}" data-buy-kind="${escapeAttr(item?.kind || '')}" ${canReachMinimum ? `data-buy-set-qty="${buyState.minQtyForMinimum}"` : ''} ${disabled ? 'disabled' : ''} title="${escapeAttr(canReachMinimum ? `The store's ${formatNumber(buyState.minimumPurchase)}-coin minimum needs ${formatNumber(buyState.minQtyForMinimum)} of these — tap to set that quantity` : (blockReason || 'Buy — drops at colony'))}">${escapeHtml(buttonLabel)}</button>
         ${equipButton}
       </div>
     </div>
   </div>`;
+}
+
+// Materials arrive as defName refs into toolkitState.stuffCatalog so each is on
+// the wire once rather than once per item that can be made from it — that
+// duplication was what forced the store's low item cap. Older hosts still send
+// stuffOptions inline, so both shapes resolve here.
+function getBuyStuffOptions(item) {
+  const inline = getArray(item?.stuffOptions);
+  if (inline.length) return inline;
+  const refs = getArray(item?.stuffRefs);
+  if (!refs.length) return [];
+  if (!buyStuffCatalog) {
+    buyStuffCatalog = new Map();
+    for (const entry of getArray(toolkitState?.stuffCatalog)) {
+      const key = String(entry?.defName || '');
+      if (key) buyStuffCatalog.set(key, entry);
+    }
+  }
+  return refs.map(ref => buyStuffCatalog.get(String(ref))).filter(Boolean);
 }
 
 // A "personal" item can be worn/wielded/carried by a pawn, so it can be routed
@@ -5513,7 +5584,8 @@ function isPersonalBuyItem(item) {
 // (Source/Toolkit/TwitchToolkitBridge.cs).
 function isStackableBuyItem(item) {
   if (!item || item.kind !== 'item') return false;
-  return !item.isWeapon && !item.isApparel && !item.isBuildable;
+  // Animals arrive one at a time, so they get no quantity stepper either.
+  return !item.isWeapon && !item.isApparel && !item.isBuildable && !item.isAnimal;
 }
 
 function formatPrice(value) {
@@ -6025,6 +6097,14 @@ function handleCommandCenterClick(event) {
 
   const buy = event.target.closest('[data-buy-sku]');
   if (buy) {
+    // Below the store's coin minimum this button sets the qualifying quantity
+    // instead of purchasing, so the viewer sees the stack and price BEFORE
+    // committing rather than being handed a dead "Min 600" button.
+    const setQty = Number(buy.dataset.buySetQty);
+    if (Number.isFinite(setQty) && setQty > 1) {
+      setBuyQuantity(buy.dataset.buySku, setQty);
+      return;
+    }
     const equipToPawn = buy.dataset.buyEquip === '1';
     sendToolkitPurchase(buy.dataset.buySku, buy.dataset.buyKind, null, null, equipToPawn);
     return;

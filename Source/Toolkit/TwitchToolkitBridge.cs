@@ -15,8 +15,15 @@ namespace Overlord
     /// </summary>
     public static class TwitchToolkitBridge
     {
-        private const int MaxStoreEntries = 700;
-        private const int MaxItemEntries = 560;
+        // Two viewers independently reported the shop hiding items that !buy and
+        // !lookup could still reach ("looked up cataphract armor and it only has
+        // the helmet"). The old caps (700/560) were sized against a payload
+        // dominated by per-item stuffOptions: a 48-material entry costs ~3.7KB
+        // inlined vs ~0.43KB when materials are referenced by defName. With the
+        // shared stuffCatalog below carrying each material ONCE, the same wire
+        // budget covers far more of the store, so the caps rise accordingly.
+        private const int MaxStoreEntries = 2600;
+        private const int MaxItemEntries = 2400;
         private const int MaxStuffOptions = 48;
         public const string RepairEquippedGearSku = "repairgear";
         public const int RepairEquippedGearCost = 2000;
@@ -80,7 +87,12 @@ namespace Overlord
                 msg["coinAmount"] = coinAmount;
                 msg["coinInterval"] = coinInterval;
                 msg["minimumPurchase"] = minimumPurchase;
+                // Order matters: the catalog is populated while entries build.
                 msg["entries"] = BuildStoreEntries(coins, unlimited);
+                msg["stuffCatalog"] = BuildStuffCatalogMessage();
+                // True store size. The client shows "N of M" when the shop is
+                // capped so truncation is visible instead of silent — viewers
+                // previously had no way to tell items were missing.
                 msg["itemCount"] = GetStoreItemCount();
             }
             catch (Exception ex)
@@ -199,6 +211,7 @@ namespace Overlord
 
         private static List<Dictionary<string, object>> BuildStoreEntries(int coins, bool unlimited)
         {
+            ResetStuffCatalog();
             var entries = new List<Dictionary<string, object>>();
             AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsSimple", coins, unlimited, "event");
             AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsVariables", coins, unlimited, "event");
@@ -219,13 +232,19 @@ namespace Overlord
                 ["command"] = "!buy " + RepairEquippedGearSku
             });
 
-            return entries
+            var ordered = entries
                 .Where(e => e.ContainsKey("sku"))
                 .OrderByDescending(e => e.ContainsKey("affordable") && e["affordable"] is bool b && b)
                 .ThenBy(e => e.ContainsKey("cost") ? Convert.ToInt32(e["cost"]) : int.MaxValue)
                 .ThenBy(e => e.ContainsKey("label") ? e["label"].ToString() : "")
-                .Take(MaxStoreEntries)
                 .ToList();
+
+            // Backstop ceiling only — item selection is already bounded above.
+            // Sampled rather than truncated so hitting it can't silently shave
+            // off the expensive end of the store.
+            return ordered.Count <= MaxStoreEntries
+                ? ordered
+                : SpreadSample(ordered, MaxStoreEntries).ToList();
         }
 
         private static Dictionary<string, object> ExecuteRepairEquippedGear(string username, Pawn pawn)
@@ -484,8 +503,17 @@ namespace Overlord
                 if (string.IsNullOrEmpty(sku) || price <= 0) continue;
 
                 ThingDef def = ResolveThingDef(defName);
-                string label = LabelForThing(def, defName, sku);
-                string category = CategoryForThing(def, defName, label);
+                // Live animals are PawnKindDefs, so ResolveThingDef returns null
+                // and the text classifier matched their "meat" thing category —
+                // a muffalo listed under Food, with no way to browse animals at
+                // all. Resolve the race first and categorise it honestly.
+                PawnKindDef kind = ResolveLivestockKind(defName, sku);
+                string label = kind != null
+                    ? (kind.label ?? kind.defName)
+                    : LabelForThing(def, defName, sku);
+                string category = kind != null
+                    ? "animals"
+                    : CategoryForThing(def, defName, label);
                 var stuffOptions = BuildStuffOptions(def);
                 bool requiresResearch = ReadStaticBool("TwitchToolkit.IncidentHelpers.IncidentHelper_Settings.BuyItemSettings", "mustResearchFirst", false);
                 string researchLabel;
@@ -506,7 +534,11 @@ namespace Overlord
                     ["mustResearchFirst"] = requiresResearch,
                     ["researchProject"] = researchLabel ?? "",
                     ["madeFromStuff"] = stuffOptions.Count > 0,
-                    ["stuffOptions"] = stuffOptions,
+                    // Materials are sent by defName and resolved against the
+                    // shared stuffCatalog. Inlining the full option objects on
+                    // every entry was what forced the old low item caps.
+                    ["stuffRefs"] = CollectStuffRefs(stuffOptions),
+                    ["isAnimal"] = kind != null,
                     ["isWeapon"] = def?.IsWeapon == true,
                     ["isApparel"] = def?.apparel != null,
                     ["isBuildable"] = def != null && (def.building != null || def.Minifiable || def.category == ThingCategory.Building),
@@ -525,12 +557,17 @@ namespace Overlord
         {
             var selected = new List<Dictionary<string, object>>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string[] categories = { "medical", "food", "weapons", "apparel", "buildables", "items" };
+            string[] categories = { "medical", "food", "weapons", "apparel", "animals", "buildables", "items" };
             int quota = Math.Max(8, MaxItemEntries / categories.Length);
 
+            // Within a category take a PRICE-SPREAD sample rather than the
+            // cheapest N. SortedStoreEntries is cheapest-first, so when a store
+            // overflowed the quota the most expensive gear was always what got
+            // dropped — which is why "cataphract armor" showed only the helmet
+            // (its cheapest piece) while !buy could still reach the rest.
             foreach (string category in categories)
             {
-                foreach (var entry in SortedStoreEntries(itemEntries.Where(e => EntryCategory(e) == category)).Take(quota))
+                foreach (var entry in SpreadSample(SortedStoreEntries(itemEntries.Where(e => EntryCategory(e) == category)).ToList(), quota))
                 {
                     if (TryAddBalancedEntry(selected, seen, entry) && selected.Count >= MaxItemEntries)
                         return selected;
@@ -544,6 +581,42 @@ namespace Overlord
             }
 
             return selected;
+        }
+
+        /// <summary>
+        /// Takes up to <paramref name="count"/> entries spread evenly across the
+        /// input instead of the first N. With a price-sorted input that keeps
+        /// the cheap, mid and expensive ends all represented, so an overflowing
+        /// category degrades by thinning out rather than by losing its top end.
+        /// </summary>
+        private static IEnumerable<Dictionary<string, object>> SpreadSample(List<Dictionary<string, object>> sorted, int count)
+        {
+            if (sorted == null || sorted.Count == 0)
+                yield break;
+            if (count <= 0)
+                yield break;
+            if (sorted.Count <= count)
+            {
+                foreach (var entry in sorted)
+                    yield return entry;
+                yield break;
+            }
+
+            if (count == 1)
+            {
+                yield return sorted[0];
+                yield break;
+            }
+
+            // Evenly spaced indices across the whole price range, endpoints
+            // included, so the most expensive item in a category always survives.
+            for (int i = 0; i < count; i++)
+            {
+                int index = (int)Math.Round(i * (sorted.Count - 1) / (double)(count - 1));
+                if (index < 0) index = 0;
+                if (index >= sorted.Count) index = sorted.Count - 1;
+                yield return sorted[index];
+            }
         }
 
         private static IEnumerable<Dictionary<string, object>> SortedStoreEntries(IEnumerable<Dictionary<string, object>> entries)
@@ -971,6 +1044,46 @@ namespace Overlord
             catch { }
 
             return false;
+        }
+
+        // Accumulates every material referenced by the entries built during one
+        // BuildStoreEntries pass, so each is serialised once instead of once per
+        // item that can be made from it. Reset at the start of each pass.
+        [ThreadStatic] private static Dictionary<string, Dictionary<string, object>> stuffCatalog;
+
+        private static void ResetStuffCatalog()
+        {
+            stuffCatalog = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static List<object> CollectStuffRefs(List<Dictionary<string, object>> stuffOptions)
+        {
+            var refs = new List<object>();
+            if (stuffOptions == null || stuffOptions.Count == 0)
+                return refs;
+
+            if (stuffCatalog == null)
+                ResetStuffCatalog();
+
+            foreach (var option in stuffOptions)
+            {
+                if (option == null) continue;
+                string defName = option.TryGetValue("defName", out object v) ? v?.ToString() : null;
+                if (string.IsNullOrEmpty(defName)) continue;
+                if (!stuffCatalog.ContainsKey(defName))
+                    stuffCatalog[defName] = option;
+                refs.Add(defName);
+            }
+            return refs;
+        }
+
+        private static List<object> BuildStuffCatalogMessage()
+        {
+            var list = new List<object>();
+            if (stuffCatalog == null) return list;
+            foreach (var kv in stuffCatalog)
+                list.Add(kv.Value);
+            return list;
         }
 
         private static List<Dictionary<string, object>> BuildStuffOptions(ThingDef itemDef)
@@ -1722,6 +1835,37 @@ namespace Overlord
                 catch { }
             }
             return fallback;
+        }
+
+        /// <summary>
+        /// Resolves a store entry to a purchasable ANIMAL race, or null if the
+        /// entry is not an animal. Toolkit lists live animals by PawnKindDef
+        /// name, which ResolveThingDef cannot see — so without this they fell
+        /// through to the text classifier and matched their "meat" thing
+        /// category, landing under Food.
+        /// </summary>
+        private static PawnKindDef ResolveLivestockKind(string defName, string sku)
+        {
+            try
+            {
+                foreach (string candidate in new[] { defName, sku })
+                {
+                    if (string.IsNullOrEmpty(candidate)) continue;
+                    PawnKindDef found = DefDatabase<PawnKindDef>.GetNamedSilentFail(candidate);
+                    if (found == null)
+                    {
+                        found = DefDatabase<PawnKindDef>.AllDefsListForReading
+                            .FirstOrDefault(k => k != null
+                                && (string.Equals(k.defName, candidate, StringComparison.OrdinalIgnoreCase)
+                                 || string.Equals(k.label, candidate, StringComparison.OrdinalIgnoreCase)));
+                    }
+                    // Only animals — humanlike pawn kinds are not shop stock.
+                    if (found?.RaceProps != null && found.RaceProps.Animal)
+                        return found;
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static string CategoryForThing(ThingDef def, string defName, string label)

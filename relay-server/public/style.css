@@ -3278,6 +3278,13 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   border-color: rgba(210, 169, 93, 0.55);
 }
 
+.buy-truncation {
+  color: var(--yellow);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .buy-toolbar-count {
   color: var(--text-secondary);
   font-size: 11px;
@@ -3585,8 +3592,14 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   border-radius: 2px;
 }
 
+/* Capped so a long block reason ("Needs assigned colonist", "Min 600") can't
+   grow the actions column into the item name. Overflow ellipsises; the full
+   text stays available in the button's title. */
 .buy-meta button {
   min-width: 0;
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   height: 28px;
   padding: 0 11px;
   border: 1px solid rgba(210, 169, 93, 0.45);

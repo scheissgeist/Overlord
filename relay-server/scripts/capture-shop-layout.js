@@ -62,6 +62,23 @@ const WIDTHS = [
   { name: 'w390', width: 390, height: 844 },
 ];
 
+// Viewer-reported shop defects, each asserted below:
+//  - animals listed under Food (a muffalo matched its "meat" thing category)
+//  - a cheap item unbuyable behind the store's COIN minimum (60 bookcases)
+//  - the shop silently hiding items that !buy could still reach
+const ANIMAL_ENTRY = { kind: 'item', category: 'animals', sku: 'muffalo', label: 'muffalo', defName: 'Muffalo', cost: 900, price: 900, unitCost: 900, affordable: true, needsInput: false, isAnimal: true, isWeapon: false, isApparel: false, command: '!buy muffalo' };
+// 10 coins against a 600-coin minimum => needs 60. The reported case.
+const CHEAP_ENTRY = { kind: 'item', category: 'buildables', sku: 'bookcase', label: 'bookcase', defName: 'Bookcase', cost: 10, price: 10, unitCost: 10, affordable: true, needsInput: false, isBuildable: true, isWeapon: false, isApparel: false, command: '!buy bookcase' };
+// Materials by reference into a shared catalog rather than inlined per entry.
+const REF_ENTRY = { kind: 'item', category: 'apparel', sku: 'refduster', label: 'referenced duster', defName: 'Apparel_Duster', cost: 320, price: 320, unitCost: 320, affordable: true, needsInput: false, isApparel: true, madeFromStuff: true, stuffRefs: ['Cloth', 'Steel'], command: '!buy refduster' };
+const STUFF_CATALOG = [
+  { defName: 'Cloth', label: 'cloth', category: 'Fabric' },
+  { defName: 'Steel', label: 'steel', category: 'Metallic' },
+];
+// Toolkit's default is 0; streamers who raise it are what produced the report.
+// 600 against a 10-coin bookcase reproduces the "60 bookcases" case exactly.
+const MINIMUM_PURCHASE = 600;
+
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function waitFor(fn, label, timeoutMs = 10000) {
   const start = Date.now(); let lastError = null;
@@ -154,6 +171,8 @@ async function main() {
   const relay = startRelay();
   let browser = null, hostWs = null;
   const report = [];
+  const failures = [];
+  const shopChecks = [];
   try {
     await waitFor(() => requestJson('GET', '/health').catch(() => null), 'health', 15000);
     hostWs = new WebSocket(`${WS_URL}?role=host&secret=${encodeURIComponent(HOST_SECRET)}`);
@@ -181,7 +200,12 @@ async function main() {
       hostWs.send(JSON.stringify({
         type: 'toolkit_state', target: VIEWER_LOGIN, available: true, toolkitLoaded: true, toolkitUtilsLoaded: true,
         chatConnected: true, status: 'connected', username: VIEWER_LOGIN, coins: REPORT_COINS, karma: REPORT_KARMA,
-        unlimitedCoins: false, earningCoins: true, coinAmount: 30, coinInterval: 2, minimumPurchase: 0, entries: ENTRIES,
+        unlimitedCoins: false, earningCoins: true, coinAmount: 30, coinInterval: 2,
+        minimumPurchase: MINIMUM_PURCHASE,
+        entries: ENTRIES.concat([ANIMAL_ENTRY, CHEAP_ENTRY, REF_ENTRY]),
+        stuffCatalog: STUFF_CATALOG,
+        // Store is larger than what was sent — the truncation note must show.
+        itemCount: 900,
       }));
 
       await wait(300);
@@ -208,6 +232,53 @@ async function main() {
       const full = await measure(page);
       await page.screenshot({ path: path.join(OUT_DIR, `shop-${vp.name}-full.png`), fullPage: false });
 
+      // Regression checks for the three reported shop defects.
+      const checks = await page.evaluate(() => {
+        const tabText = Array.from(document.querySelectorAll('.buy-shop-tab')).map(b => b.textContent.replace(/\s+/g, ' ').trim());
+        const rowFor = label => Array.from(document.querySelectorAll('.buy-item'))
+          .find(el => (el.querySelector('.buy-main strong')?.textContent || '').trim() === label);
+        const animalRow = rowFor('muffalo');
+        const cheapRow = rowFor('bookcase');
+        const refRow = rowFor('referenced duster');
+        const groupOf = row => {
+          const group = row && row.closest('.buy-group');
+          return group ? (group.querySelector('.buy-group-head span')?.textContent || '').trim() : null;
+        };
+        const cheapBtn = cheapRow && cheapRow.querySelector('.buy-actions button');
+        return {
+          tabs: tabText,
+          hasAnimalsTab: tabText.some(t => t.startsWith('Animals')),
+          animalGroup: groupOf(animalRow),
+          cheapGroup: groupOf(cheapRow),
+          cheapButtonText: cheapBtn ? cheapBtn.textContent.trim() : null,
+          cheapButtonDisabled: cheapBtn ? cheapBtn.disabled : null,
+          cheapSetQty: cheapBtn ? cheapBtn.dataset.buySetQty || null : null,
+          // Materials resolved from the shared catalog, not inlined per item.
+          refMaterialOptions: refRow
+            ? Array.from(refRow.querySelectorAll('.buy-stuff-select option')).map(o => o.textContent.trim())
+            : null,
+          truncationNote: (document.querySelector('.buy-truncation')?.textContent || '').trim() || null,
+        };
+      });
+
+      if (!checks.hasAnimalsTab) failures.push(`${vp.name}: no Animals tab`);
+      if (checks.animalGroup && checks.animalGroup.toLowerCase() !== 'animals') {
+        failures.push(`${vp.name}: muffalo grouped under "${checks.animalGroup}", expected Animals`);
+      }
+      if (checks.cheapButtonDisabled === true) {
+        failures.push(`${vp.name}: bookcase button is a dead end under the coin minimum`);
+      }
+      if (checks.cheapSetQty !== '60') {
+        failures.push(`${vp.name}: bookcase set-qty is ${checks.cheapSetQty}, expected 60 (600 coin min / 10 each)`);
+      }
+      if (!checks.refMaterialOptions || !checks.refMaterialOptions.some(o => /cloth/i.test(o))) {
+        failures.push(`${vp.name}: stuffRefs did not resolve from stuffCatalog → ${JSON.stringify(checks.refMaterialOptions)}`);
+      }
+      if (!checks.truncationNote) {
+        failures.push(`${vp.name}: store is truncated (itemCount 900) but no "N of M" note shown`);
+      }
+      shopChecks.push({ vp: vp.name, ...checks });
+
       // (B) Narrowed by search, like the reported screenshot.
       await page.evaluate(q => {
         const input = document.querySelector('[data-buy-search]');
@@ -225,7 +296,13 @@ async function main() {
     if (hostWs) hostWs.close();
     relay.child.kill();
   }
-  console.log(JSON.stringify(report, null, 2));
+  console.log(JSON.stringify({ layout: report, shopChecks }, null, 2));
+  if (failures.length) {
+    console.error('\nSHOP FAILURES:');
+    failures.forEach(f => console.error('  - ' + f));
+    process.exit(1);
+  }
+  console.log('\nSHOP PASSED: animals tab, coin-minimum quantity bump, shared material catalog, truncation note.');
   console.log(`\nScreenshots -> ${OUT_DIR}`);
 }
 main().catch(e => { console.error(e); process.exit(1); });
