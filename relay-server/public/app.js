@@ -2620,7 +2620,14 @@ function renderGear(s) {
 // palette (hostCapabilities.dyePalette). Rate-limited server-side; only shown
 // when the streamer granted appearance permission and the item is dyeable.
 function dyeAllowed() {
-  return !getActionBlockedReason('set_appearance') && Array.isArray(hostCapabilities?.dyePalette);
+  // Test the RAW appearance permission, not getActionBlockedReason('set_appearance').
+  // That helper has a deliberate escape hatch for the one free appearance change
+  // (freeAppearanceAvailable), so on a default host — allowAppearance is false — it
+  // reported "allowed" and every Dye button rendered enabled for every viewer, while
+  // the host refused each click with "Dyeing is disabled by the streamer"
+  // (PawnCommandRouter.ExecuteDyeApparel checks permissions.appearance directly, with
+  // no free-change allowance). Matching the host's actual gate here.
+  return viewerPermissions?.appearance === true && Array.isArray(hostCapabilities?.dyePalette);
 }
 
 // Hosts before the colour-wheel build advertise no dyeGamut; those still get
@@ -4940,7 +4947,11 @@ function renderCommandMenuNav() {
 
 function renderCommandMenuContent() {
   if (!commandMenuContent) return;
-  if (!pawnState && activeCommandMenu !== 'help' && activeCommandMenu !== 'buy') {
+  // Roster is colony-wide and pawn-INDEPENDENT on the host — HandleRequestRoster
+  // needs only a username and enumerates every map's colonists, reading nothing from
+  // the requesting viewer's session pawn. Gating it on "you have no pawn" hid it from
+  // exactly the viewer who wants it: someone deciding which colonist to claim.
+  if (!pawnState && !['help', 'buy', 'roster'].includes(activeCommandMenu)) {
     commandMenuContent.innerHTML = `<div class="command-empty">
       <div class="command-page-title">Waiting for assignment</div>
       <p>Orders unlock as soon as your pawn is linked. You can stay here or go back to the claim screen.</p>
@@ -5829,7 +5840,15 @@ function renderScheduleControls(state) {
 
 function renderWorkLoadoutControls() {
   const saved = getSavedWorkLoadout();
-  const blocked = getActionBlockedReason('set_work') || getActionBlockedReason('set_schedule');
+  // The two halves are INDEPENDENT: applySavedWorkLoadout sends set_work per entry
+  // and set_schedule per hour as separate commands, and the host checks them against
+  // separate permission flags (ViewerPermissions: CmdSetWork -> work,
+  // CmdSetSchedule -> schedule). ORing them here killed the whole feature when only
+  // one was disabled — a streamer who turned off schedule also lost work loadouts.
+  // Block only when BOTH are denied; otherwise apply the half that is allowed.
+  const workBlocked = getActionBlockedReason('set_work');
+  const scheduleBlocked = getActionBlockedReason('set_schedule');
+  const blocked = (workBlocked && scheduleBlocked) ? workBlocked : '';
   const canSave = !!pawnState && getWorkPriorityEntries(pawnState).length > 0 && getArray(pawnState.schedule).length >= 24;
   const savedLabel = saved?.savedAt ? new Date(saved.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'None saved';
   return `<div class="work-loadout-bar">
@@ -5975,9 +5994,11 @@ function saveCurrentWorkLoadout() {
 }
 
 function applySavedWorkLoadout() {
-  const blocked = getActionBlockedReason('set_work') || getActionBlockedReason('set_schedule');
-  if (blocked) {
-    appendLog(blocked);
+  // Apply each half only if that half is permitted — see renderWorkLoadoutControls.
+  const workBlocked = getActionBlockedReason('set_work');
+  const scheduleBlocked = getActionBlockedReason('set_schedule');
+  if (workBlocked && scheduleBlocked) {
+    appendLog(workBlocked);
     return;
   }
   const saved = getSavedWorkLoadout();
@@ -5986,9 +6007,13 @@ function applySavedWorkLoadout() {
     return;
   }
 
-  const work = getArray(saved.work).filter(entry => entry?.defName && Number.isFinite(Number(entry.priority)));
-  const schedule = getArray(saved.schedule).slice(0, 24);
-  markCommandSent('set_work', 'Applying saved work loadout');
+  const work = workBlocked
+    ? []
+    : getArray(saved.work).filter(entry => entry?.defName && Number.isFinite(Number(entry.priority)));
+  const schedule = scheduleBlocked ? [] : getArray(saved.schedule).slice(0, 24);
+  markCommandSent('set_work', workBlocked
+    ? 'Applying saved schedule'
+    : (scheduleBlocked ? 'Applying saved work priorities' : 'Applying saved work loadout'));
   work.forEach(entry => {
     send({ type: 'command', action: 'set_work', workDef: entry.defName, priority: Number(entry.priority) });
   });

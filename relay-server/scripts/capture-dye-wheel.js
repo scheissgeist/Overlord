@@ -155,6 +155,18 @@ async function main() {
         work: true, schedule: true, contextMenu: true, toolkitBridge: true,
         dyePalette: DYE_PALETTE, dyeCustomColors: true, dyeGamut: GAMUT,
       }));
+      // A real host always sends permissions (ViewerManager.SendPermissions), and the
+      // dye gate now reads permissions.appearance directly — matching the host's own
+      // check in ExecuteDyeApparel — rather than the one-free-change escape hatch,
+      // which reported "allowed" on a default host and rendered Dye buttons that every
+      // click then bounced. This fixture omitted permissions entirely, so it was
+      // asserting against a state no real viewer is ever in.
+      hostWs.send(JSON.stringify({
+        type: 'permissions', target: VIEWER_LOGIN,
+        draft: true, move: true, attack: true, work: true, schedule: true,
+        outfit: true, drugPolicy: true, foodPolicy: true, area: true, equip: true,
+        appearance: true, freeAppearanceAvailable: true,
+      }));
       hostWs.send(JSON.stringify({ type: 'colonist_list', target: VIEWER_LOGIN, hostMap: true, colonists: [{ id: PAWN_ID, name: VIEWER_DISPLAY }] }));
       await page.waitForSelector('.colonist-row .claim-btn:not([disabled])', { timeout: 10000 });
       await page.click('.colonist-row .claim-btn');

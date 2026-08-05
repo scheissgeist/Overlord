@@ -604,6 +604,15 @@ namespace Overlord
             if (items == null) return;
 
             var itemEntries = new List<Dictionary<string, object>>();
+
+            // HOISTED out of the per-item loop below. This is a single static bool that
+            // cannot change mid-rebuild, but reading it inside the loop cost a FindType
+            // per item — and FindType walks AppDomain.CurrentDomain.GetAssemblies()
+            // looking the type up in each one. With a store of hundreds of items, that
+            // is hundreds of full assembly scans per rebuild, on the main thread.
+            bool requiresResearchSetting = ReadStaticBool(
+                "TwitchToolkit.IncidentHelpers.IncidentHelper_Settings.BuyItemSettings",
+                "mustResearchFirst", false);
             foreach (object item in items)
             {
                 string keyText;
@@ -628,7 +637,7 @@ namespace Overlord
                     ? "animals"
                     : CategoryForThing(def, defName, label);
                 var stuffOptions = BuildStuffOptions(def);
-                bool requiresResearch = ReadStaticBool("TwitchToolkit.IncidentHelpers.IncidentHelper_Settings.BuyItemSettings", "mustResearchFirst", false);
+                bool requiresResearch = requiresResearchSetting;
                 string researchLabel;
                 bool researched = IsThingResearched(def, out researchLabel);
                 itemEntries.Add(new Dictionary<string, object>

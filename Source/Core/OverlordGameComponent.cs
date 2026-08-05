@@ -953,11 +953,30 @@ namespace Overlord
             return SendToViewer(username, msg);
         }
 
+        // Store rebuilds are expensive AND were completely invisible: the toolkit_refresh
+        // command returns silent=true so HandleCommand skips its log line, and this
+        // method logged nothing either. That invisibility is what produced a wrong
+        // conclusion on 2026-08-04 — a constantly-firing host action left no trace, and
+        // the absence of log lines was read as absence of the event. Only the client
+        // trigger was throttled afterwards; the blindness itself is fixed here.
+        // Logged when the rebuild is slow enough to matter, so a healthy stream stays
+        // quiet but a pathological one names itself.
+        private const long ToolkitStateSlowMs = 20;
+
         public void SendToolkitStatePublic(string username)
         {
             if (string.IsNullOrEmpty(username))
                 return;
-            SendToViewer(username, TwitchToolkitBridge.BuildViewerState(username));
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var state = TwitchToolkitBridge.BuildViewerState(username);
+            watch.Stop();
+            if (watch.ElapsedMilliseconds >= ToolkitStateSlowMs)
+            {
+                int entryCount = state != null && state.TryGetValue("entries", out object e) && e is System.Collections.ICollection c
+                    ? c.Count : -1;
+                LogUtil.Log($"Toolkit store rebuild for {username} took {watch.ElapsedMilliseconds}ms ({entryCount} entries)");
+            }
+            SendToViewer(username, state);
         }
 
         private void SendHostCapabilities(string username = null, bool adminOnly = false)
