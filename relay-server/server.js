@@ -849,7 +849,17 @@ function createViewerSession(login, displayName, ttlMs) {
 }
 
 // ─── WebSocket server ─────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server, path: '/ws' });
+// maxPayload is NOT set by default — ws 8.x allows 100 MiB per frame, and
+// express.json({ limit: '4kb' }) covers only HTTP, not this socket. Every accepted
+// viewer message is JSON.parsed, re-stringified to measure it, stringified again by
+// recordOps, written to disk, broadcast to admins, and stringified a third time on
+// the way to the host — so one oversized frame is amplified several times before it
+// reaches the game. 1 MiB is far above any legitimate message (host->viewer map
+// frames travel on this SAME socket path with ?role=host, so the cap must clear the
+// largest legitimate map frame — observed max 149,728 bytes at a 700k-pixel budget,
+// and a solo viewer's 2.1M-pixel budget is ~3x that. 4 MiB leaves an order of
+// magnitude of headroom over the real traffic while cutting the abuse ceiling by 25x.
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4 * 1024 * 1024 });
 
 wss.on('connection', (ws, req) => {
   const url     = new URL(req.url, 'http://localhost');
@@ -1006,8 +1016,33 @@ wss.on('connection', (ws, req) => {
       replayCachedState(login, { type: 'state_resync_request', reason: 'viewer_reconnected' });
     }
 
+    // Per-viewer send budget: ~20 msg/s sustained, burst 40. Every accepted message
+    // costs the HOST real main-thread work — a pawn-state serialize, an armory scan,
+    // a colonist-list rebuild — and the relay itself stringifies each one three times
+    // and writes it to disk. The host has its own per-type floors, but those run
+    // AFTER the message has already been parsed, logged and forwarded, so the cheap
+    // ceiling belongs here, in front of the game. Silent drop: telling a flooding
+    // client about each rejection would double the traffic.
+    let sendTokens = 40;
+    let lastRefill = Date.now();
+    let throttleReported = 0;
+
     ws.on('message', (raw) => {
       try {
+        const nowMs = Date.now();
+        sendTokens = Math.min(40, sendTokens + ((nowMs - lastRefill) / 1000) * 20);
+        lastRefill = nowMs;
+        if (sendTokens < 1) {
+          // Report at most once per 10s per viewer so the log itself cannot be a flood.
+          if (nowMs - throttleReported > 10000) {
+            throttleReported = nowMs;
+            recordOps('viewer_throttled', { username: login });
+            console.warn(`[relay] Throttling ${login}: over 20 msg/s`);
+          }
+          return;
+        }
+        sendTokens -= 1;
+
         // Keep sliding TTL alive while the viewer is actively sending.
         resolveSession(sToken);
         const text = raw.toString('utf8');

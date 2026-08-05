@@ -948,6 +948,14 @@ namespace Overlord
 
             var rt = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             rt.antiAliasing = 1;
+            // Only the SUCCESS path hands this texture to the caller. A throw anywhere
+            // below (CopyFrom, TemporarilySetCurrentMap, MapRenderContext.Begin, the
+            // draw queue, cam.Render) used to escape with the temporary still checked
+            // out of Unity's pool. That is not a rare path: the circuit breaker in
+            // RenderDueFrames exists precisely because this throws repeatedly on a
+            // half-built map, and it retries forever with one probe render per
+            // cooldown — so the leak repeats for as long as the condition lasts.
+            bool renderOk = false;
 
             try
             {
@@ -1002,11 +1010,18 @@ namespace Overlord
                     }
                     catch { }
                 }
+                renderOk = true;
             }
             finally
             {
                 RenderTexture.active = savedActive;
                 cam.targetTexture = null; // never hold the temp RT across frames
+                if (!renderOk)
+                {
+                    // Return it to the pool before the exception propagates. The caller
+                    // never receives this rt, so nobody else can release it.
+                    RenderTexture.ReleaseTemporary(rt);
+                }
             }
 
             return rt;
@@ -1751,6 +1766,8 @@ namespace Overlord
             // COPYING the live camera, never mutating it.
             var cam = GetCaptureCamera(gameCamera);
             RenderTexture savedActive = RenderTexture.active;
+            // Same rule as RenderMapArea: a throwing Render must not leak the temporary.
+            bool renderOk = false;
             try
             {
                 cam.CopyFrom(gameCamera);
@@ -1760,11 +1777,14 @@ namespace Overlord
                 cam.aspect = aspect;
                 cam.targetTexture = rt;
                 cam.Render();
+                renderOk = true;
             }
             finally
             {
                 RenderTexture.active = savedActive;
                 cam.targetTexture = null;
+                if (!renderOk)
+                    RenderTexture.ReleaseTemporary(rt);
             }
 
             float radiusZ = gameCamera.orthographic ? Mathf.Max(1f, gameCamera.orthographicSize) : Mathf.Clamp(frameHeight / 32f, 8f, 24f);

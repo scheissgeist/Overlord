@@ -732,11 +732,33 @@ namespace Overlord
             });
         }
 
+        // Chat prints ATTACKER-CONTROLLED TEXT into the streamer's own game window and
+        // broadcasts it to every viewer, and it is dispatched straight from
+        // OnRelayMessage — so PawnCommandRouter's cooldown never applied and there was
+        // no length cap. One viewer could wallpaper the HUD (Verse.Messages keeps 12
+        // live and each re-arms a 13s timer) or push a wall of text to everyone.
+        private const int MaxChatLength = 240;
+        private const int ChatMinTicks = 90; // ~1.5s between messages per viewer
+
         private void HandleChat(string json)
         {
             string username = JsonHelper.ExtractLastString(json, "username");
             string message = JsonHelper.ExtractString(json, "message");
             if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(message)) return;
+
+            if (!ShouldServeRequest("chat", username, ChatMinTicks))
+                return;
+
+            // Collapse newlines and control characters — a multi-line payload turns one
+            // message into many visual lines in the streamer's HUD — then hard-cap it.
+            var cleaned = new System.Text.StringBuilder(Math.Min(message.Length, MaxChatLength));
+            foreach (char c in message)
+            {
+                if (cleaned.Length >= MaxChatLength) break;
+                cleaned.Append(char.IsControl(c) ? ' ' : c);
+            }
+            message = cleaned.ToString().Trim();
+            if (message.Length == 0) return;
 
             // Show in-game as a message
             Messages.Message(
