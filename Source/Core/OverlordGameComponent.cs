@@ -183,6 +183,12 @@ namespace Overlord
             // the log distinguished them, so no fix could be confirmed loaded.
             // MVID changes on every compile, so this is exact, not a manual bump.
             LogUtil.Log($"Overlord initialized — {DescribeBuild()}");
+
+            // Name any Toolkit member that failed to bind, here, once. Every reflection
+            // helper in the bridge returns a plausible fallback on a miss, so without
+            // this a Toolkit rename reaches the streamer as a confident wrong message
+            // ("not enough coins", "chat is not connected") instead of as itself.
+            TwitchToolkitBridge.VerifyToolkitBindingOnce();
         }
 
         // RimWorld does not call GameComponentTick while the game is paused, but

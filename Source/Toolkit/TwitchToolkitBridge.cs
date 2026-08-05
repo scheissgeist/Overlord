@@ -182,6 +182,11 @@ namespace Overlord
             }
             catch (Exception ex)
             {
+                // Log to the HOST as well. This previously wrote the failure only into
+                // the payload sent to the viewer's browser, so the streamer — the only
+                // person who can fix a Toolkit problem — never saw it, and Player.log
+                // held no trace of an entire outage class.
+                LogUtil.Warn($"Toolkit bridge error building viewer state for {NormalizeUsername(username)}: {ex}");
                 msg["available"] = false;
                 msg["status"] = "error";
                 msg["message"] = "Toolkit bridge error: " + ex.Message;
@@ -1846,6 +1851,93 @@ namespace Overlord
             if (string.IsNullOrEmpty(name)) return false;
             string lower = name.ToLowerInvariant();
             return lower.Contains("item") || lower.Contains("store") || lower.Contains("inventory");
+        }
+
+        private static bool bindingChecked;
+
+        /// <summary>
+        /// Name every reflected Toolkit member that failed to bind, once, at startup.
+        ///
+        /// Every reflection helper in this file returns a PLAUSIBLE fallback on a miss
+        /// and logs nothing — FindType returns null, InvokeInt returns the caller's
+        /// fallback, GetToolkitChatConnected catches and returns false. So a renamed
+        /// member does not surface as "Toolkit changed"; it surfaces as a confident,
+        /// WRONG explanation to the viewer. Two live examples: a renamed
+        /// GetViewerCoins makes every purchase fail with "Not enough coins: N
+        /// required, 0 available", and a renamed TwitchWrapper.Client makes every
+        /// purchase fail with "Twitch Toolkit chat is not connected in RimWorld".
+        /// Both messages send whoever debugs it in the wrong direction — exactly the
+        /// failure mode that cost hours on 2026-08-04.
+        ///
+        /// This turns that class from "inferred from a viewer complaint" into one
+        /// named line in Player.log at startup.
+        /// </summary>
+        public static void VerifyToolkitBindingOnce()
+        {
+            if (bindingChecked)
+                return;
+            bindingChecked = true;
+
+            if (!IsToolkitLoaded)
+            {
+                LogUtil.Log("Toolkit binding check: Twitch Toolkit is not loaded (bridge disabled).");
+                return;
+            }
+
+            var missing = new List<string>();
+
+            void RequireType(string typeName)
+            {
+                if (FindType(typeName) == null)
+                    missing.Add("type " + typeName);
+            }
+            void RequireStatic(string typeName, string member)
+            {
+                Type t = FindType(typeName);
+                if (t == null) { missing.Add("type " + typeName); return; }
+                if (t.GetField(member, BindingFlags.Public | BindingFlags.Static) == null &&
+                    t.GetProperty(member, BindingFlags.Public | BindingFlags.Static) == null)
+                    missing.Add(typeName + "." + member);
+            }
+            void RequireMethod(string typeName, string member)
+            {
+                Type t = FindType(typeName);
+                if (t == null) { missing.Add("type " + typeName); return; }
+                if (!t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+                       .Any(m => m.Name == member))
+                    missing.Add(typeName + "." + member + "()");
+            }
+
+            try
+            {
+                RequireType("TwitchToolkit.Viewers");
+                RequireType("TwitchToolkit.Store.Purchase_Handler");
+                RequireType("TwitchToolkit.Store.Store_Component");
+                RequireType("ToolkitCore.TwitchWrapper");
+                RequireMethod("TwitchToolkit.Viewer", "GetViewerCoins");
+                RequireMethod("TwitchToolkit.Viewer", "TakeViewerCoins");
+                RequireMethod("TwitchToolkit.Store.Store_Component", "IncidentsInLogOf");
+                RequireMethod("ToolkitCore.TwitchWrapper", "SendChatMessage");
+                RequireStatic("ToolkitCore.TwitchWrapper", "Client");
+                RequireStatic("TwitchToolkit.Store.Purchase_Handler", "viewerNamesDoingVariableCommands");
+                RequireStatic("TwitchToolkit.ToolkitSettings", "UnlimitedCoins");
+                RequireStatic("TwitchToolkit.ToolkitSettings", "EventsHaveCooldowns");
+            }
+            catch (Exception ex)
+            {
+                LogUtil.Warn("Toolkit binding check threw: " + ex.Message);
+                return;
+            }
+
+            if (missing.Count == 0)
+                LogUtil.Log("Toolkit binding check: all reflected members resolved.");
+            else
+                LogUtil.Warn(
+                    "Toolkit binding check FAILED for " + missing.Count + " member(s): " +
+                    string.Join(", ", missing.ToArray()) +
+                    ". Overlord's Toolkit features will misreport rather than error — a missing " +
+                    "coins accessor reads as 'not enough coins', a missing chat client as " +
+                    "'chat is not connected'. Treat viewer reports of those as THIS.");
         }
 
         private static Type FindType(string fullName)

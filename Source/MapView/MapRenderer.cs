@@ -103,6 +103,43 @@ namespace Overlord
         // main thread in GetFramePixelBudget.
         private float achievedFramesPerSec;
 
+        // Readback buffers are the same handful of byte lengths frame after frame, and
+        // GetData<byte>().ToArray() allocated a fresh width*height*4 managed array on
+        // the MAIN THREAD every frame per viewer (Unity delivers readback callbacks in
+        // the player loop). At 16 viewers that is megabytes of garbage per second on
+        // the thread whose frame-time the north star protects. Pooled by exact length —
+        // NativeArray.CopyTo requires an exact match anyway — and returned by the
+        // encode worker once it is finished with the buffer.
+        private static readonly Dictionary<int, Stack<byte[]>> pixelPool = new Dictionary<int, Stack<byte[]>>();
+        private const int MaxPooledBuffersPerSize = 8;
+
+        private static byte[] RentPixels(int length)
+        {
+            lock (pixelPool)
+            {
+                if (pixelPool.TryGetValue(length, out var stack) && stack.Count > 0)
+                    return stack.Pop();
+            }
+            return new byte[length];
+        }
+
+        private static void ReturnPixels(byte[] buffer)
+        {
+            if (buffer == null)
+                return;
+            lock (pixelPool)
+            {
+                if (!pixelPool.TryGetValue(buffer.Length, out var stack))
+                {
+                    stack = new Stack<byte[]>();
+                    pixelPool[buffer.Length] = stack;
+                }
+                // Bounded: a resolution change must not strand every old-size buffer.
+                if (stack.Count < MaxPooledBuffersPerSize)
+                    stack.Push(buffer);
+            }
+        }
+
         private void SampleBandwidthPressure(int inFlight, int activeViewerCount)
         {
             float now = Time.time;
@@ -699,14 +736,19 @@ namespace Overlord
             budget = Mathf.RoundToInt(budget * Mathf.Lerp(1f, 0.55f, bandwidthPressure));
 
             // HARD READBACK CEILING — the constraint bandwidthPressure cannot see.
-            // Every viewer frame costs a synchronous GPU->CPU ReadPixels on the game's
-            // main thread (Unity forbids moving it off), so the cost that stalls the
-            // STREAMER scales with total pixels read per second, not with network
+            //
+            // CORRECTION to an earlier version of this comment: the live path is
+            // AsyncGPUReadback, NOT the synchronous ReadPixels. ReadPixels only runs in
+            // SyncCaptureAndSend, the legacy fallback used when async is unsupported or
+            // the async pipeline has broken. The ceiling is still right, but for the
+            // real reason: each completed readback does GetData<byte>().ToArray() on
+            // the MAIN THREAD (Unity delivers those callbacks in the player loop), so
+            // every viewer frame costs a width*height*4 copy plus GC pressure there,
+            // and the total scales with viewers x pixels x fps regardless of network
             // congestion. At 16 viewers the log showed readMBps 140-167 with
-            // pressure=0.00 and skipped=0: the pipe was idle while the main thread
-            // was doing 167MB/s of readback. Raising the >12 tier from 480k to 700k
-            // earlier today (measured at 10 viewers, where there was headroom) is what
-            // made a 16-viewer stream unplayable. Cap the aggregate directly.
+            // pressure=0.00 and skipped=0 — an idle pipe and an unplayable game.
+            // Raising the >12 tier 480k -> 700k after measuring at 10 viewers (where
+            // there was headroom) is what made a 16-viewer stream unplayable.
             // ACHIEVED per-viewer delivery, not 1/interval. 1/interval is the DEMAND
             // rate and only an upper bound. Falls back to the modelled rate only on a
             // cold start, before the first stats window has been measured.
@@ -1496,7 +1538,11 @@ namespace Overlord
             byte[] pixels;
             try
             {
-                pixels = req.GetData<byte>().ToArray();
+                // Pooled instead of ToArray() — see pixelPool. CopyTo requires an exact
+                // length match, which is why the pool is keyed by exact length.
+                var data = req.GetData<byte>();
+                pixels = RentPixels(data.Length);
+                data.CopyTo(pixels);
             }
             catch (Exception ex)
             {
@@ -1506,6 +1552,11 @@ namespace Overlord
 
             sendQueue.Enqueue(() =>
             {
+              // This worker is the buffer's only consumer, and it runs once — so the
+              // outer finally is the one place that can safely recycle it. Without it a
+              // pooled buffer leaks on every encode or send failure.
+              try
+              {
                 byte[] jpeg;
                 try
                 {
@@ -1557,6 +1608,11 @@ namespace Overlord
                     }
                 }
                 catch { }
+              }
+              finally
+              {
+                  ReturnPixels(pixels);
+              }
             });
         }
 
