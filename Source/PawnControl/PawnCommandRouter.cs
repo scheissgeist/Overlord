@@ -176,7 +176,34 @@ namespace Overlord
             if (action == StateProtocol.CmdToolkitRefresh)
                 return ExecuteToolkitRefresh(username);
             if (action == StateProtocol.CmdToolkitPurchase)
-                return ExecuteToolkitPurchase(username, json);
+            {
+                // Dedicated purchase cooldown. The shared command throttle above is
+                // ~0.33s — enough to stop a held key, nowhere near enough for a
+                // viewer tapping Buy, where every accepted tap spends coins and
+                // queues a real game event. Reported live 2026-08-04 ("players spam
+                // buy requests"). Separate tick field so this never competes with
+                // the movement budget.
+                int purchaseCooldown = OverlordMod.Settings?.purchaseCooldownTicks ?? 180;
+                int nowTick = Find.TickManager.TicksGame;
+                int sincePurchase = nowTick - session.lastPurchaseTick;
+                if (sincePurchase < purchaseCooldown)
+                {
+                    float wait = (purchaseCooldown - sincePurchase) / 60f;
+                    wait = Mathf.Max(0.1f, Mathf.Ceil(wait * 10f) / 10f);
+                    return ErrorResult($"Purchases are rate-limited — wait {wait:F1}s");
+                }
+                var purchaseResult = ExecuteToolkitPurchase(username, json);
+                // Only start the cooldown on an ACCEPTED purchase. A rejected one
+                // (bad SKU, no coins, Toolkit cooldown) must not lock the viewer
+                // out — that would punish them for our own error message.
+                if (purchaseResult == null
+                    || !purchaseResult.TryGetValue("ok", out object okVal)
+                    || !(okVal is bool okBool) || okBool)
+                {
+                    session.lastPurchaseTick = nowTick;
+                }
+                return purchaseResult;
+            }
             if (action == StateProtocol.CmdClaimColonist)
                 return ExecuteClaimColonist(username, json, viewerManager);
             if (action == StateProtocol.CmdVote)
@@ -184,8 +211,17 @@ namespace Overlord
             if (action == StateProtocol.CmdTriggerEvent)
                 return ExecuteTriggerEvent(username, json);
 
+            // HasPawn = OwnsPawn && Spawned. Distinguish the two: a viewer whose
+            // colonist is off-map (caravan, pod, gravship transit, carried while
+            // downed) still OWNS the pawn, and telling them "No pawn assigned"
+            // reads as "Overlord lost my character" — reported live 2026-08-04,
+            // where the assignment was intact and Toolkit kept syncing fine.
             if (!session.HasPawn)
+            {
+                if (session.PawnAwayTemporarily)
+                    return ErrorResult($"{session.assignedPawn.LabelShort} is off-map right now — you'll get control back when they return");
                 return ErrorResult("No pawn assigned");
+            }
 
             if (action == StateProtocol.CmdPreviewAppearance)
                 return ExecutePreviewAppearance(session, json);
@@ -371,7 +407,16 @@ namespace Overlord
             bool equipToPawn = JsonHelper.ExtractBool(json, "equipToPawn", false);
             var session = OverlordGameComponent.Instance?.Viewers?.GetSession(username);
             Pawn targetPawn = session != null && session.HasPawn ? session.assignedPawn : null;
-            var result = TwitchToolkitBridge.ExecutePurchase(username, purchase, quantity, argument, targetPawn, equipToPawn);
+            // This is the Overlord-UI purchase path. Toolkit would answer it in the
+            // STREAMER's chat (7 rejection branches in Toolkit 1.6, all unconditional
+            // SendChatMessage calls) — a Twitch spam-limit risk, and redundant because
+            // the viewer sees the result in the UI. Chat-typed purchases go through
+            // ProcessQueuedChatCommands and are deliberately NOT wrapped.
+            Dictionary<string, object> result;
+            using (TwitchToolkitBridge.SuppressChatReplies())
+            {
+                result = TwitchToolkitBridge.ExecutePurchase(username, purchase, quantity, argument, targetPawn, equipToPawn);
+            }
             // Always push a fresh wallet/store snapshot so Buy UI coins/affordability update.
             OverlordGameComponent.Instance?.SendToolkitStatePublic(username);
             if (result != null && !result.ContainsKey("action"))

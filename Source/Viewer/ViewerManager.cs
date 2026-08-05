@@ -164,8 +164,15 @@ namespace Overlord
                 // ReviveManager's flow rather than being silently re-handed out.
                 if (pawn == null || pawn.Dead || pawn.Destroyed || !pawn.Spawned)
                     continue;
-                // Never steal: if anyone currently holds it, leave it alone.
-                if (GetSessionForPawn(pawn) != null)
+                // Never steal: if SOMEONE ELSE currently holds it, leave it alone.
+                // The viewer's own session must not count — a rejoin can land while
+                // the previous session still holds the pawn, and treating that as
+                // "taken" made the reconnect skip and drop the viewer to no pawn
+                // while Toolkit still had them synced (live log, 2026-08-04:
+                // handini_ rejoined 4x, then every command failed "No pawn assigned").
+                var holder = GetSessionForPawn(pawn);
+                if (holder != null
+                    && !string.Equals(holder.username, username, StringComparison.OrdinalIgnoreCase))
                     continue;
                 if (!pawn.IsColonist)
                     continue;

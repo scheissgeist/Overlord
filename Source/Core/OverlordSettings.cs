@@ -65,6 +65,12 @@ namespace Overlord
 
         // Commands
         public int commandCooldownTicks = 20; // ~0.33 seconds between commands
+
+        // Purchases get their own, far longer cooldown. Each accepted purchase
+        // spends coins, queues a real game event, and makes Toolkit answer in the
+        // streamer's chat — so the 0.33s command cooldown is nowhere near enough.
+        // 180 ticks = 3 seconds.
+        public int purchaseCooldownTicks = 180;
         public bool enforceAreaRestrictions = true;
 
         // Reconnect: hand a returning viewer back the colonist they already
@@ -107,6 +113,7 @@ namespace Overlord
             Scribe_Values.Look(ref allowAppearance, "allowAppearance", false);
             Scribe_Values.Look(ref allowViewerEvents, "allowViewerEvents", false);
             Scribe_Values.Look(ref commandCooldownTicks, "commandCooldownTicks", 20);
+            Scribe_Values.Look(ref purchaseCooldownTicks, "purchaseCooldownTicks", 180);
             Scribe_Values.Look(ref enforceAreaRestrictions, "enforceAreaRestrictions", true);
             Scribe_Values.Look(ref startTickets, "startTickets", 3);
             Scribe_Values.Look(ref respawnCooldownTicks, "respawnCooldownTicks", 2500);

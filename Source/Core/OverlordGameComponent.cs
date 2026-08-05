@@ -299,6 +299,13 @@ namespace Overlord
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
                     case "chat":                       HandleChat(json);         break;
                     case "request_colonist_list":
+                        // Host-side floor. A client stuck in a reconnect loop re-requests
+                        // forever and each rebuild is main-thread work (relay logs
+                        // 2026-08-04: one viewer every ~4.7s, indefinitely). The client
+                        // debounce cannot be trusted — a stale build ignores it — so the
+                        // host enforces its own minimum regardless of what asks.
+                        if (!ShouldServeColonistList(JsonHelper.ExtractLastString(json, "username")))
+                            break;
                         viewerManager?.SendColonistList(JsonHelper.ExtractLastString(json, "username"));
                         // Admin connect sends this with source=admin: replay pending
                         // claims so a freshly opened admin page doesn't show "no
@@ -378,6 +385,22 @@ namespace Overlord
                     historical: false
                 );
             }
+        }
+
+        // Per-viewer rate floor for colonist_list rebuilds. Admin requests bypass it
+        // (the admin page needs an immediate, correct roster on open).
+        private readonly Dictionary<string, int> lastColonistListTick = new Dictionary<string, int>();
+        private const int ColonistListMinTicks = 120; // 2 seconds
+
+        private bool ShouldServeColonistList(string username)
+        {
+            if (string.IsNullOrEmpty(username))
+                return true;
+            int now = Find.TickManager?.TicksGame ?? 0;
+            if (lastColonistListTick.TryGetValue(username, out int last) && now - last < ColonistListMinTicks)
+                return false;
+            lastColonistListTick[username] = now;
+            return true;
         }
 
         private void HandleViewerLeft(string json)

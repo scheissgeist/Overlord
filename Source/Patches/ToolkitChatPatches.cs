@@ -28,4 +28,49 @@ namespace Overlord
             return !TwitchToolkitBridge.TryQueueRepairChatCommand(e);
         }
     }
+
+    /// <summary>
+    /// Suppress Toolkit's chat replies for purchases that came from Overlord's UI.
+    ///
+    /// Overlord buys by synthesising a fake ITwitchMessage and calling
+    /// Purchase_Handler.ResolvePurchase, so Toolkit believes the viewer typed
+    /// "!buy x" in chat and answers IN CHAT — via TwitchWrapper.SendChatMessage,
+    /// which posts to the streamer's own joined channel as the authenticated
+    /// account (verified in ToolkitCore 1.6: Client.SendMessage(GetJoinedChannel(
+    /// ToolkitCoreSettings.channel_username), message), no rate limit, no dedupe,
+    /// no off switch).
+    ///
+    /// Toolkit 1.6 has at least 7 such branches on the purchase path — confirm,
+    /// "not possible", not-enough-coins, maxed-from-karma, care-package cooldown,
+    /// "is maxed, wait N days", and game-paused. A maxed item therefore emits the
+    /// SAME line every time a viewer taps Buy, which is exactly what Twitch's
+    /// duplicate-message and rate limits act on. It is the STREAMER's account that
+    /// gets dinged, not the viewer's.
+    ///
+    /// The viewer already sees the outcome in the Overlord UI, so these messages
+    /// are pure duplication. Suppressed only while an Overlord purchase is in
+    /// flight — chat commands typed by real viewers still get their normal replies.
+    /// </summary>
+    [HarmonyPatch]
+    public static class Patch_Toolkit_SuppressOverlordPurchaseChat
+    {
+        [HarmonyPrepare]
+        static bool Prepare()
+        {
+            return AccessTools.TypeByName("ToolkitCore.TwitchWrapper") != null;
+        }
+
+        [HarmonyTargetMethod]
+        static MethodBase TargetMethod()
+        {
+            return AccessTools.Method(AccessTools.TypeByName("ToolkitCore.TwitchWrapper"), "SendChatMessage");
+        }
+
+        [HarmonyPrefix]
+        static bool Prefix()
+        {
+            // false = skip the original send.
+            return !TwitchToolkitBridge.SuppressToolkitChat;
+        }
+    }
 }

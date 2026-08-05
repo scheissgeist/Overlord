@@ -77,6 +77,13 @@ namespace Overlord
         // Rate limiting: game tick of last accepted command
         public int lastCommandTick = -999;
 
+        // Purchases get their OWN, much longer cooldown. The shared command
+        // cooldown is ~20 ticks (0.33s), which is sized for movement/attack
+        // spam — far too loose for an action that spends coins and queues a
+        // real game event. Tracked separately so buying never eats the movement
+        // budget and vice versa.
+        public int lastPurchaseTick = -999;
+
         // Last command label for streamer UI visibility (transient, not saved)
         [System.NonSerialized]
         public string lastCommandLabel = "";

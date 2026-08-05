@@ -1717,6 +1717,13 @@ function relaySupportsCacheResync() {
 
 function requestFreshViewerSnapshot(force = false) {
   const now = Date.now();
+  // Hard floor that survives reconnects. The seq check below resets on every new
+  // connection, so a client stuck in a connect/disconnect loop bypassed the
+  // debounce entirely and re-requested forever — relay logs 2026-08-04 showed one
+  // viewer sending request_colonist_list + request_state every ~4.7s
+  // indefinitely, each costing the HOST a main-thread colonist_list build
+  // (1.8KB) + game_info. That is host lag caused by one looping client.
+  if (!force && now - lastFreshSnapshotAt < 3000) return;
   if (!force && lastFreshSnapshotSeq === connectionSeq && now - lastFreshSnapshotAt < 1000) return;
   lastFreshSnapshotSeq = connectionSeq;
   lastFreshSnapshotAt = now;
@@ -4771,6 +4778,14 @@ function statusClass(ok, waiting = false) {
 }
 
 function openCommandWindow(section = activeCommandMenu || 'quick') {
+  // Clear stale buy feedback when (re)opening the buy tab. lastBuyFeedback is
+  // module-level and was never reset, so a previous "Buying X…" line rendered
+  // again the next time the tab opened — which reads as the UI trying to buy
+  // something on its own. Reported by a viewer 2026-08-04: "whenever i click on
+  // the buy tab it automatically wants me to buy something."
+  if (section !== activeCommandMenu && (section === 'buy' || section === 'story')) {
+    lastBuyFeedback = null;
+  }
   activeCommandMenu = section;
   commandWindow?.classList.remove('hidden');
   document.body.classList.add('command-window-open');
@@ -6044,7 +6059,13 @@ function requestAppearancePreview() {
 function handleCommandCenterClick(event) {
   const section = event.target.closest('[data-command-section]');
   if (section) {
-    activeCommandMenu = section.dataset.commandSection || 'quick';
+    const nextSection = section.dataset.commandSection || 'quick';
+    // Same stale-feedback clear as openCommandWindow — this is the in-window tab
+    // switch, which is the path the viewer actually reported.
+    if (nextSection !== activeCommandMenu && (nextSection === 'buy' || nextSection === 'story')) {
+      lastBuyFeedback = null;
+    }
+    activeCommandMenu = nextSection;
     renderCommandCenter();
     return;
   }

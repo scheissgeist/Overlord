@@ -48,6 +48,42 @@ namespace Overlord
 
         public static bool IsChatConnected => GetToolkitChatConnected();
 
+        // Depth counter, not a bool: a purchase can re-enter (item-with-stuff path
+        // resolves through a second handler), and a plain bool would be cleared by
+        // the inner scope while the outer one is still running, letting Toolkit's
+        // reply escape to chat. Main-thread only — Toolkit purchases resolve on the
+        // game thread, so no interlocking is needed.
+        private static int suppressToolkitChatDepth;
+
+        /// <summary>
+        /// True while an Overlord-initiated purchase is resolving inside Toolkit.
+        /// Read by Patch_Toolkit_SuppressOverlordPurchaseChat to drop Toolkit's
+        /// chat reply — those post as the STREAMER's account and are a Twitch
+        /// spam-limit risk. See that patch for the full reasoning.
+        /// </summary>
+        public static bool SuppressToolkitChat => suppressToolkitChatDepth > 0;
+
+        /// <summary>
+        /// Wrap an Overlord-UI purchase so Toolkit's chat reply is dropped. Chat-typed
+        /// purchases must NOT use this — chat is the only surface those viewers see.
+        /// </summary>
+        public static IDisposable SuppressChatReplies() => ToolkitChatSuppressor.Enter();
+
+        private struct ToolkitChatSuppressor : IDisposable
+        {
+            public static ToolkitChatSuppressor Enter()
+            {
+                suppressToolkitChatDepth++;
+                return default;
+            }
+
+            public void Dispose()
+            {
+                if (suppressToolkitChatDepth > 0)
+                    suppressToolkitChatDepth--;
+            }
+        }
+
         public static Dictionary<string, object> BuildViewerState(string username)
         {
             var msg = new Dictionary<string, object>
@@ -203,6 +239,10 @@ namespace Overlord
                 var parameters = resolve.GetParameters().Length == 3
                     ? new[] { viewer, twitchMessage, (object)false }
                     : new[] { viewer, twitchMessage };
+                // Toolkit answers this call IN CHAT as the streamer's account.
+                // Suppression is applied by the CALLER (see SuppressChatReplies),
+                // not here — a purchase typed as a chat command must keep its
+                // reply, because chat is the only place that viewer sees a result.
                 resolve.Invoke(null, parameters);
 
                 return PurchaseOk(info.label, quantity);
