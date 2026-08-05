@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Overlord
 {
     /// <summary>
@@ -5,6 +7,28 @@ namespace Overlord
     /// </summary>
     public static class StateProtocol
     {
+        /// <summary>
+        /// The one place a pawn_state message is assembled. There are two senders
+        /// (ViewerManager.Tick and OverlordGameComponent's request_state handler) and
+        /// they drifted: only the first carried preferredWeapon, so any request_state —
+        /// socket reconnect, the map-waiting retry, the Resync button, the 'r' hotkey,
+        /// or an appearance change — silently cleared the viewer's preferred-weapon
+        /// star, because the client does `msg.preferredWeapon || ''` and cannot tell an
+        /// omitted field from a cleared one. Building it here means a third sender
+        /// cannot reintroduce the gap.
+        /// </summary>
+        public static Dictionary<string, object> BuildPawnStateMessage(ViewerSession session, string stateJson)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                ["type"] = PawnState,
+                ["state"] = new JsonHelper.RawJson(stateJson),
+                // ALWAYS present, empty string included — see above.
+                ["preferredWeapon"] = session?.preferredWeaponDef ?? ""
+            };
+            return msg;
+        }
+
         // --- Game -> Browser (outgoing) ---
         public const string PawnState = "pawn_state";
         public const string PawnPortrait = "pawn_portrait";

@@ -849,22 +849,16 @@ namespace Overlord
                     PawnStateSerializer.InvalidateSignatureCache(pawn);
                     signature = PawnStateSerializer.ComputeStateSignature(pawn);
                     var stateJson = PawnStateSerializer.Serialize(pawn);
-                    session.lastStateHash = signature;
-                    var msg = new Dictionary<string, object>
-                    {
-                        ["type"]  = StateProtocol.PawnState,
-                        ["state"] = new JsonHelper.RawJson(stateJson)
-                    };
-                    // Per-session standing order (not part of per-pawn state) — the
-                    // client shows it in the Gear tab and can clear/change it.
-                    // ALWAYS sent, empty string included. When the field was omitted
-                    // for "unset", the client could not distinguish "no opinion" from
-                    // "cleared" — it does `msg.preferredWeapon || ''`, so an omission
-                    // silently reset the star. Reported 2026-08-04: "the star doesn't
-                    // seem to stay gold after you click but it does say preferred
-                    // weapon set".
-                    msg["preferredWeapon"] = session.preferredWeaponDef ?? "";
-                    comp?.SendToViewerPublic(session.username, msg);
+                    var msg = StateProtocol.BuildPawnStateMessage(session, stateJson);
+
+                    // Commit the hash ONLY if the message was actually accepted. It used
+                    // to be stored before the send, and the send can silently drop: the
+                    // relay socket may be closed or reconnecting, or the outgoing queue
+                    // over its 250-message cap. With the hash already committed, nothing
+                    // recomputes until the pawn's state changes AGAIN — so a viewer could
+                    // sit on stale state indefinitely, and no log line said why.
+                    if (comp != null && comp.SendToViewerPublic(session.username, msg))
+                        session.lastStateHash = signature;
                 }
 
                 // Send tile map delta (pawn/building positions)

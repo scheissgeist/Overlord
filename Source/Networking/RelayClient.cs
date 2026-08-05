@@ -91,21 +91,29 @@ namespace Overlord
             mainThreadQueue.DrainTo(action => action());
         }
 
-        public void Send(string json)
+        /// <summary>
+        /// Queue a message. Returns FALSE when it was dropped — the socket is not open,
+        /// or the outgoing queue is over its cap. Callers that record "the viewer now
+        /// has this state" must check the result: committing a change-detection hash
+        /// for a message that was silently discarded leaves the viewer permanently
+        /// stale, because nothing recomputes until the state changes AGAIN.
+        /// </summary>
+        public bool Send(string json)
         {
             if (!isConnected || webSocket == null || webSocket.State != WebSocketState.Open)
-                return;
+                return false;
 
             int queued = outgoingQueue.Count;
             bool isMapFrame = json.IndexOf("\"type\":\"map_frame\"", StringComparison.Ordinal) >= 0;
             if (ShouldDropQueuedMessage(queued, isMapFrame))
-                return;
+                return false;
 
             outgoingQueue.Enqueue(new OutgoingMessage
             {
                 Text = json,
                 MessageType = WebSocketMessageType.Text
             });
+            return true;
         }
 
         public void SendBinaryMapFrame(Dictionary<string, object> metadata, byte[] jpeg)
@@ -182,11 +190,12 @@ namespace Overlord
             }
         }
 
-        public void SendToViewer(string username, Dictionary<string, object> message)
+        /// <summary>False when the message was dropped rather than queued.</summary>
+        public bool SendToViewer(string username, Dictionary<string, object> message)
         {
             var copy = new Dictionary<string, object>(message);
             copy["target"] = username;
-            Send(JsonHelper.ToJson(copy));
+            return Send(JsonHelper.ToJson(copy));
         }
 
         public void Broadcast(Dictionary<string, object> message)

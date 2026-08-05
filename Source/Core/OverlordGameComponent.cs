@@ -733,15 +733,13 @@ namespace Overlord
             // Fresh slow-tier hash so lastStateHash matches the serialized payload.
             PawnStateSerializer.InvalidateSignatureCache(session.assignedPawn);
             var stateJson = PawnStateSerializer.Serialize(session.assignedPawn);
-            session.lastStateHash = PawnStateSerializer.ComputeStateSignature(session.assignedPawn);
+            int signature = PawnStateSerializer.ComputeStateSignature(session.assignedPawn);
             viewerManager.SendPermissions(username);
 
-            var msg = new Dictionary<string, object>
-            {
-                ["type"] = StateProtocol.PawnState,
-                ["state"] = new JsonHelper.RawJson(stateJson)
-            };
-            SendToViewer(username, msg);
+            // Same rule as the Tick sender: only claim the viewer has this state once a
+            // transport accepted it. Storing the hash for a dropped message strands them.
+            if (SendToViewer(username, StateProtocol.BuildPawnStateMessage(session, stateJson)))
+                session.lastStateHash = signature;
 
             QueuePawnPortrait(username, session.assignedPawn);
             viewerManager.SendTacticalMapSnapshot(username);
@@ -881,16 +879,23 @@ namespace Overlord
                    JsonHelper.ExtractLastString(json, "source") == "admin";
         }
 
-        private void SendToViewer(string username, Dictionary<string, object> msg)
+        /// <summary>
+        /// Returns TRUE only if at least one transport actually accepted the message.
+        /// Callers that commit change-detection state must gate on this: a dropped
+        /// message with the hash already stored leaves the viewer stale until the
+        /// state changes AGAIN, which for a mostly-idle pawn can be a long time.
+        /// </summary>
+        private bool SendToViewer(string username, Dictionary<string, object> msg)
         {
             string json = JsonHelper.ToJson(msg);
-            relayClient?.SendToViewer(username, msg);
-            embeddedServer?.SendToViewer(username, json);
+            bool relayOk = relayClient?.SendToViewer(username, msg) ?? false;
+            bool embeddedOk = embeddedServer?.SendToViewer(username, json) ?? false;
+            return relayOk || embeddedOk;
         }
 
-        public void SendToViewerPublic(string username, Dictionary<string, object> msg)
+        public bool SendToViewerPublic(string username, Dictionary<string, object> msg)
         {
-            SendToViewer(username, msg);
+            return SendToViewer(username, msg);
         }
 
         public void SendToolkitStatePublic(string username)

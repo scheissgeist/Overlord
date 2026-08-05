@@ -131,7 +131,8 @@ namespace Overlord
             }
         }
 
-        public void SendToViewer(string username, string json)
+        /// <summary>False when no connected session matched the username.</summary>
+        public bool SendToViewer(string username, string json)
         {
             lock (sessionsLock)
             {
@@ -140,10 +141,11 @@ namespace Overlord
                     if (kvp.Value.username == username)
                     {
                         SendToSocket(kvp.Value.ws, json);
-                        return;
+                        return true;
                     }
                 }
             }
+            return false;
         }
 
         public void Broadcast(string json)

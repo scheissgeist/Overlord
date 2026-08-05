@@ -861,10 +861,16 @@ wss.on('connection', (ws, req) => {
 
   // ── Host ──────────────────────────────────────────────────────────────────
   if (role === 'host') {
-    if (HOST_SECRET && secret !== HOST_SECRET) {
+    // FAIL CLOSED, matching adminAuth and the admin WebSocket role. With no
+    // HOST_SECRET configured this accepted ANY ?role=host connection — and the very
+    // next lines close the incumbent host socket, so an anonymous connection could
+    // evict the real streamer's game and then receive every viewer command.
+    if (!HOST_SECRET || secret !== HOST_SECRET) {
       ws.close(4001, 'Unauthorized');
-      console.log('[relay] Host rejected: bad secret');
-      recordOps('host_rejected', { reason: 'bad_secret' });
+      console.log(HOST_SECRET
+        ? '[relay] Host rejected: bad secret'
+        : '[relay] Host rejected: HOST_SECRET is not configured on this relay');
+      recordOps('host_rejected', { reason: HOST_SECRET ? 'bad_secret' : 'no_secret_configured' });
       return;
     }
 
@@ -1189,8 +1195,15 @@ function describeReplayCacheEntry(login, cache, now = Date.now()) {
 
 // ─── Admin API (protected by HOST_SECRET) ─────────────────────────────────────
 function adminAuth(req, res, next) {
+  // FAIL CLOSED. This previously read `if (!HOST_SECRET || auth === ...)`, so an
+  // unset HOST_SECRET (the default is '') made the first disjunct true and left
+  // EVERY admin route unauthenticated: /admin/logs, /admin/status, /admin/cache,
+  // /admin/viewer-session (mints viewer sessions), /admin/kick, /admin/message,
+  // /admin/reload and /admin/host-command. The admin WebSocket role already fails
+  // closed, so the two disagreed — that makes this a defect, not a design choice.
+  // A relay with no secret must refuse admin access, not hand it to anyone.
   const auth = req.headers.authorization;
-  if (!HOST_SECRET || auth === `Bearer ${HOST_SECRET}`) return next();
+  if (HOST_SECRET && auth === `Bearer ${HOST_SECRET}`) return next();
   res.status(401).json({ error: 'Unauthorized' });
 }
 
