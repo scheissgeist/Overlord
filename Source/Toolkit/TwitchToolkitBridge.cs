@@ -245,6 +245,17 @@ namespace Overlord
                 // reply, because chat is the only place that viewer sees a result.
                 resolve.Invoke(null, parameters);
 
+                // Toolkit parks a viewer in viewerNamesDoingVariableCommands while a
+                // chat-driven variable purchase waits for their follow-up message,
+                // and removes them when that conversation finishes. Our purchases
+                // resolve synchronously from the UI — there is no follow-up message
+                // coming — so a viewer left in that list is stranded there forever
+                // and EVERY later purchase is refused as "on cooldown" (reported
+                // 2026-08-04: viewers unable to buy at all). ToolkitUtils ships an
+                // "unstick me" chat command that does exactly this removal, which is
+                // the same acknowledgement that the list leaks.
+                ReleaseVariableCommandHold(NormalizeUsername(username));
+
                 return PurchaseOk(info.label, quantity);
             }
             catch (TargetInvocationException ex)
@@ -1293,7 +1304,10 @@ namespace Overlord
                     foreach (object entry in pending)
                     {
                         if (string.Equals(Convert.ToString(entry), user, StringComparison.OrdinalIgnoreCase))
+                        {
+                            LogUtil.Log($"Toolkit block for {user}: stuck in viewerNamesDoingVariableCommands");
                             return true;
+                        }
                     }
                 }
 
@@ -1318,7 +1332,10 @@ namespace Overlord
                 {
                     int maxCarePackages = ReadStaticInt("TwitchToolkit.ToolkitSettings", "MaxCarePackagesPerInterval", 0);
                     if (maxCarePackages > 0 && logged >= maxCarePackages)
+                    {
+                        LogUtil.Log($"Toolkit block for {user}: care-package cap {logged}/{maxCarePackages}");
                         return true;
+                    }
                 }
 
                 // 3. Per-incident cap (Toolkit: EventsHaveCooldowns gate, incident.eventCap).
@@ -1326,7 +1343,10 @@ namespace Overlord
                 {
                     int eventCap = ReadInt(itemIncident, "eventCap", 0);
                     if (eventCap > 0 && logged >= eventCap)
+                    {
+                        LogUtil.Log($"Toolkit block for {user}: item event cap {logged}/{eventCap}");
                         return true;
+                    }
                 }
 
                 return false;
@@ -1506,6 +1526,46 @@ namespace Overlord
             "trait", "removetrait", "settraits", "levelskill", "passionshuffle", "genderswap",
             RepairEquippedGearSku
         };
+
+        /// <summary>
+        /// Drop a viewer from Toolkit's viewerNamesDoingVariableCommands. That list
+        /// gates "you must wait for the game to unpause to buy something else", and a
+        /// stuck entry blocks the viewer's purchases permanently. Best-effort: the
+        /// field is a plain static collection, so this handles List/HashSet/ICollection
+        /// shapes and stays silent if Toolkit changes it.
+        /// </summary>
+        private static void ReleaseVariableCommandHold(string username)
+        {
+            if (string.IsNullOrEmpty(username))
+                return;
+            try
+            {
+                object list = FindType("TwitchToolkit.Store.Purchase_Handler")
+                    ?.GetField("viewerNamesDoingVariableCommands", BindingFlags.Public | BindingFlags.Static)
+                    ?.GetValue(null);
+                if (list == null)
+                    return;
+
+                // Collect first, then remove — mutating while enumerating throws.
+                var doomed = new List<object>();
+                foreach (object entry in (IEnumerable)list)
+                {
+                    if (string.Equals(Convert.ToString(entry), username, StringComparison.OrdinalIgnoreCase))
+                        doomed.Add(entry);
+                }
+                if (doomed.Count == 0)
+                    return;
+
+                MethodInfo remove = list.GetType().GetMethod("Remove", new[] { typeof(string) })
+                    ?? list.GetType().GetMethods().FirstOrDefault(m => m.Name == "Remove" && m.GetParameters().Length == 1);
+                if (remove == null)
+                    return;
+                foreach (object entry in doomed)
+                    remove.Invoke(list, new[] { entry });
+                LogUtil.Log($"Released Toolkit variable-command hold for {username}");
+            }
+            catch { }
+        }
 
         /// <summary>
         /// Toolkit's Store_Component, which owns the purchase log. Read-only use —

@@ -119,7 +119,6 @@ let armorySearchTimer = null;
 let inventoryPage = 0;
 let activeSocialTargetId = null;
 let socialSortMode = 'alpha';
-let thoughtPage = 0;
 let viewerTickets = null;
 let activeVote = false;
 let selectedScheduleHour = 8;
@@ -435,7 +434,6 @@ const GEAR_SLOT_DEFS = [
 ];
 const GEAR_NEARBY_PAGE_SIZE = 3;
 const INVENTORY_PAGE_SIZE = 3;
-const THOUGHT_PAGE_SIZE = 4;
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
 function showScreen(name) {
@@ -1275,7 +1273,6 @@ function resetAssignedState() {
   clearTimeout(armorySearchTimer);
   armorySearchTimer = null;
   inventoryPage = 0;
-  thoughtPage = 0;
   viewerTickets = null;
   exitMoveMode();
 
@@ -2429,27 +2426,17 @@ function renderThoughts(thoughts) {
   });
   const rows = Array.from(groups.values())
     .sort((a, b) => Math.abs(b.totalMood) - Math.abs(a.totalMood));
-  const pageCount = Math.max(1, Math.ceil(rows.length / THOUGHT_PAGE_SIZE));
-  thoughtPage = Math.min(thoughtPage, pageCount - 1);
-  const visibleRows = rows.slice(thoughtPage * THOUGHT_PAGE_SIZE, (thoughtPage + 1) * THOUGHT_PAGE_SIZE);
-  const items = visibleRows.map(g => {
+  // Every thought renders; the list scrolls. Prev/Next at 4 rows a page meant a
+  // viewer clicked through pages to read their own pawn's mood — the same
+  // complaint that retired the social pager.
+  const items = rows.map(g => {
     const cls = g.totalMood > 0 ? 'positive' : g.totalMood < 0 ? 'negative' : '';
     const sign = g.totalMood > 0 ? '+' : '';
     const count = g.count > 1 ? ` <span class="thought-count">x${g.count}</span>` : '';
     const value = g.totalMood === 0 ? '' : `${sign}${g.totalMood}`;
     return `<div class="thought-row"><span class="thought-label">${escapeHtml(g.label)}${count}</span><span class="thought-mood ${cls}">${value}</span></div>`;
   }).join('');
-  const pager = pageCount > 1
-    ? `<span class="compact-pager"><button data-thought-page="${thoughtPage - 1}" ${thoughtPage <= 0 ? 'disabled' : ''}>Prev</button><span>${thoughtPage + 1}/${pageCount}</span><button data-thought-page="${thoughtPage + 1}" ${thoughtPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
-    : '';
-  el.innerHTML = `<div class="health-section-title"><span>Mind</span>${pager}</div>${items}`;
-  el.querySelectorAll('[data-thought-page]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      thoughtPage = Number(btn.dataset.thoughtPage) || 0;
-      invalidatePanel('thoughts');
-      renderThoughts(pawnState?.thoughts);
-    });
-  });
+  el.innerHTML = `<div class="health-section-title"><span>Mind</span></div><div class="thought-scroll">${items}</div>`;
 }
 
 function renderGear(s) {

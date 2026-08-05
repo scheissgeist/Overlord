@@ -1004,7 +1004,13 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   width: 100%;
   height: 100%;
   min-width: 0;
-  object-fit: contain;
+  /* The host renders portraits at 100x140 (PortraitRenderer.PortraitSize) into
+     this 96x96 square. `contain` letterboxed that tall image, shrinking the pawn
+     and leaving it visually adrift in the frame. `cover` fills the square, and
+     biasing the crop upward keeps the head — the part that identifies the pawn —
+     centred instead of cropping it toward the torso. */
+  object-fit: cover;
+  object-position: center 22%;
 }
 
 #pawn-portrait { display: none; }
@@ -1542,6 +1548,18 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font-size: 13px;
   color: var(--parchment-text);
   font-family: var(--font-ui);
+
+  /* Re-point the text tokens for this PARCHMENT surface. --text/--text-secondary/
+     --text-muted are light greys authored for the dark panel (#c9c1ad, #9b927f);
+     components defined once and reused inside the tabs therefore rendered
+     light-grey-on-light-tan — about 1.3:1, effectively invisible. The health
+     "Capacities" row (.cap-row .cap-name -> --text-secondary) was the worst case:
+     the label read as blank space. Shadowing the tokens here fixes every reused
+     component at once instead of patching 100+ individual rules, and any
+     component added later inherits the correct colour automatically. */
+  --text: var(--parchment-text);
+  --text-secondary: #43301c;
+  --text-muted: var(--parchment-text-muted);
 }
 
 .tab-pane { display: none; }
@@ -2516,6 +2534,9 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   height: 100%;
   min-width: 0;
   object-fit: cover;
+  /* Same upward crop bias as .inspect-portrait — a centred crop of a 100x140
+     render frames the torso and cuts the head. */
+  object-position: center 22%;
 }
 
 #command-portrait-img { display: none; }
@@ -3116,7 +3137,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 .schedule-hour .schedule-hour-label {
   display: block;
   color: var(--text-muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .schedule-swatch {
@@ -4730,7 +4751,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   color: var(--parchment-text);
   cursor: pointer;
   font: inherit;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .compact-pager button:hover:not(:disabled) { background: rgba(138, 104, 64, 0.32); }
@@ -4839,12 +4860,12 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   overflow: visible;
 }
 
-#tab-health .health-traits::before { margin-right: 3px; font-size: 9px; }
+#tab-health .health-traits::before { margin-right: 3px; font-size: 11px; }
 #tab-health .trait-chip { padding: 1px 5px; font-size: 10px; white-space: nowrap; }
 #tab-health .health-section-title { margin: 0 0 3px; padding-bottom: 2px; font-size: 11px; }
 #tab-health .hediff-row,
 #tab-health .thought-row { min-height: 21px; padding: 2px 0; font-size: 11px; }
-#tab-health .hediff-part { font-size: 9px; }
+#tab-health .hediff-part { font-size: 11px; }
 #tab-health .hediff-sev,
 #tab-health .thought-mood { font-size: 10px; }
 #tab-health .capacity-board { max-width: none; gap: 1px; }
@@ -4855,6 +4876,57 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-health .cap-row .cap-meter { height: 4px; }
 
 /* Gear: slots, nearby choices, and carried inventory share one fixed sheet. */
+/* Thoughts scroll instead of paging — a viewer should not click Prev/Next to read
+   their own pawn's mood. Mobile drops the cap and lets the pane scroll. */
+/* Body (hediffs) scrolls too — a badly injured pawn has a long list, and it was
+   pushing the drawer past its height. */
+#tab-health #health-list {
+  max-height: 96px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 104, 64, 0.5) transparent;
+}
+#tab-health #health-list::-webkit-scrollbar { width: 7px; }
+#tab-health #health-list::-webkit-scrollbar-thumb {
+  background: rgba(138, 104, 64, 0.5);
+  border-radius: 3px;
+}
+
+#tab-health .thought-scroll {
+  max-height: 76px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 104, 64, 0.5) transparent;
+}
+#tab-health .thought-scroll::-webkit-scrollbar { width: 7px; }
+#tab-health .thought-scroll::-webkit-scrollbar-thumb {
+  background: rgba(138, 104, 64, 0.5);
+  border-radius: 3px;
+}
+
+/* Each gear column scrolls on its own inside the drawer. Raising the sub-10px
+   type to a legible floor made this content taller than the 235px drawer, and the
+   right answer to "there is more content than space" is a scrollbar, not smaller
+   text. Same pattern as the social roster so both tabs behave identically.
+   The mobile block below drops these caps and lets #tab-content scroll instead. */
+#tab-gear #gear-list,
+#tab-gear #inventory-list {
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 104, 64, 0.5) transparent;
+}
+#tab-gear #gear-list::-webkit-scrollbar,
+#tab-gear #inventory-list::-webkit-scrollbar { width: 7px; }
+#tab-gear #gear-list::-webkit-scrollbar-thumb,
+#tab-gear #inventory-list::-webkit-scrollbar-thumb {
+  background: rgba(138, 104, 64, 0.5);
+  border-radius: 3px;
+}
+
 #tab-gear.active {
   display: grid;
   grid-template-columns: minmax(360px, 1.7fr) minmax(150px, 0.7fr);
@@ -4885,7 +4957,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
 #tab-gear .gear-overview-head > span { display: flex; align-items: baseline; gap: 6px; }
 #tab-gear .gear-overview-head strong { font-size: 11px; }
-#tab-gear .gear-overview-head small { color: var(--parchment-text-muted); font-size: 9px; }
+#tab-gear .gear-overview-head small { color: var(--parchment-text-muted); font-size: 11px; }
 
 #tab-gear .gear-slot-tabs {
   grid-area: slots;
@@ -4902,7 +4974,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   padding: 4px 0 2px;
   border-bottom: 1px solid rgba(108, 78, 38, 0.35);
   color: var(--parchment-text-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -4927,8 +4999,8 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 #tab-gear .gear-slot.filled:hover { border-color: #6c4e26; color: var(--parchment-text); }
-#tab-gear .gear-slot-label { margin: 0; color: var(--parchment-text-muted); font-size: 9px; text-align: center; }
-#tab-gear .gear-kind { margin-bottom: 1px; color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .gear-slot-label { margin: 0; color: var(--parchment-text-muted); font-size: 11px; text-align: center; }
+#tab-gear .gear-kind { margin-bottom: 1px; color: var(--parchment-text-muted); font-size: 10px; }
 #tab-gear .gear-slot-name { display: none; }
 /* Item names WRAP instead of nowrap-ellipsis: a two-line "Masterwork plasteel
    longsword" is readable; "Masterwork plasteel longsw…" is not. The fixed
@@ -4946,7 +5018,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   line-height: 1.18;
 }
 #tab-gear .gear-sheet-head { padding-bottom: 3px; color: var(--parchment-text); font-size: 11px; }
-#tab-gear .gear-sheet-count { color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .gear-sheet-count { color: var(--parchment-text-muted); font-size: 10px; }
 #tab-gear .gear-sheet-tools { display: inline-flex; align-items: center; gap: 6px; }
 #tab-gear .gear-source-line {
   display: flex;
@@ -4970,7 +5042,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   background: rgba(138, 104, 64, 0.12);
   color: var(--parchment-text-muted);
   font: inherit;
-  font-size: 8px;
+  font-size: 10px;
 }
 #tab-gear .gear-source-toggle button:last-child { border-right: 0; }
 #tab-gear .gear-source-toggle button.active {
@@ -4987,7 +5059,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   background: rgba(244, 229, 190, 0.46);
   color: var(--parchment-text);
   font: inherit;
-  font-size: 8px;
+  font-size: 10px;
 }
 #tab-gear [data-armory-search]::placeholder { color: var(--parchment-text-muted); }
 #tab-gear .gear-repair-button {
@@ -5022,7 +5094,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   padding: 0 0 3px;
   border-color: rgba(108, 78, 38, 0.35);
   color: var(--parchment-text);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 #tab-gear .gear-nearby-title > span:first-child { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
@@ -5032,7 +5104,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   border-color: var(--parchment-rule);
   background: rgba(138, 104, 64, 0.22);
   color: var(--parchment-text);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 #tab-gear .gear-row,
@@ -5061,6 +5133,11 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
    them to single-column so each item name gets the full drawer width. */
 @media (max-width: 560px) {
   #tab-gear.active { grid-template-columns: minmax(0, 1fr); }
+  /* Stacked: let the pane scroll rather than nesting scroll boxes inside it. */
+  #tab-gear #gear-list,
+  #tab-gear #inventory-list,
+  #tab-health #health-list,
+  #tab-health .thought-scroll { max-height: none; overflow-y: visible; }
   #tab-gear .gear-layout {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
@@ -5072,11 +5149,11 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 }
 
 #tab-gear .gear-meta-text,
-#tab-gear .condition-label { color: var(--parchment-text-muted); font-size: 8px; }
+#tab-gear .condition-label { color: var(--parchment-text-muted); font-size: 10px; }
 #tab-gear .condition { height: 3px; background: rgba(58, 42, 26, 0.22); }
 #tab-gear .gear-row-actions,
 #tab-gear .inv-actions { display: flex; gap: 3px; }
-#tab-gear .item-action { padding: 3px 5px; border-color: var(--parchment-rule); background: rgba(88, 72, 49, 0.74); color: #fffaf0; font-size: 9px; }
+#tab-gear .item-action { padding: 3px 5px; border-color: var(--parchment-rule); background: rgba(88, 72, 49, 0.74); color: #fffaf0; font-size: 11px; }
 #tab-gear .item-action.ghost { border-color: var(--parchment-rule); background: transparent; color: var(--parchment-text-muted); }
 /* Preferred-weapon star — quiet until active, then gold. */
 #tab-gear .gear-prefer { min-width: 22px; padding: 3px 4px; background: transparent; color: var(--parchment-text-muted); }
@@ -5116,7 +5193,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font-weight: 700;
 }
 
-#tab-gear .inventory-head small { color: var(--parchment-text-muted); font-size: 9px; }
+#tab-gear .inventory-head small { color: var(--parchment-text-muted); font-size: 11px; }
 #tab-gear .inventory-grid { display: grid; grid-template-columns: 1fr; }
 /* Floating popover anchored to the gear sheet. With the colour wheel it is
    wider than the swatch grid was, so it is clamped to the sheet's width and
@@ -5160,7 +5237,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   border-color: var(--parchment-rule);
   background: rgba(138, 104, 64, 0.13);
   color: var(--parchment-text-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 #tab-social .social-sort button.active { border-color: #6c4e26; background: rgba(138, 104, 64, 0.38); color: var(--parchment-text); }
 #tab-social .social-person {
@@ -5182,7 +5259,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   grid-column: 2;
   grid-row: 1;
   color: var(--parchment-text-muted);
-  font-size: 8px;
+  font-size: 10px;
   white-space: nowrap;
 }
 #tab-social .social-actions { gap: 7px; }
@@ -5202,7 +5279,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 /* Events only exists when the host enables incident tickets (or a vote is active). */
 #event-buttons { display: block; }
 .events-sheet { display: grid; gap: 6px; }
-.events-head small { color: var(--parchment-text-muted); font-size: 9px; font-weight: 600; }
+.events-head small { color: var(--parchment-text-muted); font-size: 11px; font-weight: 600; }
 .events-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .events-grid .evt-btn {
   display: flex;
@@ -5225,7 +5302,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 .events-grid .evt-btn strong,
 .events-grid .evt-btn small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .events-grid .evt-btn strong { font-size: 10px; }
-.events-grid .evt-btn small { color: var(--parchment-text-muted); font-size: 8px; font-weight: 400; }
+.events-grid .evt-btn small { color: var(--parchment-text-muted); font-size: 10px; font-weight: 400; }
 .events-grid .evt-btn b { color: #68471e; font-size: 10px; }
 
 @media (max-width: 760px) {
