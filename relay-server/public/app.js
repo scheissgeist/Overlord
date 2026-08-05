@@ -2995,7 +2995,28 @@ function bindGearButtons(root) {
       markCommandInteraction(4000);
       const id = btn.dataset.dyeToggle;
       const pal = root.querySelector(`[data-dye-palette="${id}"]`);
-      if (pal) pal.classList.toggle('hidden');
+      if (!pal) return;
+      const opening = pal.classList.contains('hidden');
+      pal.classList.toggle('hidden');
+      // Bring the whole panel — including the Apply button — into view when it
+      // opens. Without this the panel just unhides below the fold: the drawer's
+      // #tab-content is only 140px tall on short screens (style.css @media
+      // max-height:560px) while the wheel alone is 88px, and .dye-wheel sets
+      // touch-action:none so a finger drag over it adjusts colour instead of
+      // scrolling. Viewer report 2026-08-04: "you cant scroll down far enough to
+      // use it on some of the items". Runs after layout so the expanded height
+      // is known.
+      if (opening) {
+        requestAnimationFrame(() => {
+          // Target the Apply button, not the panel: the panel can be TALLER than
+          // the 140px viewport, and scrolling its top into view would leave Apply
+          // — the only element that commits the colour — still off-screen. Falls
+          // back to the panel when the swatch-only variant has no Apply button.
+          const target = pal.querySelector('[data-dye-apply-custom]') || pal;
+          try { target.scrollIntoView({ block: 'end', behavior: 'smooth' }); }
+          catch (_) { target.scrollIntoView(false); }
+        });
+      }
     });
   });
   // Dye: apply a swatch to that item.

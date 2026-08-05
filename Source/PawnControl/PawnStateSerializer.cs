@@ -27,6 +27,17 @@ namespace Overlord
         // (realtime, immune to game-speed scaling) and INVALIDATED IMMEDIATELY when a
         // viewer command executes, so command feedback is never delayed by the cache.
         private const float SlowSampleIntervalSeconds = 2f;
+
+        // Quantisation for the FAST tier. These fields tick continuously (a walking
+        // pawn, a draining need, a healing wound), and at 1-cell / 1% resolution each
+        // tick fired a full ~20KB payload rebuild and send, per viewer. Quantising
+        // trades sub-bucket precision — which no client surface renders — for a large
+        // cut in serialize+send volume on the game's main thread.
+        private const int PositionBucketCells = 4;   // resend after ~4 cells of movement
+        private const int PercentBucket = 5;         // needs/health/severity: 5% steps
+
+        private static int Bucketed(float value01, int bucket)
+            => ((int)(value01 * 100f)) / bucket;
         private static readonly Dictionary<int, int> slowHashCache = new Dictionary<int, int>();
         private static readonly Dictionary<int, float> slowSampleTimeCache = new Dictionary<int, float>();
 
@@ -911,16 +922,25 @@ namespace Overlord
                 hash = hash * 31 + pawn.thingIDNumber;
                 AddStringHash(ref hash, pawn.LabelShort);
                 AddStringHash(ref hash, pawn.Name?.ToStringFull);
-                hash = hash * 31 + pawn.Position.x;
-                hash = hash * 31 + pawn.Position.z;
+                // Position is BUCKETED, not raw. Raw position meant every cell a pawn
+                // walked reserialized and shipped the whole ~20KB payload — relay logs
+                // 2026-08-04 showed pawn_state going out ~3x/second per viewer at
+                // 20-24KB each (the size swing is the embedded `distance` fields, which
+                // also move with the pawn). The client never reads posX/posZ; its own
+                // panel gating explicitly calls position noise (app.js:2052). Bucketing
+                // keeps the embedded distances honest — state still refreshes once the
+                // pawn has actually moved a meaningful span — while cutting position-
+                // driven resends by roughly the bucket size.
+                hash = hash * 31 + (pawn.Position.x / PositionBucketCells);
+                hash = hash * 31 + (pawn.Position.z / PositionBucketCells);
                 hash = hash * 31 + (pawn.Drafted ? 1 : 0);
                 hash = hash * 31 + (pawn.Dead ? 2 : 0);
                 hash = hash * 31 + (pawn.Downed ? 4 : 0);
 
                 if (pawn.health != null)
                 {
-                    int hp = (int)((pawn.health.summaryHealth?.SummaryHealthPercent ?? 1f) * 100f);
-                    int pain = (int)((pawn.health.hediffSet?.PainTotal ?? 0f) * 100f);
+                    int hp = Bucketed(pawn.health.summaryHealth?.SummaryHealthPercent ?? 1f, PercentBucket);
+                    int pain = Bucketed(pawn.health.hediffSet?.PainTotal ?? 0f, PercentBucket);
                     int hediffCount = pawn.health.hediffSet?.hediffs?.Count ?? 0;
                     hash = hash * 31 + hp;
                     hash = hash * 31 + pain;
@@ -933,7 +953,7 @@ namespace Overlord
                             if (hediff?.def == null) continue;
                             AddStringHash(ref hash, hediff.def.defName);
                             AddStringHash(ref hash, hediff.Part?.def?.defName);
-                            hash = hash * 31 + (int)(hediff.Severity * 100f);
+                            hash = hash * 31 + Bucketed(hediff.Severity, PercentBucket);
                         }
                     }
                 }
@@ -944,7 +964,9 @@ namespace Overlord
                     {
                         if (need?.def == null) continue;
                         AddStringHash(ref hash, need.def.defName);
-                        hash = hash * 31 + (int)(need.CurLevelPercentage * 100f);
+                        // Needs drain continuously; at 1% this alone guaranteed a
+                        // constant resend cadence regardless of anything else changing.
+                        hash = hash * 31 + Bucketed(need.CurLevelPercentage, PercentBucket);
                     }
                 }
 
