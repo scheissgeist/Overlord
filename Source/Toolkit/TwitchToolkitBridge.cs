@@ -1256,31 +1256,80 @@ namespace Overlord
             catch { }
         }
 
+        /// <summary>
+        /// Is this viewer currently blocked from item purchases? PURE — reads state
+        /// only, sends nothing.
+        ///
+        /// Toolkit's own Check* helpers CANNOT be used here. Despite the names and
+        /// the bool return, every one of them posts to Twitch chat as a side effect
+        /// (verified against TwitchToolkit 1.6 Purchase_Handler):
+        ///   CheckIfViewerIsInVariableCommandList:163 -> "you must wait for the game to unpause"
+        ///   CheckIfCarePackageIsOnCooldown:227       -> "care packages are on cooldown, wait N days"
+        ///   CheckIfIncidentIsOnCooldown:244          -> "X is maxed, wait N days to purchase"
+        /// and those messages go out as the STREAMER's account.
+        ///
+        /// This is called from BuildViewerState, which runs on every viewer join and
+        /// every shop refresh — so calling Toolkit's version made each join spam the
+        /// streamer's chat. Live evidence 2026-08-04: "Viewer joined: Radzuse"
+        /// immediately followed by "@radzuse Item is maxed, wait 11 days to
+        /// purchase.", repeated for every viewer that joined or reconnected, while
+        /// those viewers were doing nothing. Regression introduced by 8d49d6c, which
+        /// added the purchasesOnCooldown field without noticing the check was not a
+        /// query. Each branch below mirrors Toolkit's logic minus the send.
+        /// </summary>
         private static bool ToolkitItemBlockedByCooldown(string username)
         {
             try
             {
+                string user = NormalizeUsername(username);
+
+                // 1. Mid-variable-command (Toolkit gates on a plain static list).
                 Type purchaseHandler = FindType("TwitchToolkit.Store.Purchase_Handler");
-                if (purchaseHandler == null)
+                var pending = purchaseHandler
+                    ?.GetField("viewerNamesDoingVariableCommands", BindingFlags.Public | BindingFlags.Static)
+                    ?.GetValue(null) as IEnumerable;
+                if (pending != null)
+                {
+                    foreach (object entry in pending)
+                    {
+                        if (string.Equals(Convert.ToString(entry), user, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+
+                object storeComponent = GetStoreComponent();
+                if (storeComponent == null)
+                    return false;
+                MethodInfo incidentsInLog = storeComponent.GetType()
+                    .GetMethod("IncidentsInLogOf", BindingFlags.Public | BindingFlags.Instance);
+                if (incidentsInLog == null)
                     return false;
 
-                MethodInfo variableList = purchaseHandler
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == "CheckIfViewerIsInVariableCommandList" && m.GetParameters().Length >= 1);
-                if (InvokeBool(variableList, NormalizeUsername(username), false))
-                    return true;
-
-                MethodInfo carePackage = purchaseHandler
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == "CheckIfCarePackageIsOnCooldown" && m.GetParameters().Length >= 1);
-                if (InvokeBool(carePackage, NormalizeUsername(username), false))
-                    return true;
-
                 object itemIncident = ReadStaticMember(FindType("TwitchToolkit.Incidents.StoreIncidentDefOf"), "Item");
-                MethodInfo incidentCooldown = purchaseHandler
-                    .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == "CheckIfIncidentIsOnCooldown" && m.GetParameters().Length >= 2);
-                return itemIncident != null && InvokeBool(incidentCooldown, itemIncident, NormalizeUsername(username), false);
+                if (itemIncident == null)
+                    return false;
+                string abbreviation = ReadString(itemIncident, "abbreviation");
+                if (string.IsNullOrEmpty(abbreviation))
+                    return false;
+                int logged = Convert.ToInt32(incidentsInLog.Invoke(storeComponent, new object[] { abbreviation }) ?? 0);
+
+                // 2. Care-package cap (Toolkit: MaxEvents gate, MaxCarePackagesPerInterval).
+                if (ReadStaticBool("TwitchToolkit.ToolkitSettings", "MaxEvents", false))
+                {
+                    int maxCarePackages = ReadStaticInt("TwitchToolkit.ToolkitSettings", "MaxCarePackagesPerInterval", 0);
+                    if (maxCarePackages > 0 && logged >= maxCarePackages)
+                        return true;
+                }
+
+                // 3. Per-incident cap (Toolkit: EventsHaveCooldowns gate, incident.eventCap).
+                if (ReadStaticBool("TwitchToolkit.ToolkitSettings", "EventsHaveCooldowns", false))
+                {
+                    int eventCap = ReadInt(itemIncident, "eventCap", 0);
+                    if (eventCap > 0 && logged >= eventCap)
+                        return true;
+                }
+
+                return false;
             }
             catch
             {
@@ -1457,6 +1506,23 @@ namespace Overlord
             "trait", "removetrait", "settraits", "levelskill", "passionshuffle", "genderswap",
             RepairEquippedGearSku
         };
+
+        /// <summary>
+        /// Toolkit's Store_Component, which owns the purchase log. Read-only use —
+        /// see ToolkitItemBlockedByCooldown for why we never route through
+        /// Purchase_Handler's Check* helpers to get at the same data.
+        /// </summary>
+        private static object GetStoreComponent()
+        {
+            Type componentType = FindType("TwitchToolkit.Store.Store_Component");
+            if (componentType == null || Current.Game == null)
+                return null;
+
+            MethodInfo getComponent = typeof(Game)
+                .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == "GetComponent" && m.IsGenericMethodDefinition && m.GetParameters().Length == 0);
+            return getComponent?.MakeGenericMethod(componentType).Invoke(Current.Game, null);
+        }
 
         private static object GetToolkitPawnComponent()
         {

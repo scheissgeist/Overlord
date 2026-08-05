@@ -842,6 +842,7 @@ namespace Overlord
             if (string.IsNullOrEmpty(defName))
             {
                 session.preferredWeaponDef = null;
+                session.lastStateHash = 0; // push the cleared value, same race as setting it
                 return SuccessResult("Preferred weapon cleared");
             }
 
@@ -851,6 +852,12 @@ namespace Overlord
 
             session.preferredWeaponDef = defName;
             session.lastPreferredWeaponTick = -999; // allow an immediate attempt
+            // preferredWeaponDef lives on the SESSION, not the pawn, so setting it
+            // changes nothing in the pawn signature and no fresh pawn_state would be
+            // sent — the client's star had to wait for some unrelated change, and an
+            // in-flight state built before this command would arrive and clear it.
+            // Force the resend so the confirmation cannot lose that race.
+            session.lastStateHash = 0;
             if (pawn != null && Find.TickManager != null)
                 PreferredWeaponController.Evaluate(session, pawn, Find.TickManager.TicksGame);
 

@@ -857,8 +857,13 @@ namespace Overlord
                     };
                     // Per-session standing order (not part of per-pawn state) — the
                     // client shows it in the Gear tab and can clear/change it.
-                    if (!string.IsNullOrEmpty(session.preferredWeaponDef))
-                        msg["preferredWeapon"] = session.preferredWeaponDef;
+                    // ALWAYS sent, empty string included. When the field was omitted
+                    // for "unset", the client could not distinguish "no opinion" from
+                    // "cleared" — it does `msg.preferredWeapon || ''`, so an omission
+                    // silently reset the star. Reported 2026-08-04: "the star doesn't
+                    // seem to stay gold after you click but it does say preferred
+                    // weapon set".
+                    msg["preferredWeapon"] = session.preferredWeaponDef ?? "";
                     comp?.SendToViewerPublic(session.username, msg);
                 }
 
