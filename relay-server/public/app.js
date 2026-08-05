@@ -2485,12 +2485,13 @@ function renderGear(s) {
   const activeDef = GEAR_SLOT_DEFS.find(def => def.key === activeGearSlot) || GEAR_SLOT_DEFS[0];
   const activeNearbyRaw = sortGearItems(nearby.filter(item => item.slotKey === activeGearSlot));
   const activeNearby = dedupeNearbyGear(activeNearbyRaw);
-  const nearbyPageCount = Math.max(1, Math.ceil(activeNearby.length / GEAR_NEARBY_PAGE_SIZE));
-  gearNearbyPage = Math.min(gearNearbyPage, nearbyPageCount - 1);
-  const visibleNearby = activeNearby.slice(
-    gearNearbyPage * GEAR_NEARBY_PAGE_SIZE,
-    (gearNearbyPage + 1) * GEAR_NEARBY_PAGE_SIZE
-  );
+  // Nearby renders in full and the column scrolls (#gear-list, style.css). It was
+  // paged 3 at a time client-side, which is the same Prev/Next tax retired from
+  // social, thoughts and inventory. The ARMORY list below is different — the HOST
+  // paginates it and only sends one page — so that pager stays.
+  const nearbyPageCount = 1;
+  gearNearbyPage = 0;
+  const visibleNearby = activeNearby;
   const armoryCurrent = armoryState &&
     String(armoryState.slot || '') === activeGearSlot &&
     String(armoryState.sort || '') === gearSortMode &&
@@ -4577,14 +4578,11 @@ function renderInventory(inv) {
     el.innerHTML = '<div class="quiet-empty">No carried inventory</div>';
     return;
   }
-  const pageCount = Math.max(1, Math.ceil(inv.length / INVENTORY_PAGE_SIZE));
-  inventoryPage = Math.min(inventoryPage, pageCount - 1);
-  const visibleItems = inv.slice(inventoryPage * INVENTORY_PAGE_SIZE, (inventoryPage + 1) * INVENTORY_PAGE_SIZE);
-  const pager = pageCount > 1
-    ? `<span class="compact-pager"><button data-inventory-page="${inventoryPage - 1}" ${inventoryPage <= 0 ? 'disabled' : ''}>Prev</button><span>${inventoryPage + 1}/${pageCount}</span><button data-inventory-page="${inventoryPage + 1}" ${inventoryPage >= pageCount - 1 ? 'disabled' : ''}>Next</button></span>`
-    : '';
+  // Whole inventory renders; #inventory-list scrolls (style.css). Paging 3 items at
+  // a time meant a viewer clicked Prev/Next to see what they were carrying.
+  const visibleItems = inv;
   el.innerHTML = `<div class="inventory-sheet">
-    <div class="inventory-head"><span>Carried <small>${inv.length}</small></span>${pager}</div>
+    <div class="inventory-head"><span>Carried <small>${inv.length}</small></span></div>
     <div class="inventory-grid">${visibleItems.map(item => {
     const countStr = item.count > 1 ? ` x${item.count}` : '';
     const dropBlocked = getActionBlockedReason('drop_inventory');
