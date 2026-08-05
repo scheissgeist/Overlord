@@ -1969,8 +1969,12 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   align-content: start;
   gap: 6px;
   min-width: 0;
-  /* No fixed height: .social-board caps the row and min-height:0 above lets this
-     shrink, so the roster takes whatever the sort row leaves. */
+  /* Explicit cap so the two-column drawer layout fits inside #tab-content (235px
+     tall; smoke-viewer-intake asserts it does not overflow). All rows stay
+     REACHABLE because this box scrolls — the earlier bug was not the cap, it was
+     an overflow:hidden on the pane that clipped instead of scrolling.
+     The mobile media query drops this and lets the pane scroll instead. */
+  max-height: 186px;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -5132,7 +5136,16 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-gear .gear-sheet { position: relative; }
 
 /* Social: stable list with a compact selected-target action block. */
-#tab-social.active { min-width: 0; min-height: 0; max-height: 100%; overflow: hidden; }
+/* Capped to the pane so the two-column drawer layout fits (smoke-viewer-intake
+   asserts #tab-content does not overflow), but NEVER overflow:hidden — clipping
+   here is what hid two thirds of the roster and produced "you can only see 5
+   colonists now". Capped + inner scroll = fits AND fully reachable. */
+/* height, not max-height. A percentage MAX-height only resolves against a parent
+   with a DEFINITE height, and a chain of max-height:100% never establishes one —
+   so the cap silently did nothing and #social-list kept its 246px content height
+   inside a 235px drawer. #tab-content has a definite height (min(34vh,280px)),
+   so making these two definite propagates it down to the board. */
+#tab-social.active { min-width: 0; min-height: 0; }
 #tab-social .social-board { grid-template-columns: minmax(250px, 1.15fr) minmax(220px, 0.85fr); gap: 14px; }
 #tab-social .social-list { gap: 3px; }
 /* #tab-social is the SAME element in the compact drawer (~235px) and the tall
@@ -5233,13 +5246,23 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   #tab-health > * { margin-bottom: 7px; }
   #tab-gear.active,
   #tab-social .social-board { grid-template-columns: 1fr; }
-  /* Stacked single column: the columns are now rows, so the board cap no longer
-     bounds the roster by itself — give the scroller its own height and let the
-     board grow to fit both it and the actions below. */
+  /* Stacked single column. Do NOT nest a scroll box inside the already-scrolling
+     #tab-content — that gave a 168px window onto 515px of roster, showing 5 of 14
+     with no affordance that more existed, which is exactly what the viewer
+     reported. Let the roster render at full height and let the PANE scroll it, so
+     every colonist is reachable with one familiar gesture. */
   #tab-social .social-board,
   .social-board { max-height: none; }
   #tab-social .social-scroll,
-  .social-scroll { max-height: 168px; }
+  .social-scroll {
+    max-height: none;
+    overflow-y: visible;
+  }
+  /* Stacked order: ACTIONS first, roster below. The actions act on whoever is
+     selected, so with a full-height roster above them they sat below the fold —
+     a viewer would tap a colonist and then have to hunt for the buttons. */
+  #tab-social .social-actions,
+  .social-actions { order: -1; }
   #tab-gear .gear-layout {
     grid-template-columns: 1fr;
     grid-template-areas: "overview" "slots" "equipped" "nearby";

@@ -49,6 +49,7 @@ let relayCapabilities = null;
 let negotiatedMapTransport = null;
 let viewerPermissions = null;
 let toolkitState = null;
+let toolkitStateAt = 0; // when the current toolkitState arrived (staleness check)
 let colonyResources = null;
 let resourceReadoutCollapsed = loadResourceReadoutCollapsed();
 let relayOnline = false;
@@ -1729,6 +1730,20 @@ function requestFreshViewerSnapshot(force = false) {
   lastFreshSnapshotAt = now;
   send({ type: 'request_colonist_list' });
   send({ type: 'request_state' });
+}
+
+// Called from INSIDE renderCommandCenter for the buy/story tabs, so it runs on
+// every re-render — and renders are driven by incoming host state and host
+// online/offline flips, which fire constantly for a reconnecting client. The
+// plain 2500ms floor in requestToolkitState is a minimum INTERVAL, not a stop, so
+// simply leaving the Buy tab open re-requested the whole store roughly every 2.5s
+// forever. Each request rebuilds the entire Toolkit catalog on the game's main
+// thread. Only refetch when we have nothing or the data is genuinely old; the
+// explicit Refresh button still forces an immediate fetch.
+const TOOLKIT_STATE_MAX_AGE_MS = 30000;
+function requestToolkitStateIfStale() {
+  if (toolkitState && Date.now() - toolkitStateAt < TOOLKIT_STATE_MAX_AGE_MS) return;
+  requestToolkitState();
 }
 
 function requestToolkitState(force = false) {
@@ -3926,6 +3941,7 @@ function handleMapTransport(msg) {
 
 function handleToolkitState(msg) {
   toolkitState = msg || null;
+  toolkitStateAt = Date.now();
   buyStuffCatalog = null; // rebuilt lazily from the new state's stuffCatalog
   invalidatePanel('gear');
   if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
@@ -4895,11 +4911,11 @@ function renderCommandMenuContent() {
   switch (activeCommandMenu) {
     case 'buy':
       commandMenuContent.innerHTML = `<div class="command-page">${renderBuyControls()}</div>`;
-      requestToolkitState();
+      requestToolkitStateIfStale();
       break;
     case 'story':
       commandMenuContent.innerHTML = `<div class="command-page">${renderStoryControls(pawnState)}</div>`;
-      requestToolkitState();
+      requestToolkitStateIfStale();
       break;
     case 'roster':
       commandMenuContent.innerHTML = `<div class="command-page">${renderColonyRoster()}</div>`;
