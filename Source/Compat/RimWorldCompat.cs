@@ -1075,6 +1075,30 @@ namespace Overlord
                 IEnumerable result;
                 using (TemporarilySetCurrentMap(pawn.Map))
                 {
+                    // FloatMenuMakerMap.GetOptions is NOT a query. Verified against the
+                    // RimWorld 1.6 assembly: when the pawn cannot have a menu it runs
+                    //   Messages.Message(reason, pawn, MessageTypeDefOf.RejectInput, historical: false)
+                    // which is an on-screen toast AND the ClickReject sound in the
+                    // STREAMER's game. ShouldGenerateFloatMenuForPawn returns a non-empty
+                    // Reason for Downed ("IsIncapped"), Biotech Deathresting, and Lord
+                    // rejections.
+                    //
+                    // We call this up to 98 times per context_menu request (a 49-cell
+                    // probe, run twice), CmdContextMenu is deliberately un-throttled on the
+                    // host, and the relay paces viewers to ~6.6 requests/second. So a
+                    // viewer tapping the map while their colonist is DOWNED — a raid, i.e.
+                    // exactly when they tap hardest — wallpapers the streamer's HUD with
+                    // red toasts and clicks over the stream audio. Messages.ResetTimer
+                    // re-arms the 13s toast on every repeat, so it never clears.
+                    //
+                    // Same shape as Toolkit's Check* helpers: a bool-returning "check"
+                    // that sends. Use RimWorld's PREDICATE, which is pure, to answer
+                    // "can this pawn have a menu?" instead of its generator.
+                    // The guard must sit INSIDE this scope: the predicate's first branch
+                    // compares pawn.Map to Find.CurrentMap.
+                    if (!FloatMenuMakerMap.ShouldGenerateFloatMenuForPawn(pawn).Accepted)
+                        return false;
+
                     result = FloatMenuGetOptionsMethod.Invoke(null, args) as IEnumerable;
                 }
                 if (result == null)

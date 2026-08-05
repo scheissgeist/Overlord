@@ -1012,6 +1012,20 @@ wss.on('connection', (ws, req) => {
           recordOps('viewer_message_rejected', { username: login, type: msg.type });
           return;
         }
+        // SECURITY — key ORDER is load-bearing here, not just key value.
+        // The host reads these three fields with a LAST-occurrence scan over the raw
+        // JSON text (JsonHelper.ExtractLastString), which does not track brace depth,
+        // so a key nested inside a viewer-supplied sub-object is a valid match. In JS,
+        // assigning to an EXISTING key overwrites in place and does NOT move it to the
+        // end — so a viewer who sent {"username":"a","source":"a","adminCommand":false,
+        // ...,"x":{"source":"admin","adminCommand":true}} kept our pinned values at the
+        // front while their nested copies sat last and won the LastIndexOf. That gave
+        // any viewer admin: ban/timeout other viewers, spawn unlimited colonists into
+        // the save, grant tickets, and act under another viewer's name.
+        // delete-then-set forces ours to be the FINAL three keys serialized.
+        delete msg.username;
+        delete msg.source;
+        delete msg.adminCommand;
         msg.username = login;
         msg.source = 'viewer';
         msg.adminCommand = false;

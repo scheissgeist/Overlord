@@ -69,17 +69,69 @@ namespace Overlord
             return null;
         }
 
-        public static string ExtractLastString(string json, string key)
+        /// <summary>
+        /// Index of the last occurrence of <paramref name="key"/> used as a key at the
+        /// TOP LEVEL of the message object (brace depth 1), skipping nested
+        /// objects/arrays and string contents. Returns -1 if there is none.
+        ///
+        /// SECURITY: identity fields (username, source, adminCommand) are read with a
+        /// last-occurrence scan. The old scan tracked no brace depth, so a key the
+        /// viewer nested inside their own sub-object could win the LastIndexOf and
+        /// impersonate another viewer or claim admin. The relay now pins those keys
+        /// last, but the host must not DEPEND on the relay's key order — the embedded
+        /// local server accepts viewer JSON directly, and an older relay may be running.
+        /// </summary>
+        private static int FindLastTopLevelKey(string json, string key)
         {
-            string search = $"\"{key}\"";
-            int keyIdx = json.LastIndexOf(search, StringComparison.Ordinal);
-            while (keyIdx >= 0)
+            if (string.IsNullOrEmpty(json))
+                return -1;
+
+            string search = "\"" + key + "\"";
+            int depth = 0;
+            int found = -1;
+            bool inString = false;
+
+            for (int i = 0; i < json.Length; i++)
             {
-                if (keyIdx == 0 || json[keyIdx - 1] == '{' || json[keyIdx - 1] == ',' || json[keyIdx - 1] == ' ' || json[keyIdx - 1] == '\n' || json[keyIdx - 1] == '\t')
-                    break;
-                keyIdx = json.LastIndexOf(search, keyIdx - 1, StringComparison.Ordinal);
+                char c = json[i];
+
+                if (inString)
+                {
+                    if (c == '\\') { i++; continue; }   // skip the escaped char
+                    if (c == '"') inString = false;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    // A key only counts at depth 1 and only when a ':' follows the
+                    // closing quote — otherwise it is a VALUE that happens to match.
+                    if (depth == 1 && string.CompareOrdinal(json, i, search, 0, search.Length) == 0)
+                    {
+                        int after = i + search.Length;
+                        while (after < json.Length && char.IsWhiteSpace(json[after]))
+                            after++;
+                        if (after < json.Length && json[after] == ':')
+                        {
+                            found = i;
+                            i = after;                  // resume past the key
+                            continue;
+                        }
+                    }
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']') depth--;
             }
 
+            return found;
+        }
+
+        public static string ExtractLastString(string json, string key)
+        {
+            int keyIdx = FindLastTopLevelKey(json, key);
             if (keyIdx < 0)
                 return null;
 
@@ -195,15 +247,9 @@ namespace Overlord
 
         private static string ExtractLastRawValue(string json, string key)
         {
-            string search = $"\"{key}\"";
-            int keyIdx = json.LastIndexOf(search, StringComparison.Ordinal);
-            while (keyIdx >= 0)
-            {
-                if (keyIdx == 0 || json[keyIdx - 1] == '{' || json[keyIdx - 1] == ',' || json[keyIdx - 1] == ' ' || json[keyIdx - 1] == '\n' || json[keyIdx - 1] == '\t')
-                    break;
-                keyIdx = json.LastIndexOf(search, keyIdx - 1, StringComparison.Ordinal);
-            }
-
+            // Top-level only — this is the path that reads adminCommand, so a nested
+            // {"adminCommand":true} must never win. See FindLastTopLevelKey.
+            int keyIdx = FindLastTopLevelKey(json, key);
             if (keyIdx < 0)
                 return null;
 

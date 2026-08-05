@@ -1317,6 +1317,17 @@ namespace Overlord
             if (map == null)
                 return ErrorResult("Pawn not on a map");
 
+            // Early-out before the probe. TryFindContextOptionsNear walks 49 cells and
+            // is called twice, so a downed pawn cost up to 98 FloatMenuContext builds —
+            // each of which emitted a toast + ClickReject sound in the STREAMER's game
+            // (see RimWorldCompat.TryGetContextOptions). The pawn also genuinely cannot
+            // act, so the probe could never have produced an option anyway. Say why,
+            // instead of the bare "No actions here" that made viewers keep tapping.
+            if (pawn.Dead)
+                return ErrorResult("Your colonist is dead");
+            if (pawn.Downed)
+                return ErrorResult("Your colonist is downed — they can't act until rescued");
+
             int x = JsonHelper.ExtractInt(json, "x", -1);
             int z = JsonHelper.ExtractInt(json, "z", -1);
             int targetId = JsonHelper.ExtractInt(json, "targetId", -1);
