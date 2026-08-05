@@ -287,13 +287,30 @@ namespace Overlord
                     case StateProtocol.ViewerLeft:     HandleViewerLeft(json);   break;
                     case StateProtocol.Command:        HandleCommand(json);      break;
                     case StateProtocol.MapTransport:   HandleMapTransport(json); break;
+                    // These four bypass PawnCommandRouter entirely, so its command
+                    // cooldown never applied, and the relay throttles nothing except
+                    // context_menu. Each is real main-thread work — request_state alone
+                    // re-serializes the pawn, rebuilds permissions, queues a portrait
+                    // render, and sends a tactical-map snapshot + resource readout.
+                    // A per-viewer, per-type floor is the backstop that does not depend
+                    // on any client behaving.
                     case StateProtocol.RequestState:
                     case StateProtocol.StateResyncRequest:
-                        HandleRequestState(json);
+                        if (ShouldServeRequest(type, JsonHelper.ExtractLastString(json, "username"), 30))
+                            HandleRequestState(json);
                         break;
-                    case StateProtocol.RequestArmory:  HandleRequestArmory(json); break;
-                    case StateProtocol.RequestIcons:   HandleRequestIcons(json); break;
-                    case StateProtocol.RequestRoster:  HandleRequestRoster(json); break;
+                    case StateProtocol.RequestArmory:
+                        if (ShouldServeRequest(type, JsonHelper.ExtractLastString(json, "username"), 30))
+                            HandleRequestArmory(json);
+                        break;
+                    case StateProtocol.RequestIcons:
+                        if (ShouldServeRequest(type, JsonHelper.ExtractLastString(json, "username"), 30))
+                            HandleRequestIcons(json);
+                        break;
+                    case StateProtocol.RequestRoster:
+                        if (ShouldServeRequest(type, JsonHelper.ExtractLastString(json, "username"), 60))
+                            HandleRequestRoster(json);
+                        break;
                     case StateProtocol.Assign:         if (IsAdminMessage(json)) HandleAssign(json);       break;
                     case StateProtocol.Unassign:       if (IsAdminMessage(json)) HandleUnassign(json);     break;
                     case StateProtocol.ClaimResponse:  if (IsAdminMessage(json)) HandleClaimResponse(json); break;
@@ -387,21 +404,31 @@ namespace Overlord
             }
         }
 
-        // Per-viewer rate floor for colonist_list rebuilds. Admin requests bypass it
-        // (the admin page needs an immediate, correct roster on open).
-        private readonly Dictionary<string, int> lastColonistListTick = new Dictionary<string, int>();
+        // Per-viewer, per-request-type rate floor. These request types skip
+        // PawnCommandRouter, so its command cooldown never covered them, and the relay
+        // throttles nothing but context_menu — a client loop (or a hand-written socket
+        // message) could drive unbounded main-thread work. Keyed "type|username" so a
+        // viewer spamming one request cannot starve another type.
+        //
+        // Admin/host requests (no username) are never floored: the admin page needs an
+        // immediate, correct answer when it opens.
+        private readonly Dictionary<string, int> lastRequestTick = new Dictionary<string, int>();
         private const int ColonistListMinTicks = 120; // 2 seconds
 
-        private bool ShouldServeColonistList(string username)
+        private bool ShouldServeRequest(string requestType, string username, int minTicks)
         {
             if (string.IsNullOrEmpty(username))
                 return true;
+            string key = requestType + "|" + username;
             int now = Find.TickManager?.TicksGame ?? 0;
-            if (lastColonistListTick.TryGetValue(username, out int last) && now - last < ColonistListMinTicks)
+            if (lastRequestTick.TryGetValue(key, out int last) && now - last < minTicks)
                 return false;
-            lastColonistListTick[username] = now;
+            lastRequestTick[key] = now;
             return true;
         }
+
+        private bool ShouldServeColonistList(string username)
+            => ShouldServeRequest("colonist_list", username, ColonistListMinTicks);
 
         private void HandleViewerLeft(string json)
         {

@@ -3312,7 +3312,13 @@ function acceptEntityStateEnvelope(msg) {
   if (snapshot) {
     entityStreamEpoch = epoch;
     entityStreamSeq = seq;
-    entityStreamLastResyncAt = 0;
+    // Do NOT clear the resync stamp here. It records WHEN WE LAST ASKED, not
+    // whether the stream is healthy — zeroing it makes `now - stamp` ~1.7e12 so
+    // the 1.5s backoff never trips again. Worse, entity and map share that stamp
+    // (requestEntityResync delegates to requestMapResync), so a healthy map stream
+    // cleared the backoff for a broken entity stream and produced one resync
+    // request PER FRAME. resetMapStream/resetEntityStream still clear it, which is
+    // correct: those are genuine stream restarts.
     return true;
   }
 
@@ -3332,7 +3338,6 @@ function acceptEntityStateEnvelope(msg) {
   }
 
   entityStreamSeq = seq;
-  entityStreamLastResyncAt = 0;
   return true;
 }
 
@@ -3353,7 +3358,6 @@ function acceptMapFullEnvelope(msg) {
 
   mapStreamEpoch = epoch;
   mapStreamSeq = seq;
-  mapStreamLastResyncAt = 0;
   chunkStreamEpoch = epoch;
   chunkStreamSeq = 0;
   return true;
@@ -3393,7 +3397,6 @@ function acceptMapChunkEnvelope(msg) {
   }
 
   chunkStreamSeq = seq;
-  mapStreamLastResyncAt = 0;
   return true;
 }
 
@@ -3424,7 +3427,6 @@ function acceptMapDeltaEnvelope(msg) {
   }
 
   mapStreamSeq = seq;
-  mapStreamLastResyncAt = 0;
   return true;
 }
 
@@ -4577,8 +4579,22 @@ function requestRoster() {
   send({ type: 'request_roster' });
 }
 
+// Called from INSIDE renderCommandMenuContent, and renders are driven by pawn_state
+// (~6Hz) — so the 5s floor above is a minimum INTERVAL, not a stop, and simply
+// leaving the Roster tab open re-requested the whole colony roster every 5s forever.
+// handleRosterState re-renders when that tab is active, which closes the loop.
+// Identical shape to the toolkit-refresh bug fixed two cases above in the same
+// function; the roster case never got the same guard.
+const ROSTER_STATE_MAX_AGE_MS = 30000;
+let rosterStateAt = 0;
+function requestRosterIfStale() {
+  if (rosterState && Date.now() - rosterStateAt < ROSTER_STATE_MAX_AGE_MS) return;
+  requestRoster();
+}
+
 function handleRosterState(msg) {
   rosterState = msg;
+  rosterStateAt = Date.now();
   if (activeCommandMenu === 'roster') renderCommandCenter();
 }
 
@@ -4944,7 +4960,7 @@ function renderCommandMenuContent() {
       break;
     case 'roster':
       commandMenuContent.innerHTML = `<div class="command-page">${renderColonyRoster()}</div>`;
-      requestRoster();
+      requestRosterIfStale();
       break;
     case 'work':
       commandMenuContent.innerHTML = `<div class="command-page">${renderWorkControls(pawnState)}</div>`;
