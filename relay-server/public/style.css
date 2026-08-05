@@ -4876,6 +4876,13 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 #tab-health .cap-row .cap-meter { height: 4px; }
 
 /* Gear: slots, nearby choices, and carried inventory share one fixed sheet. */
+/* The waiting overlay becomes tappable once its automatic retries are spent. */
+.map-waiting-retry {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* Thoughts scroll instead of paging — a viewer should not click Prev/Next to read
    their own pawn's mood. Mobile drops the cap and lets the pane scroll. */
 /* Body (hediffs) scrolls too — a badly injured pawn has a long list, and it was

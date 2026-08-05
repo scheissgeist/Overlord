@@ -48,39 +48,80 @@ namespace Overlord
 
         public static bool IsChatConnected => GetToolkitChatConnected();
 
-        // Depth counter, not a bool: a purchase can re-enter (item-with-stuff path
-        // resolves through a second handler), and a plain bool would be cleared by
-        // the inner scope while the outer one is still running, letting Toolkit's
-        // reply escape to chat. Main-thread only — Toolkit purchases resolve on the
-        // game thread, so no interlocking is needed.
-        private static int suppressToolkitChatDepth;
+        // Suppression is PER-VIEWER and LOCKED. Both properties were wrong before and
+        // both mattered:
+        //
+        // 1. THREADING. An earlier comment here claimed "main-thread only, no
+        //    interlocking needed". That is false for the READER. ToolkitCore 1.6
+        //    TwitchWrapper.OnChatCommandReceived wraps handling in Task.Run, so a
+        //    chat-typed !buy resolves on a THREAD-POOL thread and our Harmony prefix
+        //    runs there — reading state the game thread is concurrently writing.
+        //
+        // 2. SCOPE. A single global counter suppressed EVERY viewer's Toolkit reply
+        //    for the whole time any Overlord purchase was open — and ExecutePurchase
+        //    holds it open across TryFindPurchase -> BuildStoreEntries, a full store
+        //    rebuild. So one viewer clicking Buy could silently eat another viewer's
+        //    chat-typed purchase reply, which is the one surface chat buyers have.
+        //
+        // Toolkit prefixes every reply with "@" + username + " " (verified in
+        // Purchase_Handler), so the outgoing message itself carries the key.
+        private static readonly Dictionary<string, int> suppressedUsers =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
-        /// True while an Overlord-initiated purchase is resolving inside Toolkit.
-        /// Read by Patch_Toolkit_SuppressOverlordPurchaseChat to drop Toolkit's
-        /// chat reply — those post as the STREAMER's account and are a Twitch
-        /// spam-limit risk. See that patch for the full reasoning.
+        /// Should this outgoing Toolkit chat message be dropped? True only when the
+        /// message is addressed to a viewer whose Overlord-UI purchase is in flight.
+        /// Safe to call from any thread.
         /// </summary>
-        public static bool SuppressToolkitChat => suppressToolkitChatDepth > 0;
-
-        /// <summary>
-        /// Wrap an Overlord-UI purchase so Toolkit's chat reply is dropped. Chat-typed
-        /// purchases must NOT use this — chat is the only surface those viewers see.
-        /// </summary>
-        public static IDisposable SuppressChatReplies() => ToolkitChatSuppressor.Enter();
-
-        private struct ToolkitChatSuppressor : IDisposable
+        public static bool ShouldSuppressChat(string message)
         {
-            public static ToolkitChatSuppressor Enter()
+            if (string.IsNullOrEmpty(message) || message[0] != '@')
+                return false;
+            int end = message.IndexOf(' ');
+            if (end <= 1)
+                return false;
+            string user = message.Substring(1, end - 1);
+            lock (suppressedUsers)
+                return suppressedUsers.TryGetValue(user, out int depth) && depth > 0;
+        }
+
+        /// <summary>
+        /// Wrap an Overlord-UI purchase so Toolkit's chat reply TO THAT VIEWER is
+        /// dropped. Chat-typed purchases must NOT use this — chat is the only surface
+        /// those viewers see. Counted, not boolean: the item-with-stuff path re-enters.
+        /// </summary>
+        public static IDisposable SuppressChatReplies(string username)
+            => new ToolkitChatSuppressor(NormalizeUsername(username));
+
+        private sealed class ToolkitChatSuppressor : IDisposable
+        {
+            private readonly string user;
+
+            public ToolkitChatSuppressor(string username)
             {
-                suppressToolkitChatDepth++;
-                return default;
+                user = username;
+                if (string.IsNullOrEmpty(user))
+                    return;
+                lock (suppressedUsers)
+                {
+                    suppressedUsers.TryGetValue(user, out int depth);
+                    suppressedUsers[user] = depth + 1;
+                }
             }
 
             public void Dispose()
             {
-                if (suppressToolkitChatDepth > 0)
-                    suppressToolkitChatDepth--;
+                if (string.IsNullOrEmpty(user))
+                    return;
+                lock (suppressedUsers)
+                {
+                    if (!suppressedUsers.TryGetValue(user, out int depth))
+                        return;
+                    if (depth <= 1)
+                        suppressedUsers.Remove(user);   // don't leak a key per viewer
+                    else
+                        suppressedUsers[user] = depth - 1;
+                }
             }
         }
 

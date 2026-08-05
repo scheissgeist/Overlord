@@ -97,6 +97,12 @@ namespace Overlord
         // with pressure=0.00 and skipped=0, i.e. an idle pipe and an unplayable game.
         private const float MaxReadbackBytesPerSecond = 96f * 1024f * 1024f;
 
+        // Frames actually delivered per second across all viewers, sampled by
+        // MaybeLogStats. The readback ceiling divides by viewer count to get the
+        // per-viewer rate. Written on the main thread in MaybeLogStats, read on the
+        // main thread in GetFramePixelBudget.
+        private float achievedFramesPerSec;
+
         private void SampleBandwidthPressure(int inFlight, int activeViewerCount)
         {
             float now = Time.time;
@@ -701,8 +707,14 @@ namespace Overlord
             // was doing 167MB/s of readback. Raising the >12 tier from 480k to 700k
             // earlier today (measured at 10 viewers, where there was headroom) is what
             // made a 16-viewer stream unplayable. Cap the aggregate directly.
+            // ACHIEVED per-viewer delivery, not 1/interval. 1/interval is the DEMAND
+            // rate and only an upper bound. Falls back to the modelled rate only on a
+            // cold start, before the first stats window has been measured.
             float interval = GetEffectiveInterval(activeViewerCount);
-            float framesPerSecond = interval > 0.01f ? 1f / interval : 8f;
+            float modelled = interval > 0.01f ? 1f / interval : 8f;
+            float framesPerSecond = (achievedFramesPerSec > 0.5f && activeViewerCount > 0)
+                ? achievedFramesPerSec / activeViewerCount
+                : modelled;
             float bytesPerPixel = 4f;
             float projected = activeViewerCount * budget * bytesPerPixel * framesPerSecond;
             if (projected > MaxReadbackBytesPerSecond && activeViewerCount > 0 && framesPerSecond > 0f)
@@ -779,8 +791,17 @@ namespace Overlord
             float elapsed = Mathf.Max(0.001f, StatsIntervalSec);
             float upMBps = totalJpegBytes / (1024f * 1024f) / elapsed;
             float readMBps = (float)frames * width * height * 4f / (1024f * 1024f) / elapsed;
+
+            // Feed the readback ceiling the MEASURED rate. It previously modelled the
+            // rate as 1/interval, which is only an upper bound — GetFramesPerUpdate,
+            // the queue-depth skip and the host's own frame rate all cut into it. That
+            // model predicted 320MB/s for the 16-viewer config this file recorded at
+            // 140-167MB/s, so the ceiling cut roughly twice as hard as needed and made
+            // frames needlessly blurry. Measuring beats modelling when the measurement
+            // is already right here.
+            achievedFramesPerSec = frames / elapsed;
             LogUtil.Log(
-                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} px={(width * height) / 1000}k budget={GetFramePixelBudget(activeViewerCount) / 1000}k quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} upMBps={upMBps:F1} readMBps={readMBps:F1} sendQueue={queueDepth} pressure={bandwidthPressure:F2}"
+                $"Map stats viewers={activeViewerCount} mode={cameraMode} render={width}x{height} px={(width * height) / 1000}k budget={GetFramePixelBudget(activeViewerCount) / 1000}k quality={quality} interval={effectiveInterval:F2}s frames={frames} skipped={skipped} avgRenderMs={avgRender} avgEncodeMs={avgEncode} avgJpegKB={avgKb} upMBps={upMBps:F1} readMBps={readMBps:F1} fps={achievedFramesPerSec:F1} sendQueue={queueDepth} pressure={bandwidthPressure:F2}"
             );
 
             var msg = new Dictionary<string, object>

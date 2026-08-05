@@ -413,7 +413,9 @@ namespace Overlord
             // the viewer sees the result in the UI. Chat-typed purchases go through
             // ProcessQueuedChatCommands and are deliberately NOT wrapped.
             Dictionary<string, object> result;
-            using (TwitchToolkitBridge.SuppressChatReplies())
+            // Scoped to THIS viewer: a global suppression also ate other viewers'
+            // chat-typed replies for the whole purchase, which spans a full store rebuild.
+            using (TwitchToolkitBridge.SuppressChatReplies(username))
             {
                 result = TwitchToolkitBridge.ExecutePurchase(username, purchase, quantity, argument, targetPawn, equipToPawn);
             }

@@ -194,6 +194,11 @@ const mapWaiting = $('map-waiting');
 let mapCtx         = null; // lazy init — tile map may own the canvas
 let mapWaitingTimer = null;
 let mapWaitingShownAt = 0;
+// Auto-retries spent on the "waiting for map" overlay. Bounded so a viewer who
+// never receives a frame cannot poll the game host forever; reset once a frame
+// actually arrives (hideMapWaitingOverlay) or the viewer taps to retry.
+let mapWaitingRetries = 0;
+const MAP_WAITING_MAX_RETRIES = 3;
 const cmdBar = $('cmd-bar');
 const statusText = $('status-text');
 const pawnJob = $('pawn-job');
@@ -457,11 +462,23 @@ function hideMapWaitingOverlay() {
   clearTimeout(mapWaitingTimer);
   mapWaitingTimer = null;
   mapWaitingShownAt = 0;
+  mapWaitingRetries = 0; // a frame arrived — the next outage gets a fresh budget
   if (mapWaiting) {
     mapWaiting.classList.add('hidden');
+    mapWaiting.classList.remove('map-waiting-retry');
     mapWaiting.textContent = 'Waiting for map…';
   }
 }
+
+// Manual retry once the automatic budget is spent. Deliberately a viewer action:
+// if frames are not coming, an endless background poll only costs the host.
+mapWaiting?.addEventListener('click', () => {
+  if (!mapWaiting.classList.contains('map-waiting-retry')) return;
+  mapWaitingRetries = 0;
+  mapWaiting.classList.remove('map-waiting-retry');
+  requestFreshViewerSnapshot(true);
+  updateMapWaitingOverlay('Retrying…');
+});
 
 function hasVisibleMapSurface() {
   if (isTileRendererActive()) return true;
@@ -490,9 +507,22 @@ function updateMapWaitingOverlay(forceMessage) {
   mapWaiting.classList.remove('hidden');
   if (!mapWaitingShownAt) mapWaitingShownAt = Date.now();
 
+  // BOUNDED retry. This used to re-arm itself forever: the timeout called
+  // updateMapWaitingOverlay again, which set another 4s timer, and every pass sent
+  // request_state + request_colonist_list. A viewer who never gets a picture (host
+  // offline, no pawn, a stuck client) therefore hammered the game host every 4s
+  // indefinitely — and with a dozen such viewers that is a steady stream of
+  // main-thread colonist_list rebuilds for nothing. Retry a few times, then stop and
+  // hand the viewer an explicit control.
   clearTimeout(mapWaitingTimer);
+  if (mapWaitingRetries >= MAP_WAITING_MAX_RETRIES) {
+    mapWaiting.textContent = message + ' — tap to retry.';
+    mapWaiting.classList.add('map-waiting-retry');
+    return;
+  }
   mapWaitingTimer = setTimeout(() => {
     if (!hasVisibleMapSurface() && screenMain.classList.contains('active')) {
+      mapWaitingRetries++;
       requestFreshViewerSnapshot();
       updateMapWaitingOverlay('Still waiting for map… Requested a fresh snapshot.');
     }
