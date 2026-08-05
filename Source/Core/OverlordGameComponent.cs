@@ -184,6 +184,12 @@ namespace Overlord
             // MVID changes on every compile, so this is exact, not a manual bump.
             LogUtil.Log($"Overlord initialized — {DescribeBuild()}");
 
+            // Preserve the previous session's log before the NEXT launch destroys it.
+            // RimWorld keeps only Player.log + Player-prev.log, so a crashed session's
+            // log survives exactly one restart — which is why the 2026-08-04 camp crash
+            // could not be diagnosed at all. See PlayerLogArchiver.
+            PlayerLogArchiver.ArchivePreviousSessionLog();
+
             // Name any Toolkit member that failed to bind, here, once. Every reflection
             // helper in the bridge returns a plausible fallback on a miss, so without
             // this a Toolkit rename reaches the streamer as a confident wrong message
