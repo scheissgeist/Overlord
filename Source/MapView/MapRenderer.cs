@@ -97,6 +97,17 @@ namespace Overlord
         // with pressure=0.00 and skipped=0, i.e. an idle pipe and an unplayable game.
         private const float MaxReadbackBytesPerSecond = 96f * 1024f * 1024f;
 
+        // Smallest frame still worth sending. Below this the map stops being readable,
+        // so the ceiling is honoured by lowering the frame RATE instead of shrinking
+        // further — see GetFramePixelBudget.
+        private const int MinLegibleFramePixels = 240_000;
+
+        // Per-viewer interval the readback ceiling requires once the pixel floor is
+        // reached. 0 = no additional floor. Clamped so a large audience degrades to a
+        // slow map rather than a frozen one.
+        private const float MaxReadbackIntervalFloorSeconds = 0.5f;
+        private float readbackIntervalFloor;
+
         // Frames actually delivered per second across all viewers, sampled by
         // MaybeLogStats. The readback ceiling divides by viewer count to get the
         // per-viewer rate. Written on the main thread in MaybeLogStats, read on the
@@ -666,6 +677,10 @@ namespace Overlord
             // Congestion also stretches the interval up to +60ms — fewer frames/sec
             // per viewer when the pipe can't keep up. Recovers as pressure decays.
             minimum += bandwidthPressure * 0.06f;
+            // Once the pixel budget has bottomed out at the legibility floor, the
+            // readback ceiling can only be met by sending FEWER frames. Set by
+            // GetFramePixelBudget; 0 when the pixel cap alone was enough.
+            minimum = Mathf.Max(minimum, readbackIntervalFloor);
             return Mathf.Max(updateInterval, minimum);
         }
 
@@ -764,7 +779,32 @@ namespace Overlord
                 int capped = Mathf.FloorToInt(MaxReadbackBytesPerSecond / (activeViewerCount * bytesPerPixel * framesPerSecond));
                 budget = Mathf.Min(budget, capped);
             }
-            return Mathf.Max(240_000, budget);
+
+            // The legibility floor is applied AFTER the ceiling, so it WINS — and at the
+            // viewer count this ceiling was built for it silently defeated it. Worked
+            // example at 16 viewers with defaults: interval 0.14 -> 7.14 fps, the cap
+            // computes 96MB/s / (16*4*7.14) = 220,320 px, then Max(240_000, ...) pushes
+            // it back up, and real readback lands at 16*240_000*4*7.14 = 110 MB/s — 14%
+            // ABOVE the ceiling the constant declares.
+            //
+            // Below the floor the right axis is RATE, not resolution: a frame smaller
+            // than this stops being usable, so send fewer of them instead. The pump
+            // reads readbackIntervalFloor and stretches the per-viewer interval, which
+            // brings actual bytes/sec back under the ceiling while keeping each frame
+            // readable.
+            if (budget < MinLegibleFramePixels && activeViewerCount > 0)
+            {
+                float neededInterval = (activeViewerCount * MinLegibleFramePixels * bytesPerPixel)
+                                       / MaxReadbackBytesPerSecond;
+                readbackIntervalFloor = Mathf.Clamp(neededInterval, 0f, MaxReadbackIntervalFloorSeconds);
+                budget = MinLegibleFramePixels;
+            }
+            else
+            {
+                readbackIntervalFloor = 0f;
+            }
+
+            return Mathf.Max(MinLegibleFramePixels, budget);
         }
 
         private int GetEffectiveJpegQuality(int activeViewerCount)
