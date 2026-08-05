@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using UnityEngine;
 
 namespace Overlord
 {
@@ -66,10 +68,63 @@ namespace Overlord
             return AccessTools.Method(AccessTools.TypeByName("ToolkitCore.TwitchWrapper"), "SendChatMessage");
         }
 
+        // ── Duplicate / flood guard ────────────────────────────────────────────
+        // Live chat 2026-08-04 showed "@missrox Item is maxed, wait 13.4 days to
+        // purchase." posted FOUR times as the streamer, right after a "Toolkit Core
+        // has Connected to Chat" reconnect, while Overlord had run ZERO purchases
+        // that session (30 commands, none a purchase) and the viewer was idle. So a
+        // Toolkit-side path re-resolves a stale purchase on reconnect. We cannot
+        // safely rewrite Toolkit's internals mid-stream, but every outgoing message
+        // funnels through this one method — so the duplicate is stopped HERE.
+        //
+        // This matters beyond tidiness: identical repeated messages are exactly what
+        // Twitch's duplicate-message and rate limits act on, and the account taking
+        // the hit is the STREAMER's, not the viewer's.
+        private static readonly Dictionary<string, float> recentSends = new Dictionary<string, float>();
+        private const float DuplicateWindowSeconds = 60f;
+        private const int RecentSendsCap = 128;
+
+        private static bool IsDuplicate(string message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return false;
+            float now = Time.realtimeSinceStartup;
+
+            if (recentSends.TryGetValue(message, out float last) && now - last < DuplicateWindowSeconds)
+                return true;
+
+            // Evict expired entries before inserting so the map cannot grow without
+            // bound over a long stream. Only sweeps when it actually gets large.
+            if (recentSends.Count >= RecentSendsCap)
+            {
+                var stale = new List<string>();
+                foreach (var kv in recentSends)
+                    if (now - kv.Value >= DuplicateWindowSeconds)
+                        stale.Add(kv.Key);
+                foreach (var key in stale)
+                    recentSends.Remove(key);
+                // Still full of live entries — drop it wholesale rather than leak.
+                if (recentSends.Count >= RecentSendsCap)
+                    recentSends.Clear();
+            }
+
+            recentSends[message] = now;
+            return false;
+        }
+
         [HarmonyPrefix]
         static bool Prefix(string message)
         {
             bool suppressed = TwitchToolkitBridge.SuppressToolkitChat;
+
+            // An exact repeat inside the window is dropped even when it did not come
+            // from Overlord — the streamer's account is what is at risk either way.
+            bool duplicate = !suppressed && IsDuplicate(message);
+            if (duplicate)
+            {
+                LogUtil.Log($"ToolkitChat DUPLICATE-BLOCKED (repeat within {DuplicateWindowSeconds:F0}s): \"{message}\"");
+                suppressed = true;
+            }
 
             // INSTRUMENTATION. The streamer reports viewers "spamming buy requests"
             // in Twitch chat while those viewers say they are doing nothing, and

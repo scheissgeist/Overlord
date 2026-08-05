@@ -4994,11 +4994,25 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   background: rgba(82, 68, 47, 0.9);
   color: #f1e6c9;
   font: inherit;
-  font-size: 8px;
+  /* Was 8px — under the ~10px readability floor, and this is a button a viewer
+     is asked to spend coins on. */
+  font-size: 10px;
   white-space: nowrap;
 }
 #tab-gear .gear-repair-button:hover:not(:disabled) { background: rgba(62, 51, 36, 0.96); }
 #tab-gear .gear-repair-button:disabled { opacity: 0.46; cursor: not-allowed; }
+
+/* Why the button is dead, stated in the layout rather than a title tooltip —
+   phones have no hover, so a tooltip is invisible exactly where it is needed. */
+#tab-gear .gear-repair-why,
+.gear-repair-why {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--parchment-text-muted, #6b5a3e);
+  white-space: normal;
+}
 #tab-gear .gear-nearby-title {
   margin-top: 0;
   padding: 0 0 3px;

@@ -2466,8 +2466,13 @@ function renderGear(s) {
   else if (repairEntry && !items.length) repairBlocked = 'No weapon or apparel is equipped';
   else if (repairEntry && allTrackedGearFull) repairBlocked = 'All equipped gear is already at full condition';
   else if (repairEntry && !repairState?.affordable) repairBlocked = `Requires ${formatNumber(repairState?.totalCost ?? 0)} coins`;
+  // The reason a disabled button is disabled must be VISIBLE, not a title
+  // tooltip — phones have no hover, so a viewer on mobile just sees a dead grey
+  // button. Reported 2026-08-04: "after I click it once it gets grayed out and
+  // unusable". Usually that is the coin check (you were just charged) or
+  // everything already being at full condition; either way, say which.
   const repairButton = repairEntry
-    ? `<button class="gear-repair-button" data-gear-repair title="${escapeAttr(repairBlocked || `Repair ${damagedEquippedCount || 'all damaged'} equipped item${damagedEquippedCount === 1 ? '' : 's'}`)}" ${repairBlocked ? 'disabled' : ''}>Repair all · ${escapeHtml(formatNumber(repairState?.totalCost ?? repairEntry.cost ?? 0))} coins</button>`
+    ? `<button class="gear-repair-button" data-gear-repair title="${escapeAttr(repairBlocked || `Repair ${damagedEquippedCount || 'all damaged'} equipped item${damagedEquippedCount === 1 ? '' : 's'}`)}" ${repairBlocked ? 'disabled' : ''}>Repair equipped · ${escapeHtml(formatNumber(repairState?.totalCost ?? repairEntry.cost ?? 0))} coins</button>${repairBlocked ? `<span class="gear-repair-why">${escapeHtml(repairBlocked)}</span>` : ''}`
     : '';
 
   const slotItems = new Map();
@@ -2677,6 +2682,9 @@ function buildGearItems(s) {
       slotKey: 'weapon',
       slotLabel: 'Weapon',
       label: wLabel,
+      // Carried through so the equipped weapon can take the prefer star — the
+      // star keys off defName, and without it the row silently never renders one.
+      defName: typeof s.weapon === 'object' ? (s.weapon.defName || '') : '',
       meta: hp == null ? 'equipped' : `${hp}% condition`,
       hp,
       action: 'drop',
@@ -2837,13 +2845,22 @@ function renderGearRow(item) {
   const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
   const dyeButton = canDye ? `<button class="item-action ghost" data-dye-toggle="${item.itemId}">Dye</button>` : '';
   const palette = canDye ? renderDyePalette(item.itemId) : '';
+  // The prefer star also belongs on the EQUIPPED weapon, not just nearby ones —
+  // "should be able to set your preferred weapon even if it's equipped"
+  // (viewer report 2026-08-04). Setting it on what you already hold is the
+  // common case: keep re-equipping THIS weapon after a drop/downing.
+  const canPrefer = item.type === 'weapon' && item.defName;
+  const isPreferred = canPrefer && item.defName === preferredWeaponDef;
+  const preferBtn = canPrefer
+    ? `<button class="item-action gear-prefer${isPreferred ? ' active' : ''}" data-prefer-weapon="${escapeAttr(item.defName)}" title="${isPreferred ? 'Preferred — click to clear' : 'Auto-equip this weapon when available'}">${isPreferred ? '★' : '☆'}</button>`
+    : '';
   return `<div class="gear-row equipped">
     <div class="gear-row-main">
       <span class="gear-name">${escapeHtml(item.label)}</span>
       <span class="gear-meta-text">${escapeHtml(item.meta)}</span>
     </div>
     ${item.hp == null ? '' : `<span class="condition ${conditionClass(hp)}"><span style="width:${hp}%"></span></span>`}
-    <span class="gear-row-actions">${dyeButton}<button class="item-action ghost" data-gear-action="${escapeAttr(item.action)}" data-slot="${escapeAttr(item.slot)}" ${blocked ? 'disabled' : ''} title="${escapeAttr(blocked)}">${escapeHtml(item.button)}</button></span>
+    <span class="gear-row-actions">${preferBtn}${dyeButton}<button class="item-action ghost" data-gear-action="${escapeAttr(item.action)}" data-slot="${escapeAttr(item.slot)}" ${blocked ? 'disabled' : ''} title="${escapeAttr(blocked)}">${escapeHtml(item.button)}</button></span>
   </div>${palette}`;
 }
 

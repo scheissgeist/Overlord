@@ -71,6 +71,13 @@ namespace Overlord
                 case StateProtocol.CmdEquip:
                 case StateProtocol.CmdDrop:
                 case StateProtocol.CmdDropInventory:
+                // Setting a preferred weapon is a standing EQUIP order, so it rides
+                // the equip permission. Its absence here meant it fell to the
+                // `default: return false` below and was denied for EVERY viewer since
+                // the feature shipped (b1578dc) — reported 2026-08-04: "once you click
+                // the star it says I don't have permission to set my preferred weapon
+                // so it's useless".
+                case StateProtocol.CmdSetPreferredWeapon:
                     return equip;
                 case StateProtocol.CmdHostileResponse:
                     return draft; // same permission as drafting
