@@ -13,6 +13,23 @@ Overlord is **shipped and live** (Steam Workshop item `3760983440`, GitHub `sche
 - **Relay:** Node server (self-hosted); one host connection per instance. Not in this repo's hot path.
 - **Viewers:** browser clients; get state + map frames, send commands.
 
+## How to report back (Sean, 2026-08-05)
+Replies in this repo are **too long**. Default to the shortest reply that carries the
+answer.
+
+- **Status/fix reports: 3 sentences.** What changed, that it's verified, what's next.
+- **One finding = one line.** Don't narrate the investigation. The commit message is
+  where reasoning lives — it's already long and permanent; the chat reply is a pointer.
+- **Don't restate what's in a commit or a doc.** Link/name it instead.
+- **Caveats: one line, only if Sean would act differently because of it.** Unverified
+  claims still get flagged (Rule Zero holds) — just in one line, not a paragraph.
+- **No preamble, no recap of the journey, no tables unless asked.**
+- Go long only when Sean asks for detail, or a real decision needs options laid out.
+
+Rationale: long replies buried the parts that mattered during a live stream, and this
+repo's work is high-volume — many small fixes per session. The session log and commit
+messages are the durable record; chat is not.
+
 ## Forbidden moves
 - Do not add main-thread work that runs per-frame / per-tick / per-GUI-event without change-detection gating. This mod's whole lag problem is un-gated per-cycle work.
 - Do not send stale or wrong state to viewers in the name of speed — a perf fix that breaks the change-detection contract (viewer stops getting updates when something changed) is a regression, not a fix.
