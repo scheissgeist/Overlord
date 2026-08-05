@@ -71,6 +71,12 @@ namespace Overlord
         // streamer's chat — so the 0.33s command cooldown is nowhere near enough.
         // 180 ticks = 3 seconds.
         public int purchaseCooldownTicks = 180;
+
+        // Diagnostic: log every message Toolkit tries to send to Twitch chat, with
+        // the calling stack. ToolkitCore.SendChatMessage logs nothing itself, so
+        // this is the only way to see what is posting as the streamer's account.
+        // Default ON while the "viewers spamming buy requests" report is open.
+        public bool logToolkitChatSends = true;
         public bool enforceAreaRestrictions = true;
 
         // Reconnect: hand a returning viewer back the colonist they already
@@ -114,6 +120,7 @@ namespace Overlord
             Scribe_Values.Look(ref allowViewerEvents, "allowViewerEvents", false);
             Scribe_Values.Look(ref commandCooldownTicks, "commandCooldownTicks", 20);
             Scribe_Values.Look(ref purchaseCooldownTicks, "purchaseCooldownTicks", 180);
+            Scribe_Values.Look(ref logToolkitChatSends, "logToolkitChatSends", true);
             Scribe_Values.Look(ref enforceAreaRestrictions, "enforceAreaRestrictions", true);
             Scribe_Values.Look(ref startTickets, "startTickets", 3);
             Scribe_Values.Look(ref respawnCooldownTicks, "respawnCooldownTicks", 2500);

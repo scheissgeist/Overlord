@@ -67,10 +67,43 @@ namespace Overlord
         }
 
         [HarmonyPrefix]
-        static bool Prefix()
+        static bool Prefix(string message)
         {
+            bool suppressed = TwitchToolkitBridge.SuppressToolkitChat;
+
+            // INSTRUMENTATION. The streamer reports viewers "spamming buy requests"
+            // in Twitch chat while those viewers say they are doing nothing, and
+            // Overlord's own command log shows ZERO toolkit_purchase for the whole
+            // session — so something OUTSIDE Overlord is posting as the streamer.
+            // ToolkitCore.SendChatMessage does not log what it sends, which is why
+            // Player.log could not answer this. This patch is the only place that
+            // sees every outgoing message, so it records the text AND the managed
+            // call stack — the stack names the actual caller (Toolkit incident,
+            // ToolkitUtils, a coin/karma timer, our bridge) instead of guessing.
+            // Off by default; enable with the "Log Toolkit chat sends" setting.
+            if (OverlordMod.Settings?.logToolkitChatSends == true)
+            {
+                try
+                {
+                    // Trim to the frames above Harmony's own plumbing — those name
+                    // the real caller. Full traces here would flood Player.log.
+                    string caller = new System.Diagnostics.StackTrace(1, false).ToString();
+                    string[] frames = caller.Split('\n');
+                    var interesting = new System.Text.StringBuilder();
+                    for (int i = 0; i < frames.Length && interesting.Length < 400; i++)
+                    {
+                        string f = frames[i].Trim();
+                        if (f.Length == 0 || f.IndexOf("HarmonyLib", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                            continue;
+                        interesting.Append(f).Append(" | ");
+                    }
+                    LogUtil.Log($"ToolkitChat {(suppressed ? "SUPPRESSED" : "SENT")}: \"{message}\" <- {interesting}");
+                }
+                catch { }
+            }
+
             // false = skip the original send.
-            return !TwitchToolkitBridge.SuppressToolkitChat;
+            return !suppressed;
         }
     }
 }
