@@ -1265,6 +1265,16 @@ namespace Overlord
         // to be adjacent AND free at that instant. Now: if close enough, interact
         // immediately; otherwise order a walk to the target and remember a pending
         // interaction that SocialInteractionController fires on arrival.
+        /// <summary>
+        /// The only interactions a viewer may direct. Mirrors the four the client
+        /// offers (app.js renderSocial); keep the two lists in step.
+        /// </summary>
+        private static readonly HashSet<string> AllowedInteractions =
+            new HashSet<string>(StringComparer.Ordinal)
+            {
+                "KindWords", "DeepTalk", "RomanceAttempt", "Insult"
+            };
+
         private static Dictionary<string, object> ExecuteSocialInteract(ViewerSession session, Pawn pawn, string json)
         {
             if (pawn?.interactions == null)
@@ -1272,6 +1282,18 @@ namespace Overlord
 
             int targetId = JsonHelper.ExtractInt(json, "targetId", -1);
             string interactionName = JsonHelper.ExtractString(json, "interaction") ?? "KindWords";
+
+            // The defName comes straight off the wire and was resolved against the whole
+            // DefDatabase, with `null` as the only check. That database also holds
+            // SparkJailbreak, Breakup, MarriageProposal, RecruitAttempt and friends, and
+            // Pawn_InteractionsTracker.TryInteractWith runs the worker for whatever def
+            // it is handed — the appropriateness weighting only applies on the RANDOM
+            // selection path, never on a directed interaction. The client offering four
+            // buttons is a UI convention, not a gate, and the relay forwards command
+            // bodies unchanged. So allowlist here, where it is actually enforced.
+            if (!AllowedInteractions.Contains(interactionName))
+                return ErrorResult("That interaction is not available");
+
             if (targetId < 0)
                 return ErrorResult("No social target specified");
 

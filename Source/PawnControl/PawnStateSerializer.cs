@@ -788,7 +788,34 @@ namespace Overlord
             }
         }
 
+        // Per-frame memo for the reachability scan. BuildNearbyEquipment runs
+        // CanReserveAndReach — region pathfinding — per in-radius candidate over
+        // ThingsInGroup(Weapon) + ThingsInGroup(Apparel). It was being walked TWICE per
+        // changed sync cycle (once inside ComputeSlowSubHash, once again in Serialize,
+        // which does not go through the slow-tier cache), three times when the 2s slow
+        // sample had also expired — at up to 6 syncs/second per viewer. Nothing it reads
+        // can change within a single frame, and ViewerManager.Tick handles one pawn at a
+        // time, so a single-entry (frame, pawn) memo removes the duplicate walks without
+        // changing a single value.
+        private static int nearbyEquipFrame = -1;
+        private static int nearbyEquipPawnId = -1;
+        private static List<Dictionary<string, object>> nearbyEquipCache;
+
         private static List<Dictionary<string, object>> GetNearbyEquipment(Pawn pawn)
+        {
+            int frame = UnityEngine.Time.frameCount;
+            int id = pawn?.thingIDNumber ?? -1;
+            if (frame == nearbyEquipFrame && id == nearbyEquipPawnId && nearbyEquipCache != null)
+                return nearbyEquipCache;
+
+            var built = BuildNearbyEquipment(pawn);
+            nearbyEquipFrame = frame;
+            nearbyEquipPawnId = id;
+            nearbyEquipCache = built;
+            return built;
+        }
+
+        private static List<Dictionary<string, object>> BuildNearbyEquipment(Pawn pawn)
         {
             var items = new List<Dictionary<string, object>>();
             Map map = pawn?.Map;

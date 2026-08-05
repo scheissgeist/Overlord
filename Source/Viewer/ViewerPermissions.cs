@@ -83,10 +83,27 @@ namespace Overlord
                     return draft; // same permission as drafting
                 case StateProtocol.CmdConsume:
                     return true; // always allowed
+                case StateProtocol.CmdSocialInteract:
+                    return move; // directed social is movement-tier
+
+                // Context menu options come from RimWorld's REAL right-click menu
+                // (FloatMenuMakerMap.GetOptions -> every registered
+                // FloatMenuOptionProvider), which includes Equip, Wear, DropEquipment,
+                // Strip, PickUpItem, DraftedAttack, WorkGivers, Arrest and Trade. Gating
+                // the whole surface on `move` alone meant a streamer who unchecked
+                // "allow equip", "allow attack" or "allow work" still had those actions
+                // reachable: right-click a weapon -> "Equip", right-click a workbench ->
+                // "Prioritize". A permission that is bypassable is not a permission.
+                //
+                // Per-option filtering would be finer, but it needs reflection into
+                // RimWorld's private provider list and a rewrite of the generation path
+                // — too much blast radius for a feature viewers use constantly. Requiring
+                // the permissions this surface can exercise is conservative and correct:
+                // with the shipped defaults (equip/work/attack all true) nothing changes,
+                // and it only restricts when the streamer explicitly asked for that.
                 case StateProtocol.CmdContextMenu:
                 case StateProtocol.CmdContextAction:
-                case StateProtocol.CmdSocialInteract:
-                    return move; // context actions are movement-tier
+                    return move && equip && work && attack;
                 case StateProtocol.RequestState:
                 case StateProtocol.StateResyncRequest:
                     return true;

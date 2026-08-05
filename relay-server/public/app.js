@@ -733,6 +733,16 @@ function getActionBlockedReason(action) {
     return 'The streamer disabled this command';
   }
 
+  // Context options come from RimWorld's real right-click menu, which can equip,
+  // attack and prioritise work — so the host gates them on those permissions too
+  // (ViewerPermissions.IsAllowed). Mirror that here so the UI greys out instead of
+  // letting the viewer tap and get refused.
+  if ((action === 'context_menu' || action === 'context_action') && viewerPermissions) {
+    for (const key of ['equip', 'work', 'attack']) {
+      if (viewerPermissions[key] === false) return 'The streamer disabled this command';
+    }
+  }
+
   if (action === 'trigger_event' && (!hostCapabilities || hostCapabilities.events !== true)) {
     return 'Viewer-triggered events are disabled';
   }
