@@ -5270,7 +5270,14 @@ function renderBuyControls() {
   // failed that way in the 2026-08-03 session). Host sends a boolean — Toolkit
   // exposes no remaining time — so this states the block, not a countdown.
   const purchasesOnCooldown = toolkitState?.purchasesOnCooldown === true;
-  const canBuy = available && connected && !purchasesOnCooldown;
+  // INFORMATIONAL ONLY — it must not gate canBuy. This flag reflects Toolkit's
+  // ITEM incident cap, but gating here disabled EVERY buy button, including
+  // events, traits and services that the item cap does not govern. With a colony
+  // whose item cap is exhausted ("wait 11 days"), that turned into "the shop is
+  // so fucked up, they can't buy anything" — a total shop outage caused by a
+  // banner I added. The host still enforces the real rule per purchase and
+  // returns a specific reason, which is the correct place for it.
+  const canBuy = available && connected;
   const query = String(buySearchQuery || '').trim().toLowerCase();
   const decorated = entries
     .map(item => ({ item, state: getBuyItemState(item), shop: getBuyShop(item) }))
@@ -5312,7 +5319,7 @@ function renderBuyControls() {
     ${feedback}
     ${!available ? `<div class="buy-banner">Twitch Toolkit is not loaded on the host.</div>` : ''}
     ${available && !connected ? `<div class="buy-banner warn">Toolkit chat is offline on the host — purchases stay locked until it reconnects in RimWorld.</div>` : ''}
-    ${available && connected && purchasesOnCooldown ? `<div class="buy-banner warn">Purchases are on Toolkit's cooldown — buying resumes automatically once it resets.</div>` : ''}
+    ${available && connected && purchasesOnCooldown ? `<div class="buy-banner warn">Toolkit's item limit is maxed right now — item buys may be refused. Events and services still work.</div>` : ''}
     <div class="buy-toolbar">
       <input class="buy-search" type="search" data-buy-search value="${escapeAttr(buySearchQuery)}" placeholder="Search…" aria-label="Search store">
       ${renderBuyTruncationNote(entries.length)}
@@ -5543,7 +5550,7 @@ function renderBuyItem(item, canBuy, state = null) {
           : `Min ${formatNumber(buyState.minimumPurchase)}`)
         : (buyState.researchBlocked ? 'Research locked'
           : (!buyState.affordable ? 'Not enough coins'
-            : (toolkitState?.purchasesOnCooldown === true ? 'On cooldown' : (!canBuy ? 'Offline' : '')))))));
+            : (!canBuy ? 'Offline' : ''))))));
   const buttonLabel = canReachMinimum
     ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
     : (disabled ? (blockReason || 'Locked') : 'Buy');

@@ -164,6 +164,16 @@ namespace Overlord
 
             quantity = Math.Max(1, Math.Min(quantity, 100));
 
+            // Clear any stale variable-command hold BEFORE any gate is evaluated.
+            // Toolkit parks a viewer in that list awaiting a follow-up CHAT message;
+            // an Overlord UI purchase resolves synchronously and no follow-up is
+            // coming, so a hold left behind blocks the viewer permanently. Doing it
+            // here rather than after ResolvePurchase matters: the repair SKU returns
+            // on the next line and never reaches ResolvePurchase, so a stuck viewer
+            // could neither repair nor ever get unstuck — reported 2026-08-04, both
+            // "can't buy, says on cooldown" and "still can't repair their gear".
+            ReleaseVariableCommandHold(NormalizeUsername(username));
+
             if (string.Equals(sku, RepairEquippedGearSku, StringComparison.OrdinalIgnoreCase))
                 return ExecuteRepairEquippedGear(username, targetPawn);
 

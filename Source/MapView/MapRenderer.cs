@@ -89,6 +89,14 @@ namespace Overlord
         private float bandwidthPressure;
         private float lastPressureSampleTime;
 
+        // Aggregate GPU->CPU readback ceiling across ALL viewers, in bytes/sec. This
+        // is the constraint bandwidthPressure cannot see: ReadPixels is a synchronous
+        // stall on the game's MAIN THREAD (Unity forbids moving it), so what costs the
+        // streamer frames is total pixels read per second — independent of whether the
+        // network is congested. Measured 2026-08-04 at 16 viewers: readMBps 140-167
+        // with pressure=0.00 and skipped=0, i.e. an idle pipe and an unplayable game.
+        private const float MaxReadbackBytesPerSecond = 96f * 1024f * 1024f;
+
         private void SampleBandwidthPressure(int inFlight, int activeViewerCount)
         {
             float now = Time.time;
@@ -676,13 +684,32 @@ namespace Overlord
             // Congestion is handled by the pressure multiplier below, which is the
             // measured signal; headcount is only a coarse prior.
             int budget;
-            if (activeViewerCount > 12)      budget = 700_000;   // ~1120x625
-            else if (activeViewerCount > 8)  budget = 950_000;   // ~1300x730
-            else if (activeViewerCount > 4)  budget = 1_300_000; // ~1520x855
-            else if (activeViewerCount > 2)  budget = 1_700_000; // ~1740x980
+            if (activeViewerCount > 12)      budget = 480_000;   // ~900x540
+            else if (activeViewerCount > 8)  budget = 700_000;   // ~1120x625
+            else if (activeViewerCount > 4)  budget = 1_100_000; // ~1400x790
+            else if (activeViewerCount > 2)  budget = 1_500_000; // ~1630x920
             else                             budget = 2_100_000; // solo/duo can be sharp
             // Congestion shrinks the frame too, not just quality/interval.
             budget = Mathf.RoundToInt(budget * Mathf.Lerp(1f, 0.55f, bandwidthPressure));
+
+            // HARD READBACK CEILING — the constraint bandwidthPressure cannot see.
+            // Every viewer frame costs a synchronous GPU->CPU ReadPixels on the game's
+            // main thread (Unity forbids moving it off), so the cost that stalls the
+            // STREAMER scales with total pixels read per second, not with network
+            // congestion. At 16 viewers the log showed readMBps 140-167 with
+            // pressure=0.00 and skipped=0: the pipe was idle while the main thread
+            // was doing 167MB/s of readback. Raising the >12 tier from 480k to 700k
+            // earlier today (measured at 10 viewers, where there was headroom) is what
+            // made a 16-viewer stream unplayable. Cap the aggregate directly.
+            float interval = GetEffectiveInterval(activeViewerCount);
+            float framesPerSecond = interval > 0.01f ? 1f / interval : 8f;
+            float bytesPerPixel = 4f;
+            float projected = activeViewerCount * budget * bytesPerPixel * framesPerSecond;
+            if (projected > MaxReadbackBytesPerSecond && activeViewerCount > 0 && framesPerSecond > 0f)
+            {
+                int capped = Mathf.FloorToInt(MaxReadbackBytesPerSecond / (activeViewerCount * bytesPerPixel * framesPerSecond));
+                budget = Mathf.Min(budget, capped);
+            }
             return Mathf.Max(240_000, budget);
         }
 
