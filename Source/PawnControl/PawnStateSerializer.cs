@@ -155,6 +155,22 @@ namespace Overlord
                 AddStringHash(ref hash, RimWorldCompat.GetCurrentFoodPolicyLabel(pawn));
                 AddStringHash(ref hash, RimWorldCompat.GetCurrentAreaRestrictionLabel(pawn) ?? "Unrestricted");
 
+                // The OPTION LISTS the viewer picks from (areaOptions, outfitPolicyOptions,
+                // drugPolicyOptions, foodPolicyOptions) are serialized from live game
+                // databases but appeared in neither tier — so a zone or policy the
+                // streamer added or deleted mid-session never reached the dropdown, and
+                // picking a deleted one fails with no explanation. Only the COUNTS are
+                // hashed: that catches add/remove, which is the case that breaks the UI,
+                // without walking and string-hashing every label on a 2s cadence.
+                try
+                {
+                    hash = hash * 31 + (pawn.Map?.areaManager?.AllAreas?.Count ?? 0);
+                    hash = hash * 31 + (Current.Game?.outfitDatabase?.AllOutfits?.Count ?? 0);
+                    hash = hash * 31 + (Current.Game?.drugPolicyDatabase?.AllPolicies?.Count ?? 0);
+                    hash = hash * 31 + (Current.Game?.foodRestrictionDatabase?.AllFoodRestrictions?.Count ?? 0);
+                }
+                catch { }
+
                 if (pawn.health?.capacities != null)
                 {
                     foreach (var capDef in DefDatabase<PawnCapacityDef>.AllDefsListForReading)
@@ -190,6 +206,13 @@ namespace Overlord
                             {
                                 hash = hash * 31 + other.thingIDNumber;
                                 hash = hash * 31 + pawn.relations.OpinionOf(other);
+                                // The RECIPROCAL direction is serialized as opinions[].
+                                // opinionOf and rendered as "Them +N" in the Social tab,
+                                // but only our own direction was hashed — so their
+                                // feelings about the viewer could drift arbitrarily far
+                                // from what the client displayed. Safe to add here: this
+                                // whole loop is already inside the 2s slow-tier cache.
+                                hash = hash * 31 + (other.relations?.OpinionOf(pawn) ?? 0);
                             }
                             catch { }
                         }
@@ -999,8 +1022,18 @@ namespace Overlord
 
                 if (pawn.equipment?.Primary != null)
                 {
-                    hash = hash * 31 + pawn.equipment.Primary.thingIDNumber;
-                    AddStringHash(ref hash, pawn.equipment.Primary.def?.defName);
+                    var primary = pawn.equipment.Primary;
+                    hash = hash * 31 + primary.thingIDNumber;
+                    AddStringHash(ref hash, primary.def?.defName);
+                    // Weapon CONDITION is serialized (weapon.hp) and rendered in the Gear
+                    // tab, but was not hashed — while apparel condition below IS. That
+                    // asymmetry meant repairing or damaging a WEAPON pushed no update, so
+                    // the viewer kept seeing the old percentage until something unrelated
+                    // changed. Not bucketed, matching apparel: gear condition moves on
+                    // discrete damage events, not continuously like needs.
+                    hash = hash * 31 + (primary.MaxHitPoints > 0
+                        ? primary.HitPoints * 100 / primary.MaxHitPoints
+                        : 100);
                 }
                 else
                 {
@@ -1030,6 +1063,11 @@ namespace Overlord
                         hash = hash * 31 + thing.thingIDNumber;
                         AddStringHash(ref hash, thing.def.defName);
                         hash = hash * 31 + thing.stackCount;
+                        // Carried-item condition is serialized and rendered too, and had
+                        // the same gap as the weapon above.
+                        hash = hash * 31 + (thing.MaxHitPoints > 0
+                            ? thing.HitPoints * 100 / thing.MaxHitPoints
+                            : 100);
                     }
                 }
 
