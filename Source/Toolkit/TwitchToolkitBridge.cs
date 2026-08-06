@@ -997,9 +997,17 @@ namespace Overlord
             if (isEvent)
             {
                 string label = info?.label ?? info?.sku ?? "That event";
-                return $"{GenText.CapitalizeFirst(label)} is on Toolkit cooldown or maxed. Wait for the limit to reset, or ask the streamer to raise store limits.";
+                return $"{GenText.CapitalizeFirst(label)} is on Toolkit cooldown or maxed. Ask the streamer to raise the event cap in Twitch Toolkit's settings, or wait for it to reset.";
             }
-            return "Item purchases are on a shared cooldown (you bought a few items quickly). Wait for it to reset, or ask the streamer to raise the Toolkit item limit.";
+            // The cap this reports is GLOBAL, not per-viewer: Toolkit's item eventCap
+            // counts every item purchase in the log across ALL viewers. Live evidence
+            // 2026-08-05, Player.log: "Toolkit block for <user>: item event cap 21/20"
+            // fired for five different viewers within seconds, including ones who had
+            // bought nothing. The old wording ("you bought a few items quickly") blamed
+            // the reader for a shop-wide limit and sent them looking for a personal
+            // cooldown that does not exist — Sean had to trace it to Toolkit's settings
+            // by hand. Name the real gate and where it is changed.
+            return "The shop's item limit is maxed for everyone right now (a Twitch Toolkit cap on total item purchases, not a limit on you). Ask the streamer to raise the item event cap in Twitch Toolkit's settings, or wait for it to reset.";
         }
 
         private static string FormatToolkitRejection(Exception ex)

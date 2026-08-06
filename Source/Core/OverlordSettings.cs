@@ -69,8 +69,16 @@ namespace Overlord
         // Purchases get their own, far longer cooldown. Each accepted purchase
         // spends coins, queues a real game event, and makes Toolkit answer in the
         // streamer's chat — so the 0.33s command cooldown is nowhere near enough.
-        // 180 ticks = 3 seconds.
-        public int purchaseCooldownTicks = 180;
+        // 120 ticks = 2 seconds.
+        //
+        // Sized against measured cost, not guessed. Every accepted purchase runs a
+        // full Toolkit store rebuild (ExecuteToolkitPurchase -> SendToolkitStatePublic),
+        // which on Sean's live 2026-08-05 stream logged 25-61ms of MAIN-THREAD time for
+        // 892 entries and shipped a ~400KB toolkit_state message per purchase. At 60fps
+        // that is 1.5-4 dropped frames each. 2s keeps a single spamming viewer near ~1.5%
+        // of a core; the earlier 3s value was chosen before that cost was measured and
+        // was stricter than the evidence required.
+        public int purchaseCooldownTicks = 120;
 
         // Diagnostic: log every message Toolkit tries to send to Twitch chat, with
         // the calling stack. ToolkitCore.SendChatMessage logs nothing itself, so
@@ -119,7 +127,7 @@ namespace Overlord
             Scribe_Values.Look(ref allowAppearance, "allowAppearance", false);
             Scribe_Values.Look(ref allowViewerEvents, "allowViewerEvents", false);
             Scribe_Values.Look(ref commandCooldownTicks, "commandCooldownTicks", 20);
-            Scribe_Values.Look(ref purchaseCooldownTicks, "purchaseCooldownTicks", 180);
+            Scribe_Values.Look(ref purchaseCooldownTicks, "purchaseCooldownTicks", 120);
             Scribe_Values.Look(ref logToolkitChatSends, "logToolkitChatSends", true);
             Scribe_Values.Look(ref enforceAreaRestrictions, "enforceAreaRestrictions", true);
             Scribe_Values.Look(ref startTickets, "startTickets", 3);
