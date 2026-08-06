@@ -73,6 +73,11 @@ let liveFrameImage = null;
 let liveFrameObjectUrl = null;
 let pendingLiveFrameObjectUrl = null;
 let liveFrameLoadSeq = 0;
+// True while a frame decode is outstanding. Serialises decodes so a slow client drops
+// frames it cannot keep up with instead of queueing every one. MUST be cleared on every
+// exit path — a latched true would stop the map updating for the rest of the session.
+let liveFrameDecodeInFlight = false;
+let liveFrameDecodeWatchdog = null;
 let liveFrameZoom = 1;
 let liveFrameZoomInitialized = false;
 let liveFrameZoomTimer = null;
@@ -1283,6 +1288,11 @@ function resetMapSurface() {
   liveFrameDrawRect = null;
   releaseLiveFrameImage();
   liveFrameLoadSeq++;
+  // A reset can land mid-decode; that decode's completion handler sees the tile branch
+  // or a bumped seq and may return early, so clear the latch here too. Leaving it set
+  // would block every future frame on this client.
+  liveFrameDecodeInFlight = false;
+  clearTimeout(liveFrameDecodeWatchdog);
   releaseLiveFrameObjectUrl();
   liveFrameZoom = 1;
   liveFrameZoomInitialized = false;
@@ -3764,14 +3774,44 @@ function handleMapFrame(msg) {
     return;
   }
 
+  // Never run more than one decode at a time. Without this, a client that decodes
+  // slower than frames arrive (~125ms at 8fps) starts a new decode per frame and
+  // falls further behind forever — the pileup that made every decode stale. Dropping
+  // the frame is correct: another is ~125ms away, and its object URL is released here
+  // rather than leaked. Meta above is already applied, so zoom and the pawn marker
+  // stay live even on frames we skip.
+  if (liveFrameDecodeInFlight) {
+    releaseLiveFrameObjectUrl(objectUrl);
+    if (pendingLiveFrameObjectUrl === objectUrl) pendingLiveFrameObjectUrl = null;
+    return;
+  }
+  liveFrameDecodeInFlight = true;
+  // Belt-and-braces: if a browser ever fires neither onload nor onerror, the latch
+  // above would black this client out permanently — the exact failure being fixed
+  // here. 5s is far longer than any real decode (~10-120ms), so this only ever fires
+  // on a genuinely lost callback.
+  clearTimeout(liveFrameDecodeWatchdog);
+  liveFrameDecodeWatchdog = setTimeout(() => { liveFrameDecodeInFlight = false; }, 5000);
+
   hasTileData = false;
   mapCanvas.classList.add('live-map');
 
   const applyDecodedFrame = (img) => {
-    if (frameSeq !== liveFrameLoadSeq) {
-      releaseLiveFrameObjectUrl(objectUrl);
-      return;
-    }
+    // STALENESS IS NOT A REASON TO HAVE NO PICTURE.
+    // This used to bail before assigning liveFrameImage whenever a newer frame had
+    // already arrived. liveFrameMeta is set synchronously above on every frame, but
+    // liveFrameImage was only set by a decode that WON this race — and
+    // hasVisibleMapSurface() requires BOTH. At ~8 fps a client has ~125ms to decode;
+    // any machine slower than that loses every race, so liveFrameImage stayed null
+    // forever and the "Waiting for map frames…" overlay never hid, over a black
+    // canvas, while frames streamed in normally. Purely client-speed dependent, which
+    // is why only SOME viewers saw it. The retry made it worse: it asked for more
+    // frames, which is what was already saturating the decode.
+    // A stale frame is still a valid map surface. Adopt it, then skip only the
+    // redundant repaint when a newer frame is already on its way.
+    const isStale = frameSeq !== liveFrameLoadSeq;
+    liveFrameDecodeInFlight = false;
+    clearTimeout(liveFrameDecodeWatchdog);
     if (isTileRendererActive()) {
       releaseLiveFrameObjectUrl(objectUrl);
       return;
@@ -3790,9 +3830,15 @@ function handleMapFrame(msg) {
       try { liveFrameImage.close(); } catch (_) {}
     }
     liveFrameImage = img;
+    // Paint unconditionally. Gating the draw on freshness reintroduces the same black
+    // screen by another route: a client slow enough that EVERY decode is superseded
+    // would hide the overlay (it has an image now) while never painting the canvas.
+    // Under sustained saturation there is no "last" frame to win the race. Drawing a
+    // slightly stale frame is always better than showing black.
     drawLiveFrameImage(img);
     updateLiveZoomLabel();
     updateMapWaitingOverlay();
+    if (isStale) return; // superseded frame — don't skew decode-time stats
     noteFrameDraw(msg.dataBytes || (msg.data ? msg.data.length : 0), decodeMs);
   };
 
@@ -3800,6 +3846,10 @@ function handleMapFrame(msg) {
     const img = new Image();
     img.onload = () => applyDecodedFrame(img);
     img.onerror = () => {
+      // Terminal decode failure — clear the in-flight latch or this client never
+      // decodes another frame for the rest of the session.
+      liveFrameDecodeInFlight = false;
+      clearTimeout(liveFrameDecodeWatchdog);
       releaseLiveFrameObjectUrl(objectUrl);
     };
     img.src = imageSrc;
