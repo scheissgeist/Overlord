@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260717-social-roster-v1';
+const UI_BUILD = '20260810-scroll-preserve-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -2124,6 +2124,32 @@ function panelChanged(key, slice) {
 // Force the next render of a panel (e.g. after a tab becomes visible and its
 // container was empty) — clears the stored signature.
 function invalidatePanel(key) { delete _panelSigs[key]; }
+
+// Rewriting innerHTML resets scroll to the top: the old children are removed, which
+// clamps scrollTop to 0, and the replacements arrive after that. So any panel that
+// scrolls AND rebuilds itself throws the viewer back to the top on every rebuild.
+// Reported by rettycombine 2026-08-10: "the scroll wheel in the social tab gets forced
+// to the top every tick while the game is unpaused" — unpaused is the tell, because
+// that is when pawn_state keeps arriving and re-rendering.
+//
+// Handles both container shapes in this file: the scrolling element IS the root
+// (#inventory-list), or it is a child the rewrite destroys and recreates
+// (.social-scroll inside #social-list). Restoring by match index is fine here — these
+// are single stable containers, not lists that reorder.
+function preserveScroll(root, childSelector, rewrite) {
+  if (!root) { rewrite(); return; }
+  const rootTop = root.scrollTop;
+  const childTops = childSelector
+    ? Array.from(root.querySelectorAll(childSelector)).map(node => node.scrollTop)
+    : [];
+  rewrite();
+  if (rootTop) root.scrollTop = rootTop;
+  if (childSelector) {
+    Array.from(root.querySelectorAll(childSelector)).forEach((node, i) => {
+      if (childTops[i]) node.scrollTop = childTops[i];
+    });
+  }
+}
 // Clear all panel signatures (on pawn switch) so every panel fully re-renders.
 function _clearAllPanelSigs() { for (const k in _panelSigs) delete _panelSigs[k]; }
 
@@ -4499,6 +4525,7 @@ function renderSocial(s) {
   if (!el) return;
   const people = buildSocialPeople(s);
   if (!people.length) {
+    if (!panelChanged('social', null)) return;
     el.innerHTML = '<span style="color:var(--text-muted)">No relationships</span>';
     return;
   }
@@ -4515,6 +4542,26 @@ function renderSocial(s) {
   const opinion = Number(active.opinion ?? 0);
   const opinionSign = opinion > 0 ? '+' : '';
   const distance = Number(active.distance);
+
+  // Every other renderer in this file gates on a content signature; social and
+  // inventory were the only two that did not, so they rebuilt on EVERY pawn_state and
+  // reset their scroll (see preserveScroll). Signature is taken at DISPLAY precision —
+  // distance renders as `Math.round(d) cells`, so gating on the raw float would rebuild
+  // for sub-cell drift that changes nothing on screen. Anything the markup below reads
+  // must appear here, or the panel goes stale (north star: no stale state for speed).
+  const displayDistance = d => (Number.isFinite(Number(d)) && Number(d) > 0 ? Math.round(Number(d)) : null);
+  if (!panelChanged('social', {
+        sort: socialSortMode,
+        activeId: String(active.id),
+        blocked,
+        people: visiblePeople.map(person => [
+          String(person.id), person.pawn, Number(person.opinion ?? 0),
+          Number(person.opinionOf ?? 0), person.relation || 'colonist',
+          displayDistance(person.distance)
+        ])
+      })) return;
+
+  preserveScroll(el, '.social-scroll', () => {
   el.innerHTML = `<div class="social-board">
     <div class="social-list">
       <div class="social-sort">
@@ -4558,6 +4605,7 @@ function renderSocial(s) {
       </div>
     </div>
   </div>`;
+  });
   bindSocialButtons(el);
 }
 
@@ -4688,12 +4736,24 @@ function renderInventory(inv) {
   const el = $('inventory-list');
   if (!el) return;
   if (!inv || !Array.isArray(inv) || inv.length === 0) {
+    if (!panelChanged('inventory', null)) return;
     el.innerHTML = '<div class="quiet-empty">No carried inventory</div>';
     return;
   }
   // Whole inventory renders; #inventory-list scrolls (style.css). Paging 3 items at
   // a time meant a viewer clicked Prev/Next to see what they were carrying.
   const visibleItems = inv;
+  // Same omission as social: no content gate, so this rebuilt on every pawn_state and
+  // scrolled itself back to the top. Here the scrolling element is #inventory-list
+  // itself, so preserveScroll takes no child selector.
+  if (!panelChanged('inventory', {
+        blocked: getActionBlockedReason('drop_inventory'),
+        items: visibleItems.map(item => [
+          String(item.id), item.label, Number(item.count ?? 0),
+          clampPercent(item.hp), !!item.ingestible
+        ])
+      })) return;
+  preserveScroll(el, null, () => {
   el.innerHTML = `<div class="inventory-sheet">
     <div class="inventory-head"><span>Carried <small>${inv.length}</small></span></div>
     <div class="inventory-grid">${visibleItems.map(item => {
@@ -4713,6 +4773,7 @@ function renderInventory(inv) {
       </div>
     </div>`;
   }).join('')}</div></div>`;
+  });
   bindInventoryButtons(el);
 }
 
