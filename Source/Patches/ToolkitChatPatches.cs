@@ -131,7 +131,7 @@ namespace Overlord
         {
             // Keyed by the "@username" the message is addressed to, so one viewer's
             // Overlord purchase can no longer eat a DIFFERENT viewer's chat reply.
-            bool suppressed = TwitchToolkitBridge.ShouldSuppressChat(message);
+            bool suppressed = TwitchToolkitBridge.ShouldSuppressChat(message, out string suppressReason);
 
             // An exact repeat inside the window is dropped even when it did not come
             // from Overlord — the streamer's account is what is at risk either way.
@@ -140,6 +140,7 @@ namespace Overlord
             {
                 LogUtil.Log($"ToolkitChat DUPLICATE-BLOCKED (repeat within {DuplicateWindow.TotalSeconds:F0}s): \"{message}\"");
                 suppressed = true;
+                suppressReason = "duplicate";
             }
 
             // INSTRUMENTATION. The streamer reports viewers "spamming buy requests"
@@ -168,7 +169,10 @@ namespace Overlord
                             continue;
                         interesting.Append(f).Append(" | ");
                     }
-                    LogUtil.Log($"ToolkitChat {(suppressed ? "SUPPRESSED" : "SENT")}: \"{message}\" <- {interesting}");
+                    string verdict = suppressed
+                        ? (suppressReason != null ? "SUPPRESSED(" + suppressReason + ")" : "SUPPRESSED")
+                        : "SENT";
+                    LogUtil.Log($"ToolkitChat {verdict}: \"{message}\" <- {interesting}");
                 }
                 catch { }
             }

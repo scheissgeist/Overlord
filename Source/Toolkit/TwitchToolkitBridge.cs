@@ -68,13 +68,64 @@ namespace Overlord
         private static readonly Dictionary<string, int> suppressedUsers =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
+        // 3. TIMING — the scope closed before the reply was sent. MEASURED on the
+        //    2026-08-10 stream: of 49 Overlord-UI purchases, 21 still posted a
+        //    confirmation into the streamer's chat and only 1 was caught. Matching
+        //    purchases to their reply by username across Player.log gives 33 pairs,
+        //    and the reply lands AFTER the "Command source=... action=toolkit_purchase"
+        //    line in every one of them — that line is logged by OverlordGameComponent
+        //    once PawnCommandRouter.Execute has returned, i.e. after the using block
+        //    already disposed. Half (16/33) arrive immediately after; the rest trail
+        //    by up to 33 log lines, because ToolkitUtils answers from a patched
+        //    PurchaseHandlerPatch -> MessageHelper.SendConfirmation path rather than
+        //    inline. A scope that ends when ExecutePurchase returns cannot catch that.
+        //
+        //    So the outermost scope, on exit, ARMS A SINGLE TRAILING SWALLOW for that
+        //    viewer: the next message addressed to them is dropped, once, within a
+        //    bounded window. One purchase produces one confirmation, so swallowing
+        //    exactly one is precise rather than a blanket mute — the blast radius if
+        //    it ever fires on the wrong message is a single reply to a viewer who
+        //    just watched the result appear in the Overlord UI anyway.
+        //
+        //    It is armed ONLY when nothing was suppressed inside the scope, so the
+        //    synchronous path (which already works) does not also eat the next reply.
+        //    Clock is DateTime.UtcNow, never UnityEngine.Time — this runs off the main
+        //    thread, same constraint ToolkitChatPatches documents for its dup window.
+        private const int TrailingSwallowSeconds = 10;
+        private const int PendingSwallowCap = 64;
+
+        private struct PendingSwallow
+        {
+            public int Remaining;
+            public DateTime ExpiresAt;
+        }
+
+        // Messages actually dropped by an ACTIVE scope, per viewer. Compared across a
+        // scope's lifetime to decide whether the trailing swallow is still needed.
+        private static readonly Dictionary<string, int> suppressHits =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Dictionary<string, PendingSwallow> pendingSwallows =
+            new Dictionary<string, PendingSwallow>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>
         /// Should this outgoing Toolkit chat message be dropped? True only when the
         /// message is addressed to a viewer whose Overlord-UI purchase is in flight.
         /// Safe to call from any thread.
         /// </summary>
         public static bool ShouldSuppressChat(string message)
+            => ShouldSuppressChat(message, out _);
+
+        /// <summary>
+        /// <paramref name="reason"/> distinguishes the in-scope drop (which already
+        /// worked) from the trailing swallow added 2026-08-10. Without that split both
+        /// log as "SUPPRESSED" and the next stream cannot tell whether the new path is
+        /// what fired — which is the whole question this fix has to answer at runtime,
+        /// since there is no C# test project to drive it here.
+        /// </summary>
+        public static bool ShouldSuppressChat(string message, out string reason)
         {
+            reason = null;
             if (string.IsNullOrEmpty(message) || message[0] != '@')
                 return false;
             int end = message.IndexOf(' ');
@@ -82,7 +133,37 @@ namespace Overlord
                 return false;
             string user = message.Substring(1, end - 1);
             lock (suppressedUsers)
-                return suppressedUsers.TryGetValue(user, out int depth) && depth > 0;
+            {
+                // An Overlord purchase is open right now — drop it and record that the
+                // scope caught its own reply, so no trailing swallow gets armed.
+                if (suppressedUsers.TryGetValue(user, out int depth) && depth > 0)
+                {
+                    suppressHits.TryGetValue(user, out int hits);
+                    suppressHits[user] = hits + 1;
+                    reason = "in-scope";
+                    return true;
+                }
+
+                // No open scope: this is the late confirmation a just-closed purchase
+                // was still waiting on. Swallow exactly one, and only inside the window.
+                if (pendingSwallows.TryGetValue(user, out PendingSwallow pending))
+                {
+                    if (DateTime.UtcNow >= pending.ExpiresAt || pending.Remaining <= 0)
+                    {
+                        pendingSwallows.Remove(user);
+                        return false;
+                    }
+                    pending.Remaining--;
+                    if (pending.Remaining <= 0)
+                        pendingSwallows.Remove(user);
+                    else
+                        pendingSwallows[user] = pending;
+                    reason = "trailing";
+                    return true;
+                }
+
+                return false;
+            }
         }
 
         /// <summary>
@@ -96,6 +177,7 @@ namespace Overlord
         private sealed class ToolkitChatSuppressor : IDisposable
         {
             private readonly string user;
+            private readonly int hitsAtEntry;
 
             public ToolkitChatSuppressor(string username)
             {
@@ -106,6 +188,7 @@ namespace Overlord
                 {
                     suppressedUsers.TryGetValue(user, out int depth);
                     suppressedUsers[user] = depth + 1;
+                    suppressHits.TryGetValue(user, out hitsAtEntry);
                 }
             }
 
@@ -117,12 +200,51 @@ namespace Overlord
                 {
                     if (!suppressedUsers.TryGetValue(user, out int depth))
                         return;
-                    if (depth <= 1)
-                        suppressedUsers.Remove(user);   // don't leak a key per viewer
-                    else
+                    if (depth > 1)
+                    {
+                        // Inner scope of a re-entrant path (item-with-stuff). The
+                        // outermost exit is the only one that decides about trailing.
                         suppressedUsers[user] = depth - 1;
+                        return;
+                    }
+
+                    suppressedUsers.Remove(user);       // don't leak a key per viewer
+                    suppressHits.TryGetValue(user, out int hitsNow);
+                    suppressHits.Remove(user);
+
+                    // Reply already caught inside the scope — nothing left to swallow.
+                    if (hitsNow != hitsAtEntry)
+                        return;
+
+                    SweepExpiredSwallows();
+                    pendingSwallows[user] = new PendingSwallow
+                    {
+                        Remaining = 1,
+                        ExpiresAt = DateTime.UtcNow.AddSeconds(TrailingSwallowSeconds)
+                    };
                 }
             }
+        }
+
+        // Called under the suppressedUsers lock. Keyed by viewer, so this is bounded by
+        // audience size in practice; the cap is a backstop against a pathological run of
+        // purchases from viewers who then never receive a reply.
+        private static void SweepExpiredSwallows()
+        {
+            if (pendingSwallows.Count == 0)
+                return;
+            DateTime now = DateTime.UtcNow;
+            List<string> stale = null;
+            foreach (var kv in pendingSwallows)
+            {
+                if (now >= kv.Value.ExpiresAt || kv.Value.Remaining <= 0)
+                    (stale ?? (stale = new List<string>())).Add(kv.Key);
+            }
+            if (stale != null)
+                foreach (string key in stale)
+                    pendingSwallows.Remove(key);
+            if (pendingSwallows.Count >= PendingSwallowCap)
+                pendingSwallows.Clear();
         }
 
         public static Dictionary<string, object> BuildViewerState(string username)
