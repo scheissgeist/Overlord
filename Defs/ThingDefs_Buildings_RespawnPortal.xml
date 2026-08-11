@@ -31,8 +31,17 @@
       <Gold>10</Gold>
     </costList>
     <constructEffect>ConstructMetal</constructEffect>
+    <!-- MicroelectronicsBasics, not Microelectronics. There is no ResearchProjectDef
+         named "Microelectronics" in RimWorld (verified against Core: the def lives in
+         Data/Core/Defs/ResearchProjectDefs/ResearchProjects_3_Microelectronics.xml and
+         is named MicroelectronicsBasics — the FILE is what is called Microelectronics).
+         The wrong name logged "Could not resolve cross-reference to
+         Verse.ResearchProjectDef named Microelectronics (wanter=researchPrerequisites)"
+         on every launch. What the unresolved entry did to the build gate was NOT
+         verified — RimWorld drops the reference, so the portal was gated on either
+         nothing or a null; either way the intended gate was not the one shipping. -->
     <researchPrerequisites>
-      <li>Microelectronics</li>
+      <li>MicroelectronicsBasics</li>
     </researchPrerequisites>
     <designationCategory>Misc</designationCategory>
     <designationHotKey>Misc1</designationHotKey>
