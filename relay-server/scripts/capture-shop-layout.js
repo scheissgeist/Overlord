@@ -293,11 +293,18 @@ async function main() {
       }));
       await wait(400);
       const cooldownState = await page.evaluate(() => {
-        const banner = Array.from(document.querySelectorAll('.buy-banner'))
-          .map(b => b.textContent.trim()).find(t => /cooldown/i.test(t)) || null;
+        // Record EVERY banner, not just ones matching a keyword. The old capture kept
+        // only /cooldown/i matches and reported `banner: null` otherwise — which reads
+        // as "no banner rendered" when it actually means "a banner rendered and this
+        // assertion could not recognise it". That is a test that cannot tell a product
+        // regression from its own staleness.
+        const allBanners = Array.from(document.querySelectorAll('.buy-banner'))
+          .map(b => b.textContent.trim()).filter(Boolean);
+        const banner = allBanners.find(t => /cooldown|maxed|item limit/i.test(t)) || null;
         const buttons = Array.from(document.querySelectorAll('.buy-actions button'));
         return {
           banner,
+          allBanners,
           total: buttons.length,
           enabled: buttons.filter(b => !b.disabled).length,
         };
@@ -307,6 +314,41 @@ async function main() {
         failures.push(`${vp.name}: cooldown active but ${cooldownState.enabled}/${cooldownState.total} buy buttons still enabled`);
       }
       shopChecks.push({ vp: vp.name, cooldown: cooldownState });
+
+      // CATALOG DELTA. The ~400KB entries block is identical for every viewer, so the
+      // host caches it and sends `catalogUnchanged: true` with NO entries when the
+      // viewer already has that version — a purchase changes coins, not the store.
+      // The failure mode that would cost the most is the obvious one: the client
+      // replaces its state wholesale and the shop goes blank on the first message
+      // after any purchase. Assert the shop survives a catalog-free update and that
+      // the per-viewer fields it DOES carry still apply.
+      const beforeDelta = await page.evaluate(() => ({
+        items: document.querySelectorAll('.buy-item').length,
+        coins: (document.querySelector('.buy-wallet-stats')?.textContent || '').trim(),
+      }));
+      hostWs.send(JSON.stringify({
+        type: 'toolkit_state', target: VIEWER_LOGIN, available: true, toolkitLoaded: true,
+        toolkitUtilsLoaded: true, chatConnected: true, status: 'connected', username: VIEWER_LOGIN,
+        coins: 4242, karma: REPORT_KARMA, unlimitedCoins: false, earningCoins: true,
+        coinAmount: 30, coinInterval: 2, minimumPurchase: MINIMUM_PURCHASE,
+        itemCount: 900, purchasesOnCooldown: false,
+        catalogVersion: 1, catalogUnchanged: true,   // no entries, no stuffCatalog
+      }));
+      await wait(400);
+      const afterDelta = await page.evaluate(() => ({
+        items: document.querySelectorAll('.buy-item').length,
+        coins: (document.querySelector('.buy-wallet-stats')?.textContent || '').trim(),
+      }));
+      if (afterDelta.items !== beforeDelta.items) {
+        failures.push(`${vp.name}: catalogUnchanged update changed the shop from ${beforeDelta.items} to ${afterDelta.items} items (cached catalog was dropped)`);
+      }
+      if (afterDelta.items === 0) {
+        failures.push(`${vp.name}: catalogUnchanged update emptied the shop`);
+      }
+      if (!/4,?242/.test(afterDelta.coins)) {
+        failures.push(`${vp.name}: catalogUnchanged update did not apply new coins → "${afterDelta.coins}"`);
+      }
+      shopChecks.push({ vp: vp.name, delta: { beforeDelta, afterDelta } });
 
       // (B) Narrowed by search, like the reported screenshot.
       await page.evaluate(q => {

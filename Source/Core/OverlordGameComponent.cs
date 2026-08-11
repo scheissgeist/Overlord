@@ -374,6 +374,11 @@ namespace Overlord
             session?.SetMapTransportPreference(JsonHelper.ExtractString(json, "mapTransport"));
             LogUtil.Log($"Viewer joined: {displayName} ({username})");
 
+            // A joining browser has no cached store catalog, whatever we last sent this
+            // username. Clear the record so their next toolkit_state carries the full
+            // catalog instead of a "catalogUnchanged" that would leave the shop empty.
+            TwitchToolkitBridge.ForgetViewerCatalog(username);
+
             // Returning viewers get their previous colonist back automatically.
             // This re-establishes a pairing the streamer already approved (see
             // ViewerManager.TryReconnectPreviousPawn) rather than granting

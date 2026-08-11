@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260810-social-log-v1';
+const UI_BUILD = '20260811-catalog-delta-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -4053,9 +4053,27 @@ function handleMapTransport(msg) {
 }
 
 function handleToolkitState(msg) {
-  toolkitState = msg || null;
+  // The store catalog is ~400KB and identical for every viewer, so the host now sends
+  // it only when our copy is stale and sets catalogUnchanged otherwise. Everything a
+  // purchase actually changes — coins, karma, cooldown — still arrives every time.
+  // Carry the cached catalog across those updates instead of replacing state wholesale,
+  // which would blank the shop on the first post-purchase message.
+  //
+  // Guarded on the entries being ABSENT rather than on the flag alone: a host that
+  // genuinely failed to build a catalog sends entries: [] with no flag, and that must
+  // still be able to clear the shop.
+  const prev = toolkitState;
+  const next = msg || null;
+  if (next && prev && next.catalogUnchanged === true && next.entries === undefined) {
+    next.entries = prev.entries;
+    next.stuffCatalog = prev.stuffCatalog;
+  }
+  // Only drop the lazily-built material lookup when the catalog it derives from
+  // actually changed; rebuilding it on every coin update was pure churn.
+  const catalogChanged = !prev || next?.stuffCatalog !== prev.stuffCatalog;
+  toolkitState = next;
   toolkitStateAt = Date.now();
-  buyStuffCatalog = null; // rebuilt lazily from the new state's stuffCatalog
+  if (catalogChanged) buyStuffCatalog = null;
   invalidatePanel('gear');
   if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
   renderCommandCenterFromState();
@@ -5502,6 +5520,13 @@ function renderBuyControls() {
       return hay.includes(query);
     });
   const affordable = decorated.filter(row => row.state.listedAffordable && !row.state.needsInput);
+  // Affordable-first ordering used to come from the host, which sorted the catalog
+  // against each viewer's coins — the very thing that made a shared, cacheable catalog
+  // impossible. The host now ships one wallet-free catalog ordered by cost then label,
+  // and the wallet-dependent half of that ordering is applied here. Stable sort, so the
+  // host's cost/label order survives within each affordability group.
+  decorated.sort((a, b) =>
+    (b.state.listedAffordable ? 1 : 0) - (a.state.listedAffordable ? 1 : 0));
   const shops = groupBuyRowsByShop(decorated);
   const visibleShopKeys = BUY_SHOP_ORDER.filter(key => shops.get(key)?.length);
   if (activeBuyShop !== 'all' && !shops.get(activeBuyShop)?.length) activeBuyShop = 'all';

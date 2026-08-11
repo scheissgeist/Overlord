@@ -247,6 +247,82 @@ namespace Overlord
                 pendingSwallows.Clear();
         }
 
+        // ── Shared store catalog cache ──────────────────────────────────────────
+        // The catalog is identical for every viewer (see BuildSharedStoreEntries), so
+        // it is built once and handed out by reference. Rebuilt only when the TTL
+        // lapses or something explicitly invalidates it — NOT on purchase, because a
+        // purchase changes the buyer's coins, not the store.
+        //
+        // TTL exists because Toolkit/ToolkitUtils prices and item lists can be edited
+        // mid-stream from their own UI, and there is no change event to hook. 60s is
+        // the staleness ceiling for a price edit; everything a purchase actually
+        // affects (coins, karma, cooldown) is sent every time and is never cached.
+        private const int CatalogTtlSeconds = 60;
+
+        private static List<Dictionary<string, object>> cachedEntries;
+        private static List<object> cachedStuffCatalog;
+        private static int cachedItemCount;
+        private static int catalogVersion;
+        private static DateTime catalogBuiltAt = DateTime.MinValue;
+        private static readonly object catalogLock = new object();
+
+        /// <summary>
+        /// Drops the shared catalog so the next viewer state rebuilds it. Call when the
+        /// store itself may have changed (settings closed, defs reloaded) — not on
+        /// purchase.
+        /// </summary>
+        public static void InvalidateStoreCatalog()
+        {
+            lock (catalogLock)
+                catalogBuiltAt = DateTime.MinValue;
+        }
+
+        private static void GetSharedStoreCatalog(
+            out List<Dictionary<string, object>> entries,
+            out List<object> stuffCatalog,
+            out int itemCount,
+            out int version)
+        {
+            lock (catalogLock)
+            {
+                if (cachedEntries == null || DateTime.UtcNow - catalogBuiltAt > TimeSpan.FromSeconds(CatalogTtlSeconds))
+                {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    // Order matters: BuildSharedStoreEntries populates the stuff catalog
+                    // as it walks items, so it must run before the catalog is read.
+                    cachedEntries = BuildSharedStoreEntries();
+                    cachedStuffCatalog = BuildStuffCatalogMessage();
+                    cachedItemCount = GetStoreItemCount();
+                    catalogBuiltAt = DateTime.UtcNow;
+                    catalogVersion++;
+                    watch.Stop();
+                    LogUtil.Log($"Toolkit store catalog rebuilt: {cachedEntries.Count} entries in {watch.ElapsedMilliseconds}ms (version {catalogVersion})");
+                }
+                entries = cachedEntries;
+                stuffCatalog = cachedStuffCatalog;
+                itemCount = cachedItemCount;
+                version = catalogVersion;
+            }
+        }
+
+        // Last catalog version each viewer has been sent, so the ~400KB block goes out
+        // once per viewer per version instead of once per purchase.
+        private static readonly Dictionary<string, int> viewerCatalogVersion =
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Forces the next state for this viewer to carry the full catalog again — used
+        /// when a viewer reconnects, since their browser cache is gone.
+        /// </summary>
+        public static void ForgetViewerCatalog(string username)
+        {
+            string user = NormalizeUsername(username);
+            if (string.IsNullOrEmpty(user))
+                return;
+            lock (catalogLock)
+                viewerCatalogVersion.Remove(user);
+        }
+
         public static Dictionary<string, object> BuildViewerState(string username)
         {
             var msg = new Dictionary<string, object>
@@ -294,13 +370,40 @@ namespace Overlord
                 // Toolkit exposes only a boolean here (no remaining time), so
                 // this is "blocked / not blocked", not a countdown.
                 msg["purchasesOnCooldown"] = ToolkitItemBlockedByCooldown(username);
-                // Order matters: the catalog is populated while entries build.
-                msg["entries"] = BuildStoreEntries(coins, unlimited);
-                msg["stuffCatalog"] = BuildStuffCatalogMessage();
+
+                // The catalog is shared and cached; only send it when this viewer does
+                // not already have this version. Everything above is per-viewer and
+                // always sent, which is what a purchase actually changes.
+                GetSharedStoreCatalog(out var entries, out var stuffCatalog, out int itemCount, out int version);
+                msg["catalogVersion"] = version;
                 // True store size. The client shows "N of M" when the shop is
                 // capped so truncation is visible instead of silent — viewers
-                // previously had no way to tell items were missing.
-                msg["itemCount"] = GetStoreItemCount();
+                // previously had no way to tell items were missing. Cheap, always sent,
+                // so the count is right even on a catalog-free update.
+                msg["itemCount"] = itemCount;
+
+                string catalogUser = NormalizeUsername(username);
+                bool needsCatalog = true;
+                lock (catalogLock)
+                {
+                    if (viewerCatalogVersion.TryGetValue(catalogUser, out int known) && known == version)
+                        needsCatalog = false;
+                    else
+                        viewerCatalogVersion[catalogUser] = version;
+                }
+
+                if (needsCatalog)
+                {
+                    msg["entries"] = entries;
+                    msg["stuffCatalog"] = stuffCatalog;
+                }
+                else
+                {
+                    // Client keeps its cached entries for this version. Flagged
+                    // explicitly so a client can tell "no change" apart from "the host
+                    // failed to build a catalog" — the latter must not blank the shop.
+                    msg["catalogUnchanged"] = true;
+                }
             }
             catch (Exception ex)
             {
@@ -446,13 +549,30 @@ namespace Overlord
             }
         }
 
-        private static List<Dictionary<string, object>> BuildStoreEntries(int coins, bool unlimited)
+        // VIEWER-INDEPENDENT store catalog. Previously this took (coins, unlimited),
+        // stamped an "affordable" flag on every entry and sorted affordable-first — so
+        // two viewers with different wallets got two different 892-entry payloads and
+        // nothing could be cached or shared.
+        //
+        // MEASURED 2026-08-10: that catalog is ~400KB on the wire (5 relay samples,
+        // 399285-399286 bytes) and 25-61ms of MAIN-THREAD rebuild for 892 entries, and
+        // it was rebuilt and resent to a viewer on EVERY purchase — 49 purchases that
+        // night. But a purchase does not change the catalog; it changes the buyer's
+        // COINS. Making the catalog viewer-independent is what lets it be built once
+        // and reused (see GetSharedStoreCatalog).
+        //
+        // Affordability moves to the client, which already derives it: app.js
+        // buildBuyItemState computes `affordable` from coins itself, and its
+        // `listedAffordable` already falls back to a local computation when the server
+        // field is absent. The affordable-first ordering is reproduced there too, so
+        // this sorts by cost then label only — a stable, wallet-free order.
+        private static List<Dictionary<string, object>> BuildSharedStoreEntries()
         {
             ResetStuffCatalog();
             var entries = new List<Dictionary<string, object>>();
-            AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsSimple", coins, unlimited, "event");
-            AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsVariables", coins, unlimited, "event");
-            AppendItemEntries(entries, coins, unlimited);
+            AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsSimple", "event");
+            AppendIncidentEntries(entries, "TwitchToolkit.Store.Purchase_Handler", "allStoreIncidentsVariables", "event");
+            AppendItemEntries(entries);
             entries.Add(new Dictionary<string, object>
             {
                 ["kind"] = "service",
@@ -463,7 +583,6 @@ namespace Overlord
                 ["cost"] = RepairEquippedGearCost,
                 ["price"] = RepairEquippedGearCost,
                 ["unitCost"] = RepairEquippedGearCost,
-                ["affordable"] = unlimited || coins >= RepairEquippedGearCost,
                 ["needsInput"] = false,
                 ["variables"] = 0,
                 ["command"] = "!buy " + RepairEquippedGearSku
@@ -471,8 +590,7 @@ namespace Overlord
 
             var ordered = entries
                 .Where(e => e.ContainsKey("sku"))
-                .OrderByDescending(e => e.ContainsKey("affordable") && e["affordable"] is bool b && b)
-                .ThenBy(e => e.ContainsKey("cost") ? Convert.ToInt32(e["cost"]) : int.MaxValue)
+                .OrderBy(e => e.ContainsKey("cost") ? Convert.ToInt32(e["cost"]) : int.MaxValue)
                 .ThenBy(e => e.ContainsKey("label") ? e["label"].ToString() : "")
                 .ToList();
 
@@ -682,7 +800,7 @@ namespace Overlord
             }
         }
 
-        private static void AppendIncidentEntries(List<Dictionary<string, object>> entries, string ownerTypeName, string fieldName, int coins, bool unlimited, string kind)
+        private static void AppendIncidentEntries(List<Dictionary<string, object>> entries, string ownerTypeName, string fieldName, string kind)
         {
             Type owner = FindType(ownerTypeName);
             FieldInfo field = owner?.GetField(fieldName, BindingFlags.Public | BindingFlags.Static);
@@ -711,7 +829,10 @@ namespace Overlord
                     ["price"] = cost,
                     ["unitCost"] = cost,
                     ["karmaType"] = ReadString(incident, "karmaType"),
-                    ["affordable"] = unlimited || coins >= cost,
+                    // No "affordable" here on purpose — see BuildSharedStoreEntries.
+                    // It is a function of the VIEWER's coins, and stamping it made an
+                    // otherwise identical 892-entry catalog per-viewer and uncacheable.
+                    // app.js already derives it locally (buildBuyItemState).
                     ["needsInput"] = variables > 0,
                     ["variables"] = variables,
                     ["syntax"] = ReadString(incident, "syntax"),
@@ -720,7 +841,7 @@ namespace Overlord
             }
         }
 
-        private static void AppendItemEntries(List<Dictionary<string, object>> entries, int coins, bool unlimited)
+        private static void AppendItemEntries(List<Dictionary<string, object>> entries)
         {
             var items = GetStoreItemsEnumerable();
             if (items == null) return;
@@ -773,7 +894,6 @@ namespace Overlord
                     ["cost"] = price,
                     ["price"] = price,
                     ["unitCost"] = price,
-                    ["affordable"] = unlimited || coins >= price,
                     ["researched"] = researched,
                     ["mustResearchFirst"] = requiresResearch,
                     ["researchProject"] = researchLabel ?? "",
@@ -865,9 +985,10 @@ namespace Overlord
 
         private static IEnumerable<Dictionary<string, object>> SortedStoreEntries(IEnumerable<Dictionary<string, object>> entries)
         {
+            // Wallet-free ordering — affordability is the client's job now, so that it
+            // can be applied per viewer against a single shared catalog.
             return entries
-                .OrderByDescending(e => e.ContainsKey("affordable") && e["affordable"] is bool b && b)
-                .ThenBy(e => e.ContainsKey("cost") ? Convert.ToInt32(e["cost"]) : int.MaxValue)
+                .OrderBy(e => e.ContainsKey("cost") ? Convert.ToInt32(e["cost"]) : int.MaxValue)
                 .ThenBy(e => e.ContainsKey("label") ? e["label"].ToString() : "");
         }
 
@@ -889,7 +1010,12 @@ namespace Overlord
         private static bool TryFindPurchase(string sku, out PurchaseInfo info)
         {
             info = null;
-            var state = BuildStoreEntries(int.MaxValue, true);
+            // Was BuildStoreEntries(int.MaxValue, true) — a FULL 892-entry rebuild just
+            // to look up one SKU's metadata, on every purchase, on top of the rebuild
+            // the state resend then did. Both now share one cached catalog. The old
+            // int.MaxValue/true arguments existed only to force "affordable" true on
+            // every row, and affordability is no longer part of the catalog at all.
+            GetSharedStoreCatalog(out var state, out _, out _, out _);
             foreach (var entry in state)
             {
                 if (!string.Equals(entry.TryGetValue("sku", out object value) ? value?.ToString() : null, sku, StringComparison.OrdinalIgnoreCase))
