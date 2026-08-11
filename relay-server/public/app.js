@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260811-catalog-delta-v1';
+const UI_BUILD = '20260811-cap-blocks-buy-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -5387,13 +5387,19 @@ function renderStoryPurchaseRow(row) {
   const canBuy = !!toolkitState?.available && !!toolkitState?.chatConnected;
   const needsSelection = !!entry.needsInput || !!type.optionType;
   const missingSelection = needsSelection && !selected;
-  const disabled = !canBuy || !buyState.hasPrice || !buyState.affordable || missingSelection || buyState.needsAssignedPawn;
-  const reason = buyState.needsAssignedPawn
+  // Same cap gate as the shop rows. Inert for events/services (cooldownBlocked is
+  // item-scoped), but this path shares getBuyItemState, so leaving it out would mean a
+  // capped item stayed buyable from here while being disabled two panels over.
+  const disabled = !canBuy || !buyState.hasPrice || !buyState.affordable || missingSelection
+    || buyState.needsAssignedPawn || buyState.cooldownBlocked;
+  const reason = buyState.cooldownBlocked
+    ? 'Shop limit maxed'
+    : (buyState.needsAssignedPawn
     ? 'Needs assigned colonist'
     : (missingSelection
     ? 'Choose'
     : (!buyState.hasPrice ? 'No price'
-      : (!buyState.affordable ? 'Not enough coins' : (!canBuy ? 'Offline' : 'Buy'))));
+      : (!buyState.affordable ? 'Not enough coins' : (!canBuy ? 'Offline' : 'Buy')))));
   const options = getArray(row.options);
   const selector = options.length ? `<select data-story-purchase-select="${escapeAttr(key)}">
     ${options.map(option => `<option value="${escapeAttr(option.value)}" ${String(option.value) === selected ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
@@ -5728,6 +5734,15 @@ function getBuyItemState(item) {
   const listedAffordable = !!item?.affordable || (hasPrice && (unlimited || coins >= unitCost));
   const researchBlocked = isItem && item?.mustResearchFirst === true && item?.researched === false;
   const needsAssignedPawn = isPawnTargetedToolkitSku(sku, item) && !pawnState;
+  // Toolkit's item cap is maxed. This used to render a warning banner and nothing
+  // else, so the Buy button stayed live and the viewer tapped it into a guaranteed
+  // rejection — 6 of 9 purchases failed exactly that way in the 2026-08-03 session,
+  // and capture-shop-layout has asserted "cooldown active but N buy buttons still
+  // enabled" ever since. Scoped to ITEMS on purpose: the gate behind this flag is
+  // Toolkit's item eventCap (ToolkitItemBlockedByCooldown reads the Item incident),
+  // and the banner tells viewers events and services still work — so blanket-disabling
+  // the shop would be a worse lie than the one being fixed.
+  const cooldownBlocked = isItem && toolkitState?.purchasesOnCooldown === true;
   return {
     sku,
     kind,
@@ -5746,6 +5761,7 @@ function getBuyItemState(item) {
     listedAffordable,
     researchBlocked,
     needsAssignedPawn,
+    cooldownBlocked,
     syntax: String(item?.syntax || '')
   };
 }
@@ -5769,8 +5785,14 @@ function renderBuyItem(item, canBuy, state = null) {
     && (toolkitState?.unlimitedCoins || Number(toolkitState?.coins ?? 0) >= buyState.unitCost * buyState.minQtyForMinimum);
   const disabled = !canBuy || !buyState.hasPrice
     || (buyState.meetsMinimum ? !buyState.affordable : !canReachMinimum)
-    || buyState.missingArgument || buyState.researchBlocked || buyState.needsAssignedPawn;
-  const blockReason = buyState.needsAssignedPawn
+    || buyState.missingArgument || buyState.researchBlocked || buyState.needsAssignedPawn
+    || buyState.cooldownBlocked;
+  // Ordered before the recoverable reasons: when the shop is capped, "Set 60" or
+  // "Not enough coins" is misleading advice — nothing the viewer does to the quantity
+  // or their wallet will make the purchase land until the cap resets.
+  const blockReason = buyState.cooldownBlocked
+    ? 'Shop limit maxed'
+    : (buyState.needsAssignedPawn
     ? 'Needs assigned colonist'
     : (buyState.missingArgument
     ? 'Needs argument'
@@ -5781,8 +5803,13 @@ function renderBuyItem(item, canBuy, state = null) {
           : `Min ${formatNumber(buyState.minimumPurchase)}`)
         : (buyState.researchBlocked ? 'Research locked'
           : (!buyState.affordable ? 'Not enough coins'
-            : (!canBuy ? 'Offline' : ''))))));
-  const buttonLabel = canReachMinimum
+            : (!canBuy ? 'Offline' : '')))))));
+  // The stack-bump offer outranks the block reason normally — "Set 60" is the useful
+  // action when the only problem is the coin floor. But it must NOT outrank the cap:
+  // a disabled button reading "Set 60" tells the viewer to change the quantity when no
+  // quantity will land while the shop is capped. Caught by capturing button LABELS,
+  // not just the disabled attribute — enabled=0/15 passed while the copy still lied.
+  const buttonLabel = (canReachMinimum && !buyState.cooldownBlocked)
     ? `Set ${formatNumber(buyState.minQtyForMinimum)}`
     : (disabled ? (blockReason || 'Locked') : 'Buy');
   const priceLine = buyState.isItem && buyState.quantity > 1

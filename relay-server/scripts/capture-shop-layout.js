@@ -307,11 +307,21 @@ async function main() {
           allBanners,
           total: buttons.length,
           enabled: buttons.filter(b => !b.disabled).length,
+          // The label is the only thing telling a viewer WHY the button is dead, so
+          // assert the copy, not just the disabled attribute.
+          labels: Array.from(new Set(buttons.map(b => b.textContent.trim()))),
         };
       });
       if (!cooldownState.banner) failures.push(`${vp.name}: cooldown active but no banner shown`);
       if (cooldownState.enabled !== 0) {
         failures.push(`${vp.name}: cooldown active but ${cooldownState.enabled}/${cooldownState.total} buy buttons still enabled`);
+      }
+      // Disabled is not enough — the label has to say WHY. A dead button reading
+      // "Set 60" tells the viewer to change the quantity when no quantity will land
+      // while the cap is up. That combination passed the enabled-count check.
+      const misleading = cooldownState.labels.filter(l => /^Set /.test(l));
+      if (misleading.length) {
+        failures.push(`${vp.name}: cooldown active but buttons still advise a stack bump → ${JSON.stringify(misleading)}`);
       }
       shopChecks.push({ vp: vp.name, cooldown: cooldownState });
 
