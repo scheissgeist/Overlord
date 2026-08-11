@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260810-scroll-preserve-v1';
+const UI_BUILD = '20260810-social-log-v1';
 
 // Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
 // injected by the server. Falls back to guest mode if absent.
@@ -4550,6 +4550,7 @@ function renderSocial(s) {
   // for sub-cell drift that changes nothing on screen. Anything the markup below reads
   // must appear here, or the panel goes stale (north star: no stale state for speed).
   const displayDistance = d => (Number.isFinite(Number(d)) && Number(d) > 0 ? Math.round(Number(d)) : null);
+  const socialLog = getArray(s?.socialLog);
   if (!panelChanged('social', {
         sort: socialSortMode,
         activeId: String(active.id),
@@ -4558,7 +4559,11 @@ function renderSocial(s) {
           String(person.id), person.pawn, Number(person.opinion ?? 0),
           Number(person.opinionOf ?? 0), person.relation || 'colonist',
           displayDistance(person.distance)
-        ])
+        ]),
+        // The log has to be in here or a new interaction would never repaint. Stored
+        // at DISPLAY precision (the bucketed age, not raw ticksAgo) — raw ticks move
+        // on every send, which would defeat the gate this signature exists to provide.
+        log: socialLog.map(entry => [entry?.text, formatLogAge(entry?.ticksAgo)])
       })) return;
 
   preserveScroll(el, '.social-scroll', () => {
@@ -4603,10 +4608,35 @@ function renderSocial(s) {
         <button data-social-interaction="RomanceAttempt" ${blocked ? 'disabled' : ''}>Flirt</button>
         <button data-social-interaction="Insult" ${blocked ? 'disabled' : ''}>Insult</button>
       </div>
+      <div class="social-log-head">Recent</div>
+      <div class="social-log">
+        ${socialLog.length
+          ? socialLog.map(entry => {
+              const age = formatLogAge(entry?.ticksAgo);
+              return `<div class="social-log-row">
+                <span>${escapeHtml(String(entry?.text || ''))}</span>
+                ${age ? `<small>${escapeHtml(age)}</small>` : ''}
+              </div>`;
+            }).join('')
+          : '<div class="social-log-empty">No interactions yet.</div>'}
+      </div>
     </div>
   </div>`;
   });
   bindSocialButtons(el);
+}
+
+// RimWorld ticks -> compact age. 2500 ticks = 1 in-game hour, 60000 = 1 day.
+// Deliberately coarse: the host stamps ticksAgo at SEND time and it does not tick
+// forward on its own between updates, so a minute-accurate label would be a lie
+// most of the time. Coarse buckets are honest and change rarely, which also keeps
+// them cheap in the panel signature.
+function formatLogAge(ticksAgo) {
+  const t = Number(ticksAgo);
+  if (!Number.isFinite(t) || t < 0) return '';
+  if (t < 2500) return 'just now';
+  if (t < 60000) return `${Math.floor(t / 2500)}h`;
+  return `${Math.floor(t / 60000)}d`;
 }
 
 function buildSocialPeople(s) {

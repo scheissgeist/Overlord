@@ -57,6 +57,18 @@ const RELATIONS = OPINIONS.slice(0, 4).map((o, i) => ({
   relation: ['friend', 'rival', 'lover', 'sibling'][i],
 }));
 
+// RimWorld's own social log (host: PawnStateSerializer.BuildSocialLog). Deliberately
+// covers all three age buckets formatLogAge produces (<2500 ticks "just now", <60000
+// "Nh", else "Nd") and one entry long enough to wrap, since the log sits in the narrow
+// action column where an unwrapped string would blow the layout out.
+const SOCIAL_LOG = [
+  { text: 'Aldo chitchatted with you.', ticksAgo: 90 },
+  { text: 'You insulted Brix. Brix was not impressed and the argument carried on for some time.', ticksAgo: 1800 },
+  { text: 'Cass tried to romance you. You rejected them.', ticksAgo: 7400 },
+  { text: 'Dov deep talked with you.', ticksAgo: 34000 },
+  { text: 'Emi complimented your shooting.', ticksAgo: 132000 },
+];
+
 const PAWN_STATE = {
   id: PAWN_ID,
   name: VIEWER_DISPLAY,
@@ -70,6 +82,7 @@ const PAWN_STATE = {
   capacities: [],
   relations: RELATIONS,
   opinions: OPINIONS,
+  socialLog: SOCIAL_LOG,
   workPriorities: [], schedule: [],
   appearance: { hairDef: 'Bald', gender: 'Male' },
   currentJob: 'Standing',

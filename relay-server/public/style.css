@@ -2071,6 +2071,65 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   font-size: 10px;
 }
 
+/* RimWorld's own social log for the viewer's pawn (viewer request 2026-08-10).
+   Capped and scrollable for the same reason .social-scroll is: #tab-content is a
+   fixed 235px and smoke-viewer-intake asserts this pane does not overflow. The
+   mobile query below drops the cap and lets the pane scroll, matching the roster. */
+.social-log-head {
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.social-log {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  max-height: 76px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 104, 64, 0.5) transparent;
+}
+
+.social-log::-webkit-scrollbar { width: 7px; }
+.social-log::-webkit-scrollbar-track { background: transparent; }
+.social-log::-webkit-scrollbar-thumb {
+  background: rgba(138, 104, 64, 0.5);
+  border-radius: 3px;
+}
+
+.social-log-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid rgba(56, 64, 54, 0.72);
+  border-radius: 2px;
+  background: rgba(12, 14, 17, 0.48);
+}
+
+.social-log-row span {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.social-log-row small {
+  color: var(--text-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.social-log-empty {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .social-actions button {
   height: 28px;
   border: 1px solid rgba(52, 59, 70, 0.72);
@@ -5339,6 +5398,13 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   .social-board { max-height: none; }
   #tab-social .social-scroll,
   .social-scroll {
+    max-height: none;
+    overflow-y: visible;
+  }
+  /* Same reasoning as the roster above: no nested scroll box inside the already
+     scrolling pane, or the log becomes a tiny window with no affordance. */
+  #tab-social .social-log,
+  .social-log {
     max-height: none;
     overflow-y: visible;
   }

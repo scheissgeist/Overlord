@@ -219,6 +219,33 @@ namespace Overlord
                     }
                 }
 
+                // Social log: hash the TICKS of the entries BuildSocialLog would return,
+                // never their formatted text — ToGameStringFromPOV resolves grammar and
+                // is far too expensive for a change-detection path. A new interaction
+                // adds a new tick (and moves the count), so the hash moves with it.
+                // Same bounded window as the builder, inside the 2s slow tier.
+                {
+                    var playLog = Find.PlayLog?.AllEntries;
+                    if (playLog != null)
+                    {
+                        int matched = 0;
+                        int limit = Math.Min(playLog.Count, SocialLogScanDepth);
+                        for (int i = 0; i < limit && matched < SocialLogMaxEntries; i++)
+                        {
+                            var entry = playLog[i];
+                            if (entry == null) continue;
+                            try
+                            {
+                                if (!entry.Concerns(pawn)) continue;
+                                hash = hash * 31 + entry.Tick;
+                                matched++;
+                            }
+                            catch { }
+                        }
+                        hash = hash * 31 + matched;
+                    }
+                }
+
                 // Nearby loose weapons/apparel (viewer gear-pickup list). Hash the
                 // SAME filtered list Serialize() sends (IsForbidden + reachability +
                 // Take(24)) so forbid/reachability flips change the signature —
@@ -612,6 +639,11 @@ namespace Overlord
                 dict["opinions"] = opinions;
             }
 
+            // RimWorld's own social log for this pawn (see BuildSocialLog). Outside the
+            // relations null-check above: the log exists even for a pawn with no direct
+            // relations, and reads from Find.PlayLog rather than pawn.relations.
+            dict["socialLog"] = BuildSocialLog(pawn);
+
             // Inventory (carried items, not worn apparel)
             if (pawn.inventory?.innerContainer != null)
             {
@@ -659,6 +691,72 @@ namespace Overlord
                 dict["currentJob"] = jobLabel;
 
             return JsonHelper.ToJson(dict);
+        }
+
+        // ── Social interaction log ──────────────────────────────────────────────
+        // Viewer request (aSoapyoid, 2026-08-10): "it would be cool to get to see
+        // that social logs on overlord" — i.e. RimWorld's own Social-tab log, so a
+        // viewer can see who their colonist actually talked to and how it landed.
+        //
+        // Find.PlayLog is the SOCIAL log specifically (combat lives in the separate
+        // Find.BattleLog) and holds the three PlayLogEntry_Interaction* types.
+        // Entries are newest-first.
+        //
+        // COST, because this is the kind of walk the north star forbids doing per
+        // tick: AllEntries holds hundreds of entries, and Concerns() plus the
+        // grammar resolution inside ToGameStringFromPOV() are both per-entry. So it
+        // is bounded twice — scan at most SocialLogScanDepth, return at most
+        // SocialLogMaxEntries — and it is only ever reached from Serialize(), which
+        // is diff-gated. Its signature term (ComputeSlowSubHash) hashes entry TICKS
+        // only, never the formatted string, so the expensive call stays out of the
+        // change-detection path entirely.
+        private const int SocialLogScanDepth = 120;
+        private const int SocialLogMaxEntries = 12;
+
+        // Log text carries Unity rich-text markup (<color=#RRGGBB>, <b>) that a browser
+        // would either render as its own HTML or show as literal angle brackets. RimWorld
+        // does ship GenText.StripTags, but its overload takes more than the string alone
+        // and the assembly exposes no parameter names to read, so rather than guess at a
+        // signature this strips the one construct that actually appears here. The client
+        // escapes the result again on render — this is presentation, not sanitisation.
+        private static readonly System.Text.RegularExpressions.Regex MarkupTag =
+            new System.Text.RegularExpressions.Regex("<[^>]{0,64}>",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static string StripMarkup(string value)
+            => string.IsNullOrEmpty(value) ? value : MarkupTag.Replace(value, string.Empty);
+
+        private static List<Dictionary<string, object>> BuildSocialLog(Pawn pawn)
+        {
+            var log = new List<Dictionary<string, object>>();
+            var entries = Find.PlayLog?.AllEntries;
+            if (entries == null || pawn == null)
+                return log;
+
+            int nowTick = Find.TickManager?.TicksAbs ?? 0;
+            int limit = Math.Min(entries.Count, SocialLogScanDepth);
+            for (int i = 0; i < limit && log.Count < SocialLogMaxEntries; i++)
+            {
+                var entry = entries[i];
+                if (entry == null) continue;
+                try
+                {
+                    if (!entry.Concerns(pawn)) continue;
+                    string text = StripMarkup(entry.ToGameStringFromPOV(pawn));
+                    if (string.IsNullOrEmpty(text)) continue;
+                    log.Add(new Dictionary<string, object>
+                    {
+                        ["text"] = text.Trim(),
+                        // Age at SEND time. It does not tick forward on its own between
+                        // updates; a new interaction (or any other state change) is what
+                        // refreshes it. Fine for a log — the reader cares what happened,
+                        // and while the game is unpaused updates arrive constantly.
+                        ["ticksAgo"] = Math.Max(0, nowTick - entry.Tick)
+                    });
+                }
+                catch { }   // an entry naming a since-destroyed pawn can throw mid-format
+            }
+            return log;
         }
 
         private static List<object> GetOutfitPolicyOptions()
