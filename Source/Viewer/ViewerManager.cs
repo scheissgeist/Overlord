@@ -23,6 +23,47 @@ namespace Overlord
     {
         private Dictionary<string, ViewerSession> sessions = new Dictionary<string, ViewerSession>();
 
+        // How many pawn_state sends were skipped because the serialized payload was
+        // byte-identical to what that viewer already had. Logged on a slow cadence so
+        // the saving is visible without the log itself becoming the noise.
+        private int identicalPayloadsSkipped;
+        private float lastIdenticalSkipLogTime;
+        private const float IdenticalSkipLogIntervalSeconds = 60f;
+
+        private void MaybeLogIdenticalPayloadSkips()
+        {
+            float now = UnityEngine.Time.realtimeSinceStartup;
+            if (lastIdenticalSkipLogTime > 0f && now - lastIdenticalSkipLogTime < IdenticalSkipLogIntervalSeconds)
+                return;
+            lastIdenticalSkipLogTime = now;
+            LogUtil.Log($"[Overlord] pawn_state: skipped {identicalPayloadsSkipped} byte-identical payload(s) so far this session");
+        }
+
+        /// <summary>
+        /// FNV-1a over the payload. Deliberately not string.GetHashCode(): that is
+        /// documented as unstable across runtimes and versions, and this value is
+        /// compared against one stored earlier in the same session — a silent change in
+        /// hashing behaviour would show up as "everything is always different", i.e. the
+        /// bug this exists to remove, with no error to notice.
+        /// </summary>
+        private static int StableStringHash(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return 0;
+            unchecked
+            {
+                const uint offset = 2166136261;
+                const uint prime = 16777619;
+                uint hash = offset;
+                for (int i = 0; i < value.Length; i++)
+                {
+                    hash ^= value[i];
+                    hash *= prime;
+                }
+                return (int)hash;
+            }
+        }
+
         // Reverse lookup: pawn thingID -> username
         private Dictionary<int, string> pawnToViewer = new Dictionary<int, string>();
         private Dictionary<string, PendingClaim> pendingClaims = new Dictionary<string, PendingClaim>();
@@ -849,16 +890,59 @@ namespace Overlord
                     PawnStateSerializer.InvalidateSignatureCache(pawn);
                     signature = PawnStateSerializer.ComputeStateSignature(pawn);
                     var stateJson = PawnStateSerializer.Serialize(pawn);
-                    var msg = StateProtocol.BuildPawnStateMessage(session, stateJson);
 
-                    // Commit the hash ONLY if the message was actually accepted. It used
-                    // to be stored before the send, and the send can silently drop: the
-                    // relay socket may be closed or reconnecting, or the outgoing queue
-                    // over its 250-message cap. With the hash already committed, nothing
-                    // recomputes until the pawn's state changes AGAIN — so a viewer could
-                    // sit on stale state indefinitely, and no log line said why.
-                    if (comp != null && comp.SendToViewerPublic(session.username, msg))
+                    // GROUND TRUTH: the signature only PREDICTS a visible change; the
+                    // serialized bytes are the change. Several signature terms move
+                    // without altering what the viewer sees — the fast tier hashes the
+                    // free-text job report unbucketed, and the slow tier hashes
+                    // GetNearbyEquipment, a spatial scan that a walking pawn perturbs on
+                    // every 2s sample. Relay logs 2026-08-05 recorded 84 pawn_state
+                    // messages to one viewer at exactly 17,575 bytes each inside 45s,
+                    // with 13.6 sends/sec sustained across 8 viewers.
+                    //
+                    // So compare the PAYLOAD before spending the send. The serialize has
+                    // already happened either way; this is one hash over a string we are
+                    // holding, against ~20KB on the wire per viewer avoided.
+                    //
+                    // NOTE (2026-08-11): this supersedes an earlier diagnosis that the
+                    // compare/store used different slow-tier samples and looped forever.
+                    // Re-deriving it disproved that — GetSlowSubHash RE-CACHES the fresh
+                    // value it computes (PawnStateSerializer, GetSlowSubHash), so the
+                    // next cycle reads back exactly what was stored. The resends are
+                    // real signature changes; they were just carrying identical bytes.
+                    int payloadHash = StableStringHash(stateJson);
+                    if (session.hasPayloadHash && payloadHash == session.lastPayloadHash)
+                    {
+                        // Byte-identical to what they already hold. Adopt the signature
+                        // so the next cycle does not re-serialize the same state, and
+                        // skip the send. Safe against the dropped-send hazard the commit
+                        // below guards: we only get here because a payload with these
+                        // exact bytes was already ACCEPTED for this viewer.
+                        //
+                        // NOT `continue` — the tactical-map delta below this block still
+                        // has to run for viewers on that transport.
                         session.lastStateHash = signature;
+                        identicalPayloadsSkipped++;
+                        MaybeLogIdenticalPayloadSkips();
+                    }
+                    else
+                    {
+                        var msg = StateProtocol.BuildPawnStateMessage(session, stateJson);
+
+                        // Commit the hash ONLY if the message was actually accepted. It
+                        // used to be stored before the send, and the send can silently
+                        // drop: the relay socket may be closed or reconnecting, or the
+                        // outgoing queue over its 250-message cap. With the hash already
+                        // committed, nothing recomputes until the pawn's state changes
+                        // AGAIN — so a viewer could sit on stale state indefinitely, and
+                        // no log line said why.
+                        if (comp != null && comp.SendToViewerPublic(session.username, msg))
+                        {
+                            session.lastStateHash = signature;
+                            session.lastPayloadHash = payloadHash;
+                            session.hasPayloadHash = true;
+                        }
+                    }
                 }
 
                 // Send tile map delta (pawn/building positions)

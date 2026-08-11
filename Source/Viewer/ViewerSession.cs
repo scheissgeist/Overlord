@@ -20,6 +20,15 @@ namespace Overlord
         // Delta tracking: hash of last-sent pawn state per viewer
         public int lastStateHash;
 
+        // Hash of the last pawn-state JSON actually DELIVERED to this viewer. The
+        // signature above is a cheap predictor of change; this is the ground truth of
+        // what they already have. Transient on purpose — a reloaded host has not sent
+        // this viewer anything yet, so it must not start out claiming it has.
+        [System.NonSerialized]
+        public int lastPayloadHash;
+        [System.NonSerialized]
+        public bool hasPayloadHash;
+
         // Transient tactical-map stream envelope. Resets on host reload/save load.
         [System.NonSerialized]
         public int tacticalMapEpoch;
