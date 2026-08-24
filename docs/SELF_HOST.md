@@ -4,6 +4,21 @@ Run your own Overlord stack. This guide uses placeholders only. Replace every `Y
 
 ---
 
+## First: do you even need a relay?
+
+**No, if you just want to play with friends.** Leave **Relay Server URL blank** in
+Mod Settings → Overlord and the mod serves the viewer UI itself on
+`localPort` (default `8421`). Friends open `http://<your-LAN-IP>:8421`, type any
+name, and claim a colonist — no Twitch application, no relay, no host secret,
+and nothing broadcast anywhere. Remote friends need a port-forward or a tunnel
+(Tailscale, `cloudflared`, ngrok). If only your own machine can connect, RimWorld
+could not bind all interfaces — run it as administrator and check the log.
+
+The rest of this guide is for **Twitch / stream mode**, where viewers log in with
+their Twitch accounts through a relay you host.
+
+---
+
 ## What you need
 
 | Piece | Role |

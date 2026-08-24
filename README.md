@@ -4,9 +4,12 @@ Twitch viewers control your RimWorld colonists from a browser.
 
 Assign a colonist to a viewer and they get a live control panel: needs, health, skills, map view, draft/move/work/gear, and (optionally) a Twitch Toolkit store in the same window.
 
-**RimWorld 1.5 / 1.6** · requires **[Harmony](https://github.com/pardeike/HarmonyRimWorld)** · self-hosted relay
+**RimWorld 1.5 / 1.6** · requires **[Harmony](https://github.com/pardeike/HarmonyRimWorld)**
 
-There is no shared public server. Each streamer runs their own relay.
+**You do not need Twitch, and you do not need to be streaming.** Overlord runs in two modes:
+
+- **Local / friends mode** — no Twitch, no relay, no stream. Friends open a link on your network and type any name. See [Play with friends](#play-with-friends-no-twitch-no-streaming) or the full **[Hosting guide](docs/HOSTING_GUIDE.md)**.
+- **Twitch / stream mode** — viewers log in with Twitch through a relay you host. There is no shared public server; each streamer runs their own relay. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 
 ![Overlord in-game host tab — viewer sessions, assignment board, and permissions](docs/images/overlord-host-ui.png)
 
@@ -30,6 +33,30 @@ Viewers (browser + Twitch login)
 - **Viewers** — open your relay URL, log in with Twitch, claim or wait for assignment.
 
 Native pawn control (draft, move, work, gear) is Overlord. Toolkit **Buy** still needs Toolkit loaded and its Twitch chat client connected in RimWorld.
+
+---
+
+## Play with friends (no Twitch, no streaming)
+
+Overlord does not require Twitch or a relay. In **local mode** the mod serves the
+viewer UI itself, straight from your game.
+
+1. In **Mod Settings → Overlord**, leave **Relay Server URL blank**.
+2. Note the **Local server port** (default `8421`).
+3. Start or load a save.
+4. Friends open `http://<your-computer's-LAN-IP>:8421` in a browser.
+5. They type any name — no Twitch login — and claim a colonist.
+
+That's it. No relay to deploy, no Twitch application, no host secret, and nothing
+has to be broadcast anywhere.
+
+**Playing with friends outside your network?** The mod only serves your local
+network. To reach remote friends, either forward the port on your router or use a
+tunnel (Tailscale, `cloudflared`, ngrok) and hand them that address instead.
+
+**If only your own machine can connect,** RimWorld could not bind all network
+interfaces and fell back to localhost-only. Run RimWorld as administrator and
+check the log — it states which one happened.
 
 ---
 

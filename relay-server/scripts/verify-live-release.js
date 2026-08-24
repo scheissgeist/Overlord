@@ -5,7 +5,11 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
-const DEFAULT_URL = 'https://overlord-relay.fly.dev/';
+// No default: this script must never point at someone else's live relay.
+// Pass the target explicitly, e.g. `node verify-live-release.js https://your-app.fly.dev/`
+// or set RELAY_URL. (Previously this defaulted to the author's own relay, which
+// made it the one copyable URL in a public repo — and their bandwidth bill.)
+const DEFAULT_URL = process.env.RELAY_URL || '';
 
 function argValue(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -100,7 +104,12 @@ async function observe(baseUrl, expected) {
 }
 
 async function main() {
-  const baseUrl = new URL(argValue('--url', process.env.OVERLORD_LIVE_URL || DEFAULT_URL)).toString();
+  const target = argValue('--url', process.env.OVERLORD_LIVE_URL || DEFAULT_URL);
+  if (!target) {
+    console.error('No relay URL given. Pass --url https://your-app.fly.dev/ or set RELAY_URL / OVERLORD_LIVE_URL.');
+    process.exit(2);
+  }
+  const baseUrl = new URL(target).toString();
   const expected = argValue('--expected', process.env.OVERLORD_EXPECTED_BUILD || readLocalBuild());
   const timeoutMs = Math.max(5000, Number(argValue('--timeout-ms', '60000')) || 60000);
   const startedAt = Date.now();

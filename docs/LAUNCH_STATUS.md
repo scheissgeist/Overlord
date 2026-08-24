@@ -5,7 +5,9 @@ Quick pointer for future agents. Full private detail: `docs/HANDOFF_2026_07_09.m
 ## Live
 
 - GitHub: https://github.com/scheissgeist/Overlord (`master` only; orphan clean history)
-- Release: https://github.com/scheissgeist/Overlord/releases/tag/v0.1.0
+- Release (always-current link to hand out): https://github.com/scheissgeist/Overlord/releases/latest
+  - Latest as of 2026-08-23: v0.2.2 (`Overlord-0.2.2.zip`). Do NOT paste a versioned
+    tag URL publicly — it goes stale on the next release.
 - Workshop: https://steamcommunity.com/sharedfiles/filedetails/?id=3760983440 (Public, id `3760983440`)
 - Feedback: broteampill@gmail.com
 - Announced: Reddit + X

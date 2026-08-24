@@ -3,7 +3,13 @@
     <name>Overlord</name>
     <author>BroTeamPill</author>
     <packageId>BroTeamPill.Overlord</packageId>
-    <description>Twitch viewers control your colonists through their browser. Assign a colonist to a viewer and they get a live control panel with skills, needs, health, map view, and full pawn commands. Self-hosted relay, mobile-first UI, narrow Harmony patch surface.
+    <description>Let other people control your colonists from a browser. Assign a colonist and they get a live control panel with skills, needs, health, map view, and full pawn commands.
+
+Two ways to play:
+- With friends: leave the Relay URL blank in Mod Settings. The mod serves the page itself, friends open your local address and type any name. No Twitch, no relay, no streaming.
+- With Twitch viewers: they log in with Twitch through a relay you host. There is no shared public server; each streamer runs their own.
+
+Mobile-first UI, narrow Harmony patch surface. Setup guide: https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md
 
 Inspired by Puppeteer (Andreas Pardeike / Brrainz). New codebase for RimWorld 1.5/1.6; not affiliated with Puppeteer.</description>
     <supportedVersions>

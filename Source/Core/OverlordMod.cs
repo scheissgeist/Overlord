@@ -23,6 +23,107 @@ namespace Overlord
             LogUtil.Log("Mod loaded, Harmony patches applied");
         }
 
+        /// <summary>
+        /// Cryptographically-random host secret. Hand-invented secrets are the common
+        /// failure here — people pick something short, or mistype it into one of the two
+        /// places it must match.
+        /// </summary>
+        private static string GenerateHostSecret()
+        {
+            const string alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            var bytes = new byte[32];
+            using (var rng = new System.Security.Cryptography.RNGCryptoServiceProvider())
+                rng.GetBytes(bytes);
+            var sb = new System.Text.StringBuilder(bytes.Length);
+            foreach (byte b in bytes) sb.Append(alphabet[b % alphabet.Length]);
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Live setup status at the top of the settings window. This exists because the
+        /// relay URL and host secret were previously bare text fields that reported
+        /// NOTHING — a typo produced silence, and the streamer concluded the mod was
+        /// broken. Reads state that already existed (RelayClient.IsConnected,
+        /// EmbeddedWebServer.Instance) rather than probing anything.
+        /// </summary>
+        private static void DrawConnectionStatus(Listing_Standard listing)
+        {
+            bool relayMode = !string.IsNullOrEmpty(Settings.relayUrl);
+            var comp = OverlordGameComponent.Instance;
+
+            Color prev = GUI.color;
+
+            if (!relayMode)
+            {
+                // ── Friends / local mode ──────────────────────────────────────────
+                var server = EmbeddedWebServer.Instance;
+                bool running = server != null && server.IsRunning;
+
+                if (running)
+                {
+                    string lan = EmbeddedWebServer.GetLanAddress();
+                    if (server.BoundAllInterfaces && !string.IsNullOrEmpty(lan))
+                    {
+                        GUI.color = Color.green;
+                        listing.Label($"Friends mode — ready. Send friends:  http://{lan}:{Settings.localPort}");
+                        GUI.color = prev;
+                        listing.Label("    They open that in a browser, type any name, and claim a colonist. No Twitch, no relay.");
+                    }
+                    else if (server.BoundAllInterfaces)
+                    {
+                        GUI.color = Color.green;
+                        listing.Label($"Friends mode — running on port {Settings.localPort} (LAN address unknown).");
+                        GUI.color = prev;
+                        listing.Label("    Find your local IP (Windows: run 'ipconfig') and send friends http://THAT-IP:" + Settings.localPort);
+                    }
+                    else
+                    {
+                        GUI.color = Color.yellow;
+                        listing.Label($"Friends mode — THIS MACHINE ONLY (http://localhost:{Settings.localPort}).");
+                        GUI.color = prev;
+                        listing.Label("    RimWorld could not bind all network interfaces, so friends cannot connect. Run RimWorld as administrator to fix.");
+                    }
+                }
+                else
+                {
+                    GUI.color = Color.gray;
+                    listing.Label("Friends mode — not started yet.");
+                    GUI.color = prev;
+                    listing.Label("    The local server starts when you load or begin a save. Come back here after loading to get the link for friends.");
+                }
+                return;
+            }
+
+            // ── Relay / Twitch mode ───────────────────────────────────────────────
+            if (comp?.Relay == null)
+            {
+                GUI.color = Color.gray;
+                listing.Label("Relay mode — not started yet.");
+                GUI.color = prev;
+                listing.Label("    The host connects when you load or begin a save.");
+            }
+            else if (comp.Relay.IsConnected)
+            {
+                GUI.color = Color.green;
+                listing.Label("Relay mode — connected. Send viewers your relay's public URL.");
+                GUI.color = prev;
+            }
+            else
+            {
+                GUI.color = Color.red;
+                listing.Label("Relay mode — NOT connected.");
+                GUI.color = prev;
+                listing.Label("    Check: the URL below is right, the host secret matches HOST_SECRET on the relay, and the relay is running.");
+            }
+
+            if (string.IsNullOrEmpty(Settings.hostSecret))
+            {
+                GUI.color = Color.yellow;
+                listing.Label("    No host secret set — the relay will reject this host. Use Generate below.");
+                GUI.color = prev;
+            }
+        }
+
         public override string SettingsCategory()
         {
             return "Overlord";
@@ -90,15 +191,21 @@ namespace Overlord
             Settings.captureBisectLevel = (int)listing.Slider(Settings.captureBisectLevel, 0f, 4f);
             listing.GapLine();
 
-            listing.Label("Relay Server URL (leave blank for local-only mode):");
+            DrawConnectionStatus(listing);
+            listing.GapLine();
+
+            listing.Label("Relay Server URL (leave blank to play with friends — no Twitch, no stream):");
+            listing.Label($"    Blank = the mod serves the viewer UI itself on port {Settings.localPort}. Friends open http://<your-LAN-IP>:{Settings.localPort} in a browser, type any name, and claim a colonist. No Twitch app, no relay, no host secret. Set a URL below only for Twitch/stream mode.");
             Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
 
             listing.Gap(4f);
             listing.Label("Host secret (must match HOST_SECRET on relay server):");
             var secretRect = listing.GetRect(28f);
             float btnWidth = 60f;
-            var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - btnWidth - 4f, secretRect.height);
+            float genWidth = 80f;
+            var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - btnWidth - genWidth - 8f, secretRect.height);
             var toggleRect = new Rect(fieldRect.xMax + 4f, secretRect.y, btnWidth, secretRect.height);
+            var genRect = new Rect(toggleRect.xMax + 4f, secretRect.y, genWidth, secretRect.height);
             if (showHostSecret)
             {
                 Settings.hostSecret = Widgets.TextField(fieldRect, Settings.hostSecret);
@@ -110,6 +217,12 @@ namespace Overlord
             }
             if (Widgets.ButtonText(toggleRect, showHostSecret ? "Hide" : "Show"))
                 showHostSecret = !showHostSecret;
+            if (Widgets.ButtonText(genRect, "Generate"))
+            {
+                Settings.hostSecret = GenerateHostSecret();
+                showHostSecret = true;
+            }
+            listing.Label("    Must match HOST_SECRET on your relay exactly. Generate makes a strong one — copy it to the relay.");
 
             listing.Gap(6f);
             listing.Label("Local server port:");

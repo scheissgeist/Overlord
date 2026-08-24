@@ -38,6 +38,9 @@ namespace Overlord
         public static EmbeddedWebServer Instance { get; private set; }
 
         private HttpListener listener;
+        private bool boundAllInterfaces;
+        private static string cachedLanAddress;
+        private static bool lanAddressCached;
         private CancellationTokenSource cts;
         private Thread serverThread;
         private readonly int port;
@@ -77,6 +80,7 @@ namespace Overlord
             {
                 listener.Prefixes.Add($"http://+:{port}/");
                 listener.Start();
+                boundAllInterfaces = true;
                 LogUtil.Log($"Embedded web server started on port {port} (all interfaces)");
             }
             catch
@@ -86,6 +90,7 @@ namespace Overlord
                     listener = new HttpListener();
                     listener.Prefixes.Add($"http://localhost:{port}/");
                     listener.Start();
+                    boundAllInterfaces = false;
                     LogUtil.Log($"Embedded web server started on localhost:{port} (local only - run as admin for LAN access)");
                 }
                 catch (Exception ex)
@@ -163,6 +168,61 @@ namespace Overlord
         }
 
         public bool IsRunning => running;
+
+        /// <summary>
+        /// True when the listener bound all network interfaces (friends on your LAN can
+        /// reach it). False means it fell back to localhost-only — usually because
+        /// RimWorld was not run as administrator, so only this machine can connect.
+        /// </summary>
+        public bool BoundAllInterfaces => boundAllInterfaces;
+
+        /// <summary>
+        /// Best-effort LAN address other machines would use to reach this server, e.g.
+        /// "192.168.1.20". Returns null if no non-loopback IPv4 address is found.
+        /// Cached — enumerating interfaces is not something to do per GUI frame.
+        /// </summary>
+        public static string GetLanAddress()
+        {
+            if (lanAddressCached) return cachedLanAddress;
+            lanAddressCached = true;
+            try
+            {
+                // Preferred: the address that would be used to reach an external host.
+                // No packets are sent — connecting a UDP socket only sets the route.
+                using (var probe = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram,
+                    System.Net.Sockets.ProtocolType.Udp))
+                {
+                    probe.Connect("8.8.8.8", 65530);
+                    if (probe.LocalEndPoint is IPEndPoint ep && ep.Address != null)
+                    {
+                        string addr = ep.Address.ToString();
+                        if (!string.IsNullOrEmpty(addr) && addr != "0.0.0.0" && !addr.StartsWith("127."))
+                        {
+                            cachedLanAddress = addr;
+                            return cachedLanAddress;
+                        }
+                    }
+                }
+            }
+            catch { /* no route / offline / blocked — fall through to host lookup */ }
+
+            try
+            {
+                foreach (var ip in Dns.GetHostAddresses(Dns.GetHostName()))
+                {
+                    if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                    string addr = ip.ToString();
+                    if (addr.StartsWith("127.")) continue;
+                    cachedLanAddress = addr;
+                    return cachedLanAddress;
+                }
+            }
+            catch { /* leave null; the UI falls back to explaining how to find it */ }
+
+            return cachedLanAddress;
+        }
         public int Port => port;
 
         private void ServerLoop()
