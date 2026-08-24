@@ -37,7 +37,11 @@ GOLD = (210, 169, 93)
 GOLD_HI = (240, 207, 130)
 
 # Wordmark letterforms only (no tagline, no rules) — measured from Preview.png.
-WORDMARK_BOX = (430, 75, 1245, 265)
+# Top edge MEASURED, not eyeballed: scanning bright-pixel counts per row shows the
+# deco rule at y=60-62 (726 px), an empty gap at y=86, and letterforms starting at
+# y=88. The old y=75 cut through the gap and dragged a sliver of the rule in, which
+# rendered as a stray mark floating above the L.
+WORDMARK_BOX = (430, 87, 1245, 265)
 # The star-in-circle seal.
 # Measured by thresholding Preview.png, not eyeballed — v5 clipped the ring top.
 SEAL_BOX = (816, 29, 879, 90)
@@ -147,25 +151,35 @@ def build(shot_path: Path, name: str):
     y = wm_y + wm.height + 34
     _deco_rule(d, inner_x0, inner_x1, y)
 
-    # HIERARCHY — tower file 01: extreme jumps in SIZE, WEIGHT, FACE and
-    # BRIGHTNESS together, never a smooth 1.25x scale. Weight 800 vs 300 is the
-    # "200 vs 800, not 400 vs 600" rule, now actually reachable via the variable axis.
+    # COPY — rewritten against the Voice section of docs/BRAND_SYSTEM.md.
+    #
+    # The previous version chopped ONE sentence across four type tiers
+    # ("YOUR VIEWERS / OR YOUR FRIENDS" then "control your colonists, / from a
+    # browser."), so the display tier said nothing on its own and the body tier
+    # was a fragment. The reader had to reassemble it. It also used none of the
+    # game's own vocabulary, which the doc requires ("RIMWORLD-NATIVE: reuse the
+    # game's own words — Prioritize, Draft, Haul, Tend"), and its last line led
+    # with a NEGATIVE ("NO TWITCH ACCOUNT REQUIRED") — stating what you lack
+    # instead of what you can do.
+    #
+    # Now: the display tier is a COMPLETE, standalone claim. The mono tier lists
+    # real RimWorld orders, which doubles as proof of depth. The dim tier states
+    # both modes as capability, in the flat overseer register.
     y += 36
     f_lead = _font(34, "condensed", weight=700)
-    for line in ("YOUR VIEWERS", "OR YOUR FRIENDS"):
+    for line in ("HAND A COLONIST", "TO SOMEONE ELSE"):
         d.text((inner_x0, y), line, font=f_lead, fill=GOLD_HI)
         y += 40
 
-    y += 10
-    f_body = _font(17, "mono")
-    for line in ("control your colonists,", "from a browser."):
+    y += 12
+    f_body = _font(16, "mono")
+    for line in ("They draft, move, prioritize,", "haul, tend — from a browser."):
         d.text((inner_x0, y), line, font=f_body, fill=GOLD)
-        y += 25
+        y += 24
 
-    # Dimmest tier — the 5% in 70/25/5. Carries the fact the old art never did.
-    y += 42
+    y += 40
     f_small = _font(13, "mono")
-    for line in ("TWITCH STREAM  /  LOCAL CO-OP", "NO TWITCH ACCOUNT REQUIRED"):
+    for line in ("VIEWERS ON STREAM.", "OR FRIENDS ON YOUR NETWORK."):
         d.text((inner_x0, y), line, font=f_small, fill=(132, 116, 86))
         y += 20
 
