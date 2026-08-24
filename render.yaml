@@ -1,0 +1,29 @@
+# Render blueprint for the Overlord relay.
+#
+# This exists so the "Deploy to Render" button in README.md works: Render reads
+# this file to learn what to build. The relay is ONE service and is single-tenant
+# by construction (server.js keeps a single module-level hostSocket), so one
+# deployment serves exactly one streamer. Each streamer deploys their own under
+# their own account — that is what keeps the bill theirs.
+services:
+  - type: web
+    name: overlord-relay
+    runtime: node
+    rootDir: relay-server
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      # Generated in-game: Mod Settings -> Overlord -> Generate, then copy here.
+      # Must match the Host secret in Mod Settings exactly or the relay rejects
+      # the game (server.js fails closed when this is unset).
+      - key: HOST_SECRET
+        sync: false
+      # From https://dev.twitch.tv/console/apps. Without it viewers CANNOT log in
+      # (/auth/twitch returns 503) — to play without Twitch, use the mod's local
+      # mode instead of running a relay at all.
+      - key: TWITCH_CLIENT_ID
+        sync: false
+      - key: MAX_VIEWERS
+        value: "50"

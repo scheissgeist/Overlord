@@ -1391,5 +1391,14 @@ setInterval(() => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 server.listen(PORT, () => {
   console.log(`[relay] Overlord relay server listening on port ${PORT}`);
-  if (!TWITCH_CLIENT_ID) console.warn('[relay] TWITCH_CLIENT_ID not set — running in guest mode');
+  if (!TWITCH_CLIENT_ID) {
+    // NOT a "guest mode" — there is no anonymous login on the relay path. With no
+    // client id, /auth/twitch returns 503 and the viewer UI shows "Twitch auth is
+    // not configured", so NOBODY can log in. The old wording claimed a working
+    // mode that does not exist and sent people looking for it.
+    // Playing without Twitch is the MOD's local mode (blank Relay URL in Mod
+    // Settings), which does not involve this server at all.
+    console.warn('[relay] TWITCH_CLIENT_ID not set — viewers CANNOT log in; /auth/twitch will return 503.');
+    console.warn('[relay] To play without Twitch, leave Relay Server URL blank in Mod Settings (local mode) instead of running this relay.');
+  }
 });

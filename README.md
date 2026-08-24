@@ -11,6 +11,21 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 - **Local / friends mode** — no Twitch, no relay, no stream. Friends open a link on your network and type any name. See [Play with friends](#play-with-friends-no-twitch-no-streaming) or the full **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 - **Twitch / stream mode** — viewers log in with Twitch through a relay you host. There is no shared public server; each streamer runs their own relay. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 
+### Deploy your own relay
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https%3A%2F%2Fgithub.com%2Fscheissgeist%2FOverlord&rootDirectory=relay-server&envs=HOST_SECRET%2CTWITCH_CLIENT_ID)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scheissgeist/Overlord)
+
+The relay runs **under your own account**, so the bill (usually $0 on a free tier)
+is yours and never someone else's. You will be asked for two values:
+
+| Variable | Where it comes from |
+|---|---|
+| `HOST_SECRET` | Mod Settings → Overlord → **Generate**, then copy |
+| `TWITCH_CLIENT_ID` | [Twitch Developer Console](https://dev.twitch.tv/console/apps) → your app |
+
+Prefer the CLI, or want Fly.io / Docker? See **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
+
 ![Overlord in-game host tab — viewer sessions, assignment board, and permissions](docs/images/overlord-host-ui.png)
 
 *In-game Overlord tab: assign viewers, manage colonists, and set permissions.*
