@@ -13,6 +13,16 @@ const PORT             = parseInt(process.env.PORT || '8080', 10);
 const HOST_SECRET      = process.env.HOST_SECRET      || '';
 const MAX_VIEWERS      = parseInt(process.env.MAX_VIEWERS || '50', 10);
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
+// Name-only viewer login, so a streamer can deploy a relay and have people join it
+// over the internet WITHOUT first registering a Twitch developer application —
+// which was the single hardest step of setup and the one most people never finish.
+//
+// Deliberately IGNORED when TWITCH_CLIENT_ID is set. With both enabled, a guest
+// could type the login of a real Twitch viewer and inherit that person's colonist,
+// their replay cache and their auto-reconnect pairing. Making the two mutually
+// exclusive removes the impersonation path entirely instead of policing it.
+const GUEST_LOGIN = !TWITCH_CLIENT_ID
+  && /^(1|true|yes|on)$/i.test(process.env.ALLOW_GUEST_LOGIN || '');
 const LOG_TRAFFIC      = process.env.LOG_TRAFFIC !== '0';
 const LOG_DIR          = process.env.LOG_DIR || path.join(__dirname, 'logs');
 const INSTANCE_ID      = process.env.FLY_MACHINE_ID || `${process.pid}`;
@@ -667,6 +677,10 @@ app.get('/', (_req, res) => {
       'data-twitch-client-id=""',
       `data-twitch-client-id="${TWITCH_CLIENT_ID}"`
     );
+    html = html.replace(
+      'data-allow-guest=""',
+      `data-allow-guest="${GUEST_LOGIN ? 'true' : ''}"`
+    );
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
@@ -701,6 +715,7 @@ app.get('/health', (_req, res) => {
     replayCacheViewers: viewerReplayCache.size,
     host:    hostSocket !== null && hostSocket.readyState === WebSocket.OPEN,
     twitch:  !!TWITCH_CLIENT_ID,
+    guest:   GUEST_LOGIN,
   });
 });
 
@@ -747,6 +762,41 @@ app.post('/auth/twitch', async (req, res) => {
     recordOps('auth_error', { error: e.message });
     res.status(500).json({ error: 'Auth server error' });
   }
+});
+
+// ─── Guest login ──────────────────────────────────────────────────────────────
+// Browser calls: POST /auth/guest  { name: "someone" }
+// Returns:       { sessionToken, login, displayName }  — the same shape /auth/twitch
+// returns, so the viewer client treats the two identically from here on.
+app.post('/auth/guest', (req, res) => {
+  if (!GUEST_LOGIN) {
+    return res.status(503).json({
+      error: TWITCH_CLIENT_ID
+        ? 'This relay uses Twitch login.'
+        : 'Guest login is not enabled on this relay.',
+    });
+  }
+
+  const raw = String((req.body && (req.body.name || req.body.username)) || '').trim();
+  const login = raw.toLowerCase();
+  if (!/^[a-z0-9_][a-z0-9_-]{0,23}$/.test(login)) {
+    recordOps('auth_failed', { reason: 'invalid_guest_name' });
+    return res.status(400).json({
+      error: 'Use letters, numbers, _ or - (up to 24 characters, no spaces).',
+    });
+  }
+
+  // Two people on the same name would silently evict each other on the viewer
+  // socket ("Reconnected from another tab"), which reads as a broken relay.
+  const existing = viewers.get(login);
+  if (existing && existing.readyState === WebSocket.OPEN) {
+    recordOps('auth_failed', { reason: 'guest_name_taken', username: login });
+    return res.status(409).json({ error: 'Someone here is already using that name.' });
+  }
+
+  const session = createViewerSession(login, raw.slice(0, 24) || login, SESSION_TTL_MS);
+  recordOps('auth_ok', { username: login, displayName: session.displayName, guest: true });
+  res.json(session);
 });
 
 function validateTwitchToken(token) {
@@ -1398,7 +1448,12 @@ server.listen(PORT, () => {
     // mode that does not exist and sent people looking for it.
     // Playing without Twitch is the MOD's local mode (blank Relay URL in Mod
     // Settings), which does not involve this server at all.
-    console.warn('[relay] TWITCH_CLIENT_ID not set — viewers CANNOT log in; /auth/twitch will return 503.');
-    console.warn('[relay] To play without Twitch, leave Relay Server URL blank in Mod Settings (local mode) instead of running this relay.');
+    if (GUEST_LOGIN) {
+      console.warn('[relay] TWITCH_CLIENT_ID not set. ALLOW_GUEST_LOGIN is on, so viewers join by typing a name — anyone with this URL can join as anyone. Fine for a first run or a private group; set TWITCH_CLIENT_ID before a public stream (that turns guest login off).');
+    } else {
+      console.warn('[relay] TWITCH_CLIENT_ID not set — viewers CANNOT log in; /auth/twitch will return 503.');
+      console.warn('[relay] Either set TWITCH_CLIENT_ID, or set ALLOW_GUEST_LOGIN=1 to let people join by typing a name.');
+      console.warn('[relay] To play with no server at all, leave Relay Server URL blank in Mod Settings (local mode) instead of running this relay.');
+    }
   }
 });

@@ -5,13 +5,17 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260811-cap-blocks-buy-v1';
+const UI_BUILD = '20260826-guest-login-v1';
 
-// Twitch OAuth — set TWITCH_CLIENT_ID as a data attribute on <body> or
-// injected by the server. Falls back to guest mode if absent.
+// Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
+// page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
+// no automatic fallback (the old comment here claimed one, and there wasn't).
 const TWITCH_CLIENT_ID = document.body.dataset.twitchClientId || '';
 const TWITCH_REDIRECT  = location.origin + '/';
 const EMBEDDED_MODE    = document.body.dataset.embeddedMode === 'true';
+// Name-only login, injected by a relay started with ALLOW_GUEST_LOGIN=1. The relay
+// only reports this when it has no TWITCH_CLIENT_ID, so the two are never both live.
+const GUEST_MODE       = !EMBEDDED_MODE && document.body.dataset.allowGuest === 'true';
 const RELAY_SESSION_KEY = 'overlord_session';
 const TWITCH_TOKEN_KEY = 'overlord_twitch_token';
 const LOCAL_SESSION_KEY = 'overlord_local_identity';
@@ -1406,8 +1410,13 @@ function clearTwitchAccessToken() {
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 (function initLoginUi() {
-  if (!EMBEDDED_MODE) return;
-  if (loginSubtitle) loginSubtitle.textContent = 'Connect directly to this RimWorld host';
+  if (!EMBEDDED_MODE && !GUEST_MODE) return;
+  if (loginSubtitle) {
+    loginSubtitle.textContent = EMBEDDED_MODE
+      ? 'Connect directly to this RimWorld host'
+      : 'Type a name to join';
+    loginSubtitle.classList.remove('hidden');
+  }
   if (btnTwitch) btnTwitch.classList.add('hidden');
   if (localLogin) localLogin.classList.remove('hidden');
 })();
@@ -1511,8 +1520,8 @@ function showLoginError(msg) {
   loginError.classList.remove('hidden');
 }
 
-function connectLocal() {
-  if (!EMBEDDED_MODE) return;
+async function connectLocal() {
+  if (!EMBEDDED_MODE && !GUEST_MODE) return;
   const username = usernameInput ? usernameInput.value.trim() : '';
   if (!username) {
     showLoginError('Enter a viewer name');
@@ -1520,9 +1529,34 @@ function connectLocal() {
   }
 
   clearLoginError();
-  identity = { login: username, displayName: username, local: true };
-  sessionStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(identity));
-  connect();
+
+  if (EMBEDDED_MODE) {
+    // The mod's own server has no session table — the socket itself is the identity.
+    identity = { login: username, displayName: username, local: true };
+    sessionStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(identity));
+    connect();
+    return;
+  }
+
+  // Guest on a relay: the viewer socket requires a session token, so the name has to
+  // be exchanged for one first. Same response shape as the Twitch path.
+  try {
+    const res = await fetch('/auth/guest', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name: username }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      showLoginError((data && data.error) || 'Could not join with that name');
+      return;
+    }
+    identity = { sessionToken: data.sessionToken, login: data.login, displayName: data.displayName };
+    saveRelaySession(identity);
+    connect();
+  } catch (e) {
+    showLoginError('Could not reach the relay: ' + e.message);
+  }
 }
 
 function showWaitingLobby(message) {

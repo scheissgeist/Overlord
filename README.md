@@ -27,6 +27,13 @@ is yours and never someone else's. You will be asked for two values:
 | `HOST_SECRET` | Mod Settings → Overlord → **Generate**, then copy |
 | `TWITCH_CLIENT_ID` | [Twitch Developer Console](https://dev.twitch.tv/console/apps) → your app |
 
+**Trying it without a Twitch app:** leave `TWITCH_CLIENT_ID` empty and set
+`ALLOW_GUEST_LOGIN=1`. Viewers then open your relay URL, type a name and join —
+no login, and unlike friends mode it reaches people outside your network. Anyone
+with the URL can join as any name, so it is for testing or a private group. Filling
+in `TWITCH_CLIENT_ID` later turns guest login off automatically; the relay refuses
+to run both.
+
 **On Railway instead:** [import this repo from GitHub](https://railway.com/new/github?repo=https://github.com/scheissgeist/Overlord).
 Railway only one-clicks templates published to its own marketplace, so there is no
 button here — after the import, set **Root Directory** to `relay-server` and add the

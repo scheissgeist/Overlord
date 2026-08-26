@@ -20,10 +20,17 @@ services:
       # the game (server.js fails closed when this is unset).
       - key: HOST_SECRET
         sync: false
-      # From https://dev.twitch.tv/console/apps. Without it viewers CANNOT log in
-      # (/auth/twitch returns 503) — to play without Twitch, use the mod's local
-      # mode instead of running a relay at all.
+      # From https://dev.twitch.tv/console/apps. Leave it EMPTY for a first run and
+      # set ALLOW_GUEST_LOGIN below instead — then viewers join by typing a name and
+      # you can skip registering a Twitch application entirely. With neither set,
+      # nobody can log in at all (/auth/twitch returns 503).
       - key: TWITCH_CLIENT_ID
         sync: false
+      # "1" turns on name-only login. IGNORED whenever TWITCH_CLIENT_ID is set, so
+      # filling that in later switches this off by itself — the two can never both be
+      # live, which is what stops a guest typing a real viewer's name.
+      # Anyone with the URL can join as any name while this is on. Test/private use.
+      - key: ALLOW_GUEST_LOGIN
+        value: ""
       - key: MAX_VIEWERS
         value: "50"

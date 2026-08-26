@@ -128,6 +128,7 @@ namespace Overlord
             }
 
             bool twitchConfigured = body.IndexOf("\"twitch\":true", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool guestLogin = body.IndexOf("\"guest\":true", StringComparison.OrdinalIgnoreCase) >= 0;
             bool hostConnected = body.IndexOf("\"host\":true", StringComparison.OrdinalIgnoreCase) >= 0;
 
             // Secret check. Only meaningful if one is set locally.
@@ -164,10 +165,17 @@ namespace Overlord
                 ? "A host is already connected to this relay — if that is not this game, you are sharing a relay and will kick each other off."
                 : "No host connected yet; this game claims the slot when you load a save.";
 
+            if (guestLogin)
+            {
+                Finish(Status.Ok, "Relay reachable, host secret accepted. Viewers join by typing a name.",
+                       "Guest login is on and Twitch login is off, so anyone with the URL can join as any name. Good for a first run or a private group; set TWITCH_CLIENT_ID on the relay before a public stream.  " + note);
+                return;
+            }
+
             if (!twitchConfigured)
             {
                 Finish(Status.Warn, "Relay reachable, secret accepted — but viewers cannot log in.",
-                       "TWITCH_CLIENT_ID is not set on the relay, so /auth/twitch returns 503. Set it from dev.twitch.tv/console/apps. (To play with no Twitch at all, clear the relay URL instead and use friends mode.)  " + note);
+                       "The relay has neither TWITCH_CLIENT_ID nor ALLOW_GUEST_LOGIN set, so /auth/twitch returns 503 and there is no name-only path either. Set one of them on the relay. (To play with no server at all, clear the relay URL and use friends mode.)  " + note);
                 return;
             }
 

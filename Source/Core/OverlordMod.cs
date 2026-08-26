@@ -176,13 +176,231 @@ namespace Overlord
             }
         }
 
+        // UI-only. The runtime mode is still decided by whether relayUrl is empty
+        // (OverlordGameComponent), so this only chooses which panel is on screen —
+        // and the relay panel says so out loud while the URL is still blank.
+        private static bool uiTwitchMode;
+        private static bool uiModeInitialized;
+        private static string stashedRelayUrl = "";
+
+        /// <summary>
+        /// The first thing in the settings window, because it is the first thing a new
+        /// streamer needs. This window used to open on four camera presets and a
+        /// capture-bisect debug ladder; "how does anyone connect to me" was answered by
+        /// an empty text box further down whose *blankness* was itself the mode switch.
+        /// Nobody discovers a mode encoded as an empty field.
+        /// </summary>
+        private static void DrawSetupSection(Listing_Standard listing)
+        {
+            if (!uiModeInitialized)
+            {
+                uiTwitchMode = !string.IsNullOrEmpty(Settings.relayUrl);
+                uiModeInitialized = true;
+            }
+
+            Text.Font = GameFont.Medium;
+            listing.Label("Setup");
+            Text.Font = GameFont.Small;
+            listing.Gap(2f);
+
+            var modeRect = listing.GetRect(34f);
+            float half = (modeRect.width - 8f) / 2f;
+            var friendsRect = new Rect(modeRect.x, modeRect.y, half, modeRect.height);
+            var twitchRect = new Rect(friendsRect.xMax + 8f, modeRect.y, half, modeRect.height);
+
+            Color prev = GUI.color;
+            Color off = new Color(0.6f, 0.6f, 0.6f);
+
+            GUI.color = uiTwitchMode ? off : Color.green;
+            if (Widgets.ButtonText(friendsRect, "Play with friends"))
+            {
+                if (!string.IsNullOrEmpty(Settings.relayUrl)) stashedRelayUrl = Settings.relayUrl;
+                Settings.relayUrl = "";
+                uiTwitchMode = false;
+                RelayProbe.Reset();
+            }
+            GUI.color = uiTwitchMode ? Color.green : off;
+            if (Widgets.ButtonText(twitchRect, "Stream to Twitch"))
+            {
+                if (string.IsNullOrEmpty(Settings.relayUrl)) Settings.relayUrl = stashedRelayUrl;
+                uiTwitchMode = true;
+                RelayProbe.Reset();
+            }
+            GUI.color = prev;
+
+            listing.Gap(2f);
+            listing.Label(uiTwitchMode
+                ? "    Viewers log in with Twitch through a relay server you run. Free tier, ~20 minutes, once."
+                : "    No Twitch, no relay, no stream, no accounts. Your game serves the page itself.");
+            listing.Gap(6f);
+
+            DrawConnectionStatus(listing);
+            listing.Gap(8f);
+
+            if (uiTwitchMode) DrawRelaySetup(listing);
+            else DrawFriendsSetup(listing);
+
+            DrawCopiedNote(listing);
+        }
+
+        private static void StepLabel(Listing_Standard listing, bool done, string text)
+        {
+            Color prev = GUI.color;
+            GUI.color = done ? Color.green : new Color(0.78f, 0.78f, 0.78f);
+            listing.Label(text);
+            GUI.color = prev;
+        }
+
+        private static void DrawFriendsSetup(Listing_Standard listing)
+        {
+            var server = EmbeddedWebServer.Instance;
+            bool running = server != null && server.IsRunning;
+            string lan = running ? EmbeddedWebServer.GetLanAddress() : null;
+            bool haveLink = running && server.BoundAllInterfaces && !string.IsNullOrEmpty(lan);
+            string link = haveLink ? $"http://{lan}:{Settings.localPort}" : null;
+
+            StepLabel(listing, true, "1.  Nothing to deploy and no accounts to make. Your game is the server.");
+            StepLabel(listing, running, "2.  Load or start a save." + (running ? "" : "   The page only exists while a game is open."));
+
+            StepLabel(listing, haveLink, "3.  Send your friends this link:");
+            if (haveLink)
+            {
+                var row = listing.GetRect(28f);
+                var copyRect = new Rect(row.xMax - 70f, row.y, 70f, row.height);
+                var linkRect = new Rect(row.x, row.y, row.width - 78f, row.height);
+                Widgets.TextField(linkRect, link);
+                if (Widgets.ButtonText(copyRect, "Copy")) CopyToClipboard(link, "the link");
+            }
+            else if (!running)
+            {
+                listing.Label("        The link appears here once a save is loaded — come back then.");
+            }
+            else
+            {
+                Color prev = GUI.color;
+                GUI.color = Color.yellow;
+                listing.Label($"        Only this machine can connect (http://localhost:{Settings.localPort}). RimWorld could not listen on your network — close it, right-click, Run as administrator.");
+                GUI.color = prev;
+            }
+
+            StepLabel(listing, false, "4.  They open it, type any name, and claim a colonist. No login.");
+
+            listing.Gap(6f);
+            listing.Label("Port:");
+            string portStr = listing.TextEntry(Settings.localPort.ToString());
+            if (int.TryParse(portStr, out int parsedPort) && parsedPort >= 1024 && parsedPort <= 65535)
+                Settings.localPort = parsedPort;
+
+            listing.Gap(4f);
+            listing.Label("Friends outside your house cannot use that link — it is a local address. Put you both on a tunnel (Tailscale is free) and the same link works, or forward the port on your router.");
+            if (listing.ButtonText("Open the hosting guide"))
+                Application.OpenURL("https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md");
+        }
+
+        private static void DrawRelaySetup(Listing_Standard listing)
+        {
+            bool haveSecret = !string.IsNullOrEmpty(Settings.hostSecret);
+            bool haveUrl = !string.IsNullOrEmpty(Settings.relayUrl);
+
+            // ── 1. secret ──
+            StepLabel(listing, haveSecret, "1.  Make a host secret. This is the password your game uses to claim the relay.");
+            var secretRect = listing.GetRect(28f);
+            const float showW = 60f, genW = 80f, copyW = 70f;
+            var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - showW - genW - copyW - 12f, secretRect.height);
+            var toggleRect = new Rect(fieldRect.xMax + 4f, secretRect.y, showW, secretRect.height);
+            var genRect = new Rect(toggleRect.xMax + 4f, secretRect.y, genW, secretRect.height);
+            var copyRect = new Rect(genRect.xMax + 4f, secretRect.y, copyW, secretRect.height);
+
+            if (showHostSecret)
+            {
+                string secretBefore = Settings.hostSecret;
+                Settings.hostSecret = Widgets.TextField(fieldRect, Settings.hostSecret);
+                if (Settings.hostSecret != secretBefore) RelayProbe.Reset();
+            }
+            else
+            {
+                string masked = Settings.hostSecret.Length > 0 ? new string('*', System.Math.Min(Settings.hostSecret.Length, 32)) : "";
+                Widgets.Label(fieldRect, masked);
+            }
+            if (Widgets.ButtonText(toggleRect, showHostSecret ? "Hide" : "Show")) showHostSecret = !showHostSecret;
+            if (Widgets.ButtonText(genRect, "Generate"))
+            {
+                Settings.hostSecret = GenerateHostSecret();
+                showHostSecret = true;
+                RelayProbe.Reset();
+            }
+            if (Widgets.ButtonText(copyRect, "Copy") && haveSecret)
+                CopyToClipboard(Settings.hostSecret, "the host secret");
+            listing.Label("        Click Generate, then Copy. Hand-typing this is where setup usually breaks — it has to match on both sides exactly.");
+
+            // ── 2. relay ──
+            listing.Gap(4f);
+            StepLabel(listing, haveUrl, "2.  Deploy a relay under your own account. It asks for these:");
+            listing.Label("        HOST_SECRET — the value you just copied.");
+            listing.Label("        TWITCH_CLIENT_ID — from the Twitch developer console. It goes on the relay, not here.");
+            listing.Label("        Skipping the Twitch app for a first run: set ALLOW_GUEST_LOGIN=1 instead and leave TWITCH_CLIENT_ID empty. Viewers then join by typing a name, so anyone with the URL can join as anyone — fine for a test or a private group, not for a public stream.");
+            var btnRow = listing.GetRect(30f);
+            float third = (btnRow.width - 16f) / 3f;
+            if (Widgets.ButtonText(new Rect(btnRow.x, btnRow.y, third, btnRow.height), "Hosting guide"))
+                Application.OpenURL("https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md");
+            if (Widgets.ButtonText(new Rect(btnRow.x + third + 8f, btnRow.y, third, btnRow.height), "Deploy a relay"))
+                Application.OpenURL("https://render.com/deploy?repo=https://github.com/scheissgeist/Overlord");
+            if (Widgets.ButtonText(new Rect(btnRow.x + 2f * (third + 8f), btnRow.y, third, btnRow.height), "Twitch console"))
+                Application.OpenURL("https://dev.twitch.tv/console/apps");
+
+            // ── 3. url ──
+            listing.Gap(6f);
+            StepLabel(listing, haveUrl, "3.  Paste the address the host gave you (https://your-app.onrender.com):");
+            string urlBefore = Settings.relayUrl;
+            Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
+            if (Settings.relayUrl != urlBefore) RelayProbe.Reset();
+            if (!haveUrl)
+            {
+                Color prev = GUI.color;
+                GUI.color = Color.yellow;
+                listing.Label("        Blank, so the game will still run in friends mode when you load a save.");
+                GUI.color = prev;
+            }
+            else
+            {
+                listing.Label("        Set the same address as the OAuth Redirect URL on your Twitch app, or viewers cannot log in.");
+            }
+
+            // ── 4. test ──
+            listing.Gap(4f);
+            StepLabel(listing, RelayProbe.State == RelayProbe.Status.Ok, "4.  Check it before you go live:");
+            DrawRelayTest(listing);
+        }
+
         public override string SettingsCategory()
         {
             return "Overlord";
         }
 
         private Vector2 settingsScroll;
-        private bool showHostSecret;
+        private static bool showHostSecret;
+        private float settingsContentHeight = 1600f;
+
+        // Inline "Copied." confirmation — Messages.Message is not safe to fire from the
+        // main menu, where most of setup happens.
+        private static string copiedLabel;
+        private static float copiedAt;
+
+        private static void CopyToClipboard(string value, string what)
+        {
+            GUIUtility.systemCopyBuffer = value;
+            copiedLabel = what;
+            copiedAt = Time.realtimeSinceStartup;
+        }
+
+        private static void DrawCopiedNote(Listing_Standard listing)
+        {
+            if (copiedLabel == null || Time.realtimeSinceStartup - copiedAt > 4f) return;
+            Color prev = GUI.color;
+            GUI.color = Color.green;
+            listing.Label("    Copied " + copiedLabel + " to the clipboard.");
+            GUI.color = prev;
+        }
 
         public override void DoSettingsWindowContents(Rect inRect)
         {
@@ -191,11 +409,14 @@ namespace Overlord
             Settings.mapUpdateInterval = Mathf.Clamp(Settings.mapUpdateInterval, 0.08f, 1f);
 
             // Scrollable area for all settings
-            var viewRect = new Rect(0f, 0f, inRect.width - 20f, 1180f);
+            var viewRect = new Rect(0f, 0f, inRect.width - 20f, settingsContentHeight);
             Widgets.BeginScrollView(inRect, ref settingsScroll, viewRect);
 
             var listing = new Listing_Standard();
             listing.Begin(viewRect);
+
+            DrawSetupSection(listing);
+            listing.GapLine();
 
             listing.Label("Live setup");
             listing.Gap(4f);
@@ -235,59 +456,6 @@ namespace Overlord
             }
             listing.Gap(6f);
             listing.Label("Live-safe keeps viewer events off, tactical map data private, area limits on, and camera traffic moderate. Sharp binary camera is for one or a few viewers. Smooth tactical map is the recommended low-lag control path (browser tilemap).");
-            listing.GapLine();
-
-            listing.CheckboxLabeled("Pause live map capture (troubleshooting)", ref Settings.disableMapCapture,
-                "Stops all off-screen map rendering for viewers. Viewers keep full pawn control; they just lose the live map picture. Use to isolate graphics problems: if an issue disappears with this on, it's in the capture pipeline.");
-            listing.Label($"Capture bisect level: {Settings.captureBisectLevel}  (0 = normal. Troubleshooting ladder: 1 = camera only, 2 = +terrain, 3 = +pawns, 4 = +weather. Raise until the bug appears — that level is the culprit.)");
-            Settings.captureBisectLevel = (int)listing.Slider(Settings.captureBisectLevel, 0f, 4f);
-            listing.GapLine();
-
-            DrawConnectionStatus(listing);
-            listing.GapLine();
-
-            listing.Label("Relay Server URL (leave blank to play with friends — no Twitch, no stream):");
-            listing.Label($"    Blank = the mod serves the viewer UI itself on port {Settings.localPort}. Friends open http://<your-LAN-IP>:{Settings.localPort} in a browser, type any name, and claim a colonist. No Twitch app, no relay, no host secret. Set a URL below only for Twitch/stream mode.");
-            string urlBefore = Settings.relayUrl;
-            Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
-            if (Settings.relayUrl != urlBefore) RelayProbe.Reset();
-
-            listing.Gap(4f);
-            listing.Label("Host secret (must match HOST_SECRET on relay server):");
-            var secretRect = listing.GetRect(28f);
-            float btnWidth = 60f;
-            float genWidth = 80f;
-            var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - btnWidth - genWidth - 8f, secretRect.height);
-            var toggleRect = new Rect(fieldRect.xMax + 4f, secretRect.y, btnWidth, secretRect.height);
-            var genRect = new Rect(toggleRect.xMax + 4f, secretRect.y, genWidth, secretRect.height);
-            if (showHostSecret)
-            {
-                string secretBefore = Settings.hostSecret;
-                Settings.hostSecret = Widgets.TextField(fieldRect, Settings.hostSecret);
-                if (Settings.hostSecret != secretBefore) RelayProbe.Reset();
-            }
-            else
-            {
-                string masked = Settings.hostSecret.Length > 0 ? new string('*', System.Math.Min(Settings.hostSecret.Length, 32)) : "";
-                Widgets.Label(fieldRect, masked);
-            }
-            if (Widgets.ButtonText(toggleRect, showHostSecret ? "Hide" : "Show"))
-                showHostSecret = !showHostSecret;
-            if (Widgets.ButtonText(genRect, "Generate"))
-            {
-                Settings.hostSecret = GenerateHostSecret();
-                showHostSecret = true;
-                RelayProbe.Reset();
-            }
-            listing.Label("    Must match HOST_SECRET on your relay exactly. Generate makes a strong one — copy it to the relay.");
-
-            DrawRelayTest(listing);
-
-            listing.Gap(6f);
-            listing.Label("Local server port:");
-            string portStr = listing.TextEntry(Settings.localPort.ToString());
-            if (int.TryParse(portStr, out int parsedPort) && parsedPort >= 1024 && parsedPort <= 65535)
-                Settings.localPort = parsedPort;
 
             listing.GapLine();
             listing.Label("Live Camera");
@@ -356,8 +524,23 @@ namespace Overlord
             listing.Label($"Respawn cooldown: {Settings.respawnCooldownTicks / 60f:F0}s");
             Settings.respawnCooldownTicks = (int)listing.Slider(Settings.respawnCooldownTicks, 0, 15000);
 
+            // Troubleshooting lives at the BOTTOM. It used to be the third thing a
+            // first-time streamer saw, above the connection status — a capture-bisect
+            // ladder before they had connected anyone.
+            listing.GapLine();
+            listing.Label("Troubleshooting");
+            listing.Gap(4f);
+            listing.CheckboxLabeled("Pause live map capture", ref Settings.disableMapCapture,
+                "Stops all off-screen map rendering for viewers. Viewers keep full pawn control; they just lose the live map picture. Use to isolate graphics problems: if an issue disappears with this on, it's in the capture pipeline.");
+            listing.Label($"Capture bisect level: {Settings.captureBisectLevel}  (0 = normal. Ladder: 1 = camera only, 2 = +terrain, 3 = +pawns, 4 = +weather. Raise until the bug appears — that level is the culprit.)");
+            Settings.captureBisectLevel = (int)listing.Slider(Settings.captureBisectLevel, 0f, 4f);
+
             listing.End();
             Widgets.EndScrollView();
+
+            // Measure what was actually drawn so the scroll view stops clipping its own
+            // bottom. The height was a hardcoded 1180f, shorter than this content.
+            settingsContentHeight = listing.CurHeight + 24f;
         }
     }
 }

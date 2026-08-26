@@ -51,9 +51,20 @@ and your viewers, because your viewers are not on your home network.
 $0 on a free tier) and means nobody else's traffic touches it.
 
 ### What you'll need
-- A free hosting account — [Fly.io](https://fly.io) or [Railway](https://railway.app)
-- A free [Twitch developer application](https://dev.twitch.tv/console/apps) (for viewer login)
+- A free hosting account — [Render](https://render.com), [Fly.io](https://fly.io) or [Railway](https://railway.app)
+- A free [Twitch developer application](https://dev.twitch.tv/console/apps) — **or skip it**, see below
 - About 20 minutes, once
+
+### Skipping the Twitch app on your first run
+Registering a Twitch application is the longest step and you do not need it to try
+this. Set **`ALLOW_GUEST_LOGIN=1`** on the relay and leave `TWITCH_CLIENT_ID`
+empty: viewers then open your relay URL, type a name, and join — no login at all,
+and unlike friends mode it works over the internet with no tunnel.
+
+The tradeoff is real: **anyone with the URL can join as any name.** Use it to test,
+or with a group you trust. When you fill in `TWITCH_CLIENT_ID` later, guest login
+switches off by itself — the relay ignores it whenever Twitch is configured, so the
+two can never both be live and nobody can type a real viewer's name.
 
 ### Step 1 — Get a host secret
 In **Mod Settings → Overlord**, click **Generate** next to Host secret, then
@@ -61,6 +72,9 @@ In **Mod Settings → Overlord**, click **Generate** next to Host secret, then
 host slot. Keep it private — anyone with it can kick you off your own relay.
 
 ### Step 2 — Register a Twitch application
+Skip this entirely if you are using guest login (above) — set `ALLOW_GUEST_LOGIN=1`
+in step 3 instead and come back here when you want real Twitch names.
+
 1. Open the [Twitch Developer Console](https://dev.twitch.tv/console/apps) → **Register Your Application**.
 2. **Name:** anything. **Category:** Application Integration.
 3. **OAuth Redirect URL:** your relay's address, which you'll have after step 3.
@@ -100,7 +114,8 @@ and claim a colonist, or you assign one from the Overlord tab.
 | `No host secret set` | Click **Generate**, then put the same value on the relay. |
 | `Friends mode — THIS MACHINE ONLY` | Run RimWorld as administrator. |
 | `Friends mode — not started yet` | Load a save; the server starts with the game. |
-| Viewers can't log in | `TWITCH_CLIENT_ID` missing, or the Twitch redirect URL doesn't exactly match the address viewers open. |
+| Viewers can't log in | Neither `TWITCH_CLIENT_ID` nor `ALLOW_GUEST_LOGIN` is set on the relay, or the Twitch redirect URL doesn't exactly match the address viewers open. **Test connection** in Mod Settings names which one. |
+| The name box didn't appear | `ALLOW_GUEST_LOGIN` is ignored while `TWITCH_CLIENT_ID` is set. Clear the client id to use guest login. |
 | Another streamer kicked you off | You're both on one relay. Each streamer needs their own. |
 
 ## Costs
