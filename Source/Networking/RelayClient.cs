@@ -21,6 +21,10 @@ namespace Overlord
 
         private string relayUrl;
         private string hostSecret;
+        // Issued by the relay when this game joined one somebody else runs. When set
+        // it is sent instead of the secret, and it is what puts this game in its OWN
+        // room rather than competing for the operator's.
+        private string hostKey;
         private volatile bool isConnected;
         private volatile bool shouldReconnect;
         private volatile bool senderRunning;
@@ -38,10 +42,11 @@ namespace Overlord
         public event Action OnDisconnected;
         public event Action<string> OnMessageReceived;
 
-        public RelayClient(string serverUrl, string secret = "")
+        public RelayClient(string serverUrl, string secret = "", string key = "")
         {
             relayUrl = NormalizeUrl(serverUrl);
             hostSecret = secret ?? "";
+            hostKey = key ?? "";
         }
 
         public void Connect()
@@ -219,9 +224,16 @@ namespace Overlord
                 try
                 {
                     webSocket = new ClientWebSocket();
-                    string connectUrl = string.IsNullOrEmpty(hostSecret)
-                        ? $"{relayUrl}?role=host"
-                        : $"{relayUrl}?role=host&secret={Uri.EscapeDataString(hostSecret)}";
+                    // A key wins over a secret: a game that joined someone else's
+                    // relay has both a room of its own and, possibly, a stale secret
+                    // left over from an earlier setup.
+                    string connectUrl;
+                    if (!string.IsNullOrEmpty(hostKey))
+                        connectUrl = $"{relayUrl}?role=host&key={Uri.EscapeDataString(hostKey)}";
+                    else if (!string.IsNullOrEmpty(hostSecret))
+                        connectUrl = $"{relayUrl}?role=host&secret={Uri.EscapeDataString(hostSecret)}";
+                    else
+                        connectUrl = $"{relayUrl}?role=host";
 
                     LogUtil.Log($"Connecting to relay: {connectUrl}");
                     await webSocket.ConnectAsync(new Uri(connectUrl), cts.Token);

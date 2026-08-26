@@ -297,13 +297,141 @@ namespace Overlord
                 Application.OpenURL("https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md");
         }
 
+        // Two ways to be in relay mode, and they are wildly different amounts of work:
+        // JOIN a relay somebody else runs (paste an address, press a button, done), or
+        // RUN one yourself (an account, env vars, a Twitch app). The first is what
+        // almost everyone wants and it used to not exist, so it goes first and the
+        // second is folded away behind a toggle.
+        private static bool showRunMyOwn;
+        private static string inviteCode = "";
+        private static string joinLabel = "";
+
         private static void DrawRelaySetup(Listing_Standard listing)
         {
-            bool haveSecret = !string.IsNullOrEmpty(Settings.hostSecret);
-            bool haveUrl = Settings.HasRelayUrl;
+            if (!string.IsNullOrEmpty(Settings.hostKey))
+            {
+                DrawJoinedRelay(listing);
+                return;
+            }
 
-            // ── 1. secret ──
-            StepLabel(listing, haveSecret, "1.  Make a host secret. This is the password your game uses to claim the relay.");
+            StepLabel(listing, false, "Paste the relay address someone sent you, then press Join.");
+            listing.Label("        You do not need an account, a server, or a Twitch app. The relay hands your game a room and remembers it for you.");
+
+            string urlBefore = Settings.relayUrl;
+            // Trimmed on the way in: a URL pasted with padding used to pass the probe
+            // (which trims) and fail the real connection (which did not).
+            Settings.relayUrl = listing.TextEntry(Settings.relayUrl).Trim();
+            if (Settings.relayUrl != urlBefore) { RelayProbe.Reset(); RelayJoin.Reset(); }
+
+            listing.Gap(4f);
+            var row = listing.GetRect(30f);
+            var joinRect = new Rect(row.x, row.y, 150f, row.height);
+            var nameRect = new Rect(joinRect.xMax + 8f, row.y, Mathf.Min(220f, row.width - 320f), row.height);
+            var inviteRect = new Rect(nameRect.xMax + 8f, row.y, Mathf.Max(120f, row.xMax - nameRect.xMax - 8f), row.height);
+
+            if (RelayJoin.IsRunning)
+            {
+                Widgets.ButtonText(joinRect, "Joining...", true, true, false);
+            }
+            else if (Widgets.ButtonText(joinRect, "Join this relay"))
+            {
+                RelayJoin.Start(Settings.relayUrl, joinLabel, inviteCode);
+            }
+            joinLabel = Widgets.TextField(nameRect, joinLabel);
+            inviteCode = Widgets.TextField(inviteRect, inviteCode);
+            listing.Label("        Middle box: a name for your game in the relay's list (optional). Right box: an invite code, only if you were given one.");
+
+            Color prev = GUI.color;
+            switch (RelayJoin.State)
+            {
+                case RelayJoin.Status.Running:
+                    GUI.color = Color.gray;
+                    listing.Label("    " + RelayJoin.Headline);
+                    GUI.color = prev;
+                    break;
+                case RelayJoin.Status.Ok:
+                case RelayJoin.Status.Fail:
+                    GUI.color = RelayJoin.State == RelayJoin.Status.Ok ? Color.green : Color.red;
+                    listing.Label("    " + RelayJoin.Headline);
+                    GUI.color = prev;
+                    if (!string.IsNullOrEmpty(RelayJoin.Detail)) listing.Label("        " + RelayJoin.Detail);
+                    break;
+            }
+
+            listing.Gap(8f);
+            if (listing.ButtonText(showRunMyOwn ? "Hide: I run my own relay" : "I run my own relay"))
+                showRunMyOwn = !showRunMyOwn;
+            if (showRunMyOwn) DrawRunMyOwnRelay(listing);
+        }
+
+        /// <summary>
+        /// After joining: the only thing that matters is the link to hand out, so it is
+        /// the only thing shown, with a Copy button. The host key is deliberately never
+        /// displayed — nobody has any reason to see it, and showing a credential invites
+        /// someone to paste it somewhere.
+        /// </summary>
+        private static void DrawJoinedRelay(Listing_Standard listing)
+        {
+            StepLabel(listing, true, "You are hosting on " + Settings.relayUrl);
+            listing.Gap(2f);
+            listing.Label("Send people this link:");
+
+            var row = listing.GetRect(28f);
+            var copyRect = new Rect(row.xMax - 70f, row.y, 70f, row.height);
+            var linkRect = new Rect(row.x, row.y, row.width - 78f, row.height);
+            Widgets.TextField(linkRect, Settings.viewerUrl);
+            if (Widgets.ButtonText(copyRect, "Copy") && !string.IsNullOrEmpty(Settings.viewerUrl))
+                CopyToClipboard(Settings.viewerUrl, "your viewer link");
+
+            listing.Label("        They open it, sign in the way that relay is set up, and claim a colonist. Load a save and you are live.");
+
+            listing.Gap(6f);
+            var btnRow = listing.GetRect(28f);
+            var testRect = new Rect(btnRow.x, btnRow.y, 150f, btnRow.height);
+            var openRect = new Rect(testRect.xMax + 8f, btnRow.y, 150f, btnRow.height);
+            var leaveRect = new Rect(openRect.xMax + 8f, btnRow.y, 150f, btnRow.height);
+
+            if (RelayProbe.IsRunning) Widgets.ButtonText(testRect, "Testing...", true, true, false);
+            else if (Widgets.ButtonText(testRect, "Test connection")) RelayProbe.Start(Settings.relayUrl, Settings.hostSecret);
+            if (Widgets.ButtonText(openRect, "Open the link") && !string.IsNullOrEmpty(Settings.viewerUrl))
+                Application.OpenURL(Settings.viewerUrl);
+            if (Widgets.ButtonText(leaveRect, "Leave this relay"))
+            {
+                Settings.hostKey = "";
+                Settings.roomId = "";
+                Settings.viewerUrl = "";
+                Settings.Write();
+                RelayJoin.Reset();
+                RelayProbe.Reset();
+            }
+
+            Color prev = GUI.color;
+            switch (RelayProbe.State)
+            {
+                case RelayProbe.Status.Idle:
+                    break;
+                case RelayProbe.Status.Running:
+                    GUI.color = Color.gray;
+                    listing.Label("    " + RelayProbe.Headline);
+                    GUI.color = prev;
+                    break;
+                default:
+                    GUI.color = RelayProbe.State == RelayProbe.Status.Ok ? Color.green
+                              : RelayProbe.State == RelayProbe.Status.Warn ? Color.yellow
+                              : Color.red;
+                    listing.Label("    " + RelayProbe.Headline);
+                    GUI.color = prev;
+                    break;
+            }
+        }
+
+        /// <summary>The operator path: you deployed the relay, so you hold HOST_SECRET.</summary>
+        private static void DrawRunMyOwnRelay(Listing_Standard listing)
+        {
+            bool haveSecret = !string.IsNullOrEmpty(Settings.hostSecret);
+
+            listing.Gap(4f);
+            StepLabel(listing, haveSecret, "1.  Make a host secret. This is the password your game uses to claim your relay.");
             var secretRect = listing.GetRect(28f);
             const float showW = 60f, genW = 80f, copyW = 70f;
             var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - showW - genW - copyW - 12f, secretRect.height);
@@ -331,14 +459,14 @@ namespace Overlord
             }
             if (Widgets.ButtonText(copyRect, "Copy") && haveSecret)
                 CopyToClipboard(Settings.hostSecret, "the host secret");
-            listing.Label("        Click Generate, then Copy. Hand-typing this is where setup usually breaks — it has to match on both sides exactly.");
+            listing.Label("        Generate, then Copy. Hand-typing this is where setup usually breaks - it has to match on both sides exactly.");
 
-            // ── 2. relay ──
             listing.Gap(4f);
-            StepLabel(listing, haveUrl, "2.  Deploy a relay under your own account. It asks for these:");
-            listing.Label("        HOST_SECRET — the value you just copied.");
-            listing.Label("        TWITCH_CLIENT_ID — from the Twitch developer console. It goes on the relay, not here.");
-            listing.Label("        Skipping the Twitch app for a first run: set ALLOW_GUEST_LOGIN=1 instead and leave TWITCH_CLIENT_ID empty. Viewers then join by typing a name, so anyone with the URL can join as anyone — fine for a test or a private group, not for a public stream.");
+            StepLabel(listing, Settings.HasRelayUrl, "2.  Deploy a relay under your own account. It asks for these:");
+            listing.Label("        HOST_SECRET - the value you just copied.");
+            listing.Label("        TWITCH_CLIENT_ID - from the Twitch developer console. It goes on the relay, not here.");
+            listing.Label("        ALLOW_GUEST_LOGIN=1 instead, with TWITCH_CLIENT_ID empty, lets viewers join by typing a name - no Twitch app at all. Anyone with the link can then join as anyone, so it is for a test or a private group.");
+            listing.Label("        OPEN_HOSTING=1 lets OTHER streamers press Join and host on your relay. Their viewers cost your bandwidth, so MAX_ROOMS caps how many games at once.");
             var btnRow = listing.GetRect(30f);
             float third = (btnRow.width - 16f) / 3f;
             if (Widgets.ButtonText(new Rect(btnRow.x, btnRow.y, third, btnRow.height), "Hosting guide"))
@@ -348,29 +476,8 @@ namespace Overlord
             if (Widgets.ButtonText(new Rect(btnRow.x + 2f * (third + 8f), btnRow.y, third, btnRow.height), "Twitch console"))
                 Application.OpenURL("https://dev.twitch.tv/console/apps");
 
-            // ── 3. url ──
             listing.Gap(6f);
-            StepLabel(listing, haveUrl, "3.  Paste the address the host gave you (https://your-app.onrender.com):");
-            string urlBefore = Settings.relayUrl;
-            // Trimmed on the way in: a URL pasted with padding used to pass the probe
-            // (which trims) and fail the real connection (which did not).
-            Settings.relayUrl = listing.TextEntry(Settings.relayUrl).Trim();
-            if (Settings.relayUrl != urlBefore) RelayProbe.Reset();
-            if (!haveUrl)
-            {
-                Color prev = GUI.color;
-                GUI.color = Color.yellow;
-                listing.Label("        Blank, so the game will still run in friends mode when you load a save.");
-                GUI.color = prev;
-            }
-            else
-            {
-                listing.Label("        Set the same address as the OAuth Redirect URL on your Twitch app, or viewers cannot log in.");
-            }
-
-            // ── 4. test ──
-            listing.Gap(4f);
-            StepLabel(listing, RelayProbe.State == RelayProbe.Status.Ok, "4.  Check it before you go live:");
+            StepLabel(listing, RelayProbe.State == RelayProbe.Status.Ok, "3.  Check it before you go live:");
             DrawRelayTest(listing);
         }
 

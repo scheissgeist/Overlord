@@ -7,8 +7,19 @@ namespace Overlord
         // Relay server URL (Fly.io or custom)
         public string relayUrl = "";
 
-        // Pre-shared secret sent by the game host to authenticate with the relay
+        // Pre-shared secret sent by the game host to authenticate with the relay.
+        // Only used when YOU run the relay. Someone joining a relay another person
+        // runs never touches this — see hostKey.
         public string hostSecret = "";
+
+        // Issued by the relay when you join one somebody else runs. The mod asks for
+        // it, stores it, and sends it; nobody types or copies a credential. This is
+        // what makes "anyone can host" reachable by a person who does not program.
+        public string hostKey = "";
+        public string roomId = "";
+        // The link to hand to viewers, as the relay built it. Kept so the settings
+        // screen can offer a Copy button without the streamer assembling a URL.
+        public string viewerUrl = "";
 
         // Local embedded server port (fallback when no relay)
         public int localPort = 8421;
@@ -113,6 +124,9 @@ namespace Overlord
             if (Scribe.mode == LoadSaveMode.LoadingVars || Scribe.mode == LoadSaveMode.PostLoadInit)
                 relayUrl = (relayUrl ?? string.Empty).Trim();
             Scribe_Values.Look(ref hostSecret, "hostSecret", "");
+            Scribe_Values.Look(ref hostKey, "hostKey", "");
+            Scribe_Values.Look(ref roomId, "roomId", "");
+            Scribe_Values.Look(ref viewerUrl, "viewerUrl", "");
             Scribe_Values.Look(ref localPort, "localPort", 8421);
             Scribe_Values.Look(ref mapImageSize, "mapImageSize", 720);
             Scribe_Values.Look(ref mapImageQuality, "mapImageQuality", 68);

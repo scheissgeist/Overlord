@@ -100,7 +100,7 @@ namespace Overlord
             // either. A blank-looking box has to mean blank.
             if (!string.IsNullOrWhiteSpace(settings.relayUrl))
             {
-                relayClient = new RelayClient(settings.relayUrl, settings.hostSecret);
+                relayClient = new RelayClient(settings.relayUrl, settings.hostSecret, settings.hostKey);
                 relayClient.OnConnected += () =>
                 {
                     LogUtil.Log("Connected to relay server");
