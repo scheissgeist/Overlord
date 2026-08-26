@@ -229,8 +229,12 @@ namespace Overlord
             GUI.color = prev;
 
             listing.Gap(2f);
+            // "Free tier, ~20 minutes, once" meant SETUP takes twenty minutes. Sean read
+            // it as a twenty-minute usage limit and asked what was being restricted -
+            // which is the only reading that matters. Never put a bare duration next to
+            // the words "free tier"; say what the number measures, or drop it.
             listing.Label(uiTwitchMode
-                ? "    Viewers log in with Twitch through a relay server you run. Free tier, ~20 minutes, once."
+                ? "    Viewers log in with Twitch through a relay. Join one a friend already runs, or run your own. No time limits either way."
                 : "    No Twitch, no relay, no stream, no accounts. Your game serves the page itself.");
             listing.Gap(6f);
 

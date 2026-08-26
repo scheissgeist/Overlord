@@ -30,16 +30,22 @@ const OPEN_HOSTING = /^(1|true|yes|on)$/i.test(process.env.OPEN_HOSTING || '');
 // Optional gate on top of OPEN_HOSTING: only people who were handed this code can
 // register. Lets a streamer open the relay to friends without opening it to the web.
 const HOST_INVITE_CODE = process.env.HOST_INVITE_CODE || '';
-// Every room costs memory and, far more importantly, upstream bandwidth: each viewer
-// pulls ~10 JPEG frames/sec, so the bill scales rooms x viewers. This is the ceiling.
-const MAX_ROOMS = Math.max(1, parseInt(process.env.MAX_ROOMS || '8', 10));
-// A room with no host and no viewers is swept after this long.
-const ROOM_IDLE_MS = Math.max(60 * 1000, parseInt(process.env.ROOM_IDLE_MS || String(30 * 60 * 1000), 10));
-// A room that registered and NEVER hosted is swept much sooner. Without this, every
-// abandoned Join attempt - a typo, a closed game, a user who changed their mind -
-// permanently consumed one of MAX_ROOMS, and the relay answered the next real
-// streamer with "This relay is full." Measured: a second run of the acceptance
-// suite against a persisted registry failed at registration with HTTP 503.
+// Rooms are permanent now, so this counts everyone who has EVER hosted here, not
+// how many are live at once. It is deliberately generous: a dormant room is a few
+// Maps, and it is viewers - not rooms - that cost bandwidth. MAX_TOTAL_VIEWERS is
+// the limit that bounds the bill.
+const MAX_ROOMS = Math.max(1, parseInt(process.env.MAX_ROOMS || '200', 10));
+// A room that has EVER hosted is permanent. It used to be swept after 30 idle
+// minutes, which quietly expired the link its streamer had already handed out -
+// take a break longer than a coffee and everyone you invited hits a dead URL. A
+// dormant room costs a few Maps and nothing on the wire; the thing that actually
+// costs money is viewers, and MAX_TOTAL_VIEWERS bounds that directly.
+// The ONE remaining time limit, and it can never touch a real streamer: a room that
+// registered and NEVER hosted is dropped after this long. Without it every abandoned
+// Join - a typo, a closed game, someone changing their mind - permanently consumed
+// one of MAX_ROOMS and the relay answered the next real streamer with "This relay is
+// full" (measured: a second run of the acceptance suite failed at registration with
+// HTTP 503). Once a game connects even once, the room is kept forever.
 const ROOM_UNCLAIMED_MS = Math.max(60 * 1000, parseInt(process.env.ROOM_UNCLAIMED_MS || String(10 * 60 * 1000), 10));
 // MAX_VIEWERS is PER ROOM, so the real ceiling was MAX_ROOMS x MAX_VIEWERS - 400 at
 // the defaults, eight times what the operator thinks they capped. Egress is the
@@ -1561,17 +1567,13 @@ function reapIdleRooms() {
     if (room.owner) continue;                       // the operator's own room is permanent
     if (roomIsLive(room)) continue;
     if (room.viewers.size > 0) continue;
-    // A room that has never had a host is an abandoned Join, not a stream between
-    // sessions, and it must not hold a slot for half an hour.
-    const grace = room.hostConnectedAt === 0 ? ROOM_UNCLAIMED_MS : ROOM_IDLE_MS;
-    if (now - room.lastActiveAt < grace) continue;
+    // NEVER reap a room that has hosted. Its streamer's link stays valid for good,
+    // whether they are away for ten minutes or a month.
+    if (room.hostConnectedAt !== 0) continue;
+    if (now - room.lastActiveAt < ROOM_UNCLAIMED_MS) continue;
     for (const login of Array.from(room.contextMenuRequests.keys())) clearContextMenuRequest(room, login);
     rooms.delete(roomId);
-    recordOps('room_reaped', {
-      room: roomId,
-      idleMs: now - room.lastActiveAt,
-      everHosted: room.hostConnectedAt !== 0,
-    });
+    recordOps('room_reaped', { room: roomId, idleMs: now - room.lastActiveAt, reason: 'never_hosted' });
     persistRooms();
   }
 }
@@ -1649,8 +1651,10 @@ app.get('/api/rooms', (_req, res) => {
 // env var, a secret, or a deploy button. The mod calls this once, is handed a
 // room and a key, stores them itself, and connects. Nothing is typed by hand.
 const registerHits = new Map(); // ip -> {count, windowStart}
+// Anti-abuse only: enough headroom that a person retrying a typo, or a household
+// on one IP, never meets it.
 const REGISTER_WINDOW_MS = 10 * 60 * 1000;
-const REGISTER_MAX_PER_WINDOW = 5;
+const REGISTER_MAX_PER_WINDOW = Math.max(1, parseInt(process.env.REGISTER_MAX_PER_WINDOW || '30', 10));
 
 function registerRateLimited(ip) {
   const now = Date.now();
