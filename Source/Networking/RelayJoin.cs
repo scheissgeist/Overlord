@@ -1,7 +1,5 @@
 using System;
-using System.IO;
 using System.Net;
-using System.Text;
 using System.Threading;
 
 namespace Overlord
@@ -57,7 +55,7 @@ namespace Overlord
         {
             if (Interlocked.CompareExchange(ref inFlight, 1, 0) != 0) return;
 
-            string baseUrl = ToHttpBase(relayUrl);
+            string baseUrl = RelayHttp.ToHttpBase(relayUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
                 Finish(Status.Fail, "No relay address to join.",
@@ -82,15 +80,14 @@ namespace Overlord
 
         private static void Run(string baseUrl, string label, string inviteCode)
         {
-            try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; }
-            catch (NotSupportedException) { }
+            RelayHttp.EnsureTls();
 
-            string body = "{\"label\":" + JsonString(label ?? "") +
-                          ",\"invite\":" + JsonString(inviteCode ?? "") + "}";
+            string body = "{\"label\":" + RelayHttp.JsonString(label ?? "") +
+                          ",\"invite\":" + RelayHttp.JsonString(inviteCode ?? "") + "}";
 
             HttpStatusCode code;
             string reply;
-            string error = Post(baseUrl + "/api/host/register", body, out code, out reply);
+            string error = RelayHttp.Post(baseUrl + "/api/host/register", body, out code, out reply);
 
             if (error != null)
             {
@@ -104,7 +101,7 @@ namespace Overlord
                 // 403 covers both "closed relay" and "wrong invite code"; the relay's
                 // own message distinguishes them, so pass it through rather than guess.
                 Finish(Status.Fail, "That relay is not accepting other hosts.",
-                       ExtractField(reply, "error") + " " + ExtractField(reply, "detail"));
+                       RelayHttp.Field(reply, "error") + " " + RelayHttp.Field(reply, "detail"));
                 return;
             }
 
@@ -117,20 +114,20 @@ namespace Overlord
             if (code == HttpStatusCode.ServiceUnavailable)
             {
                 Finish(Status.Fail, "That relay is full right now.",
-                       ExtractField(reply, "detail"));
+                       RelayHttp.Field(reply, "detail"));
                 return;
             }
 
             if (code != HttpStatusCode.OK)
             {
                 Finish(Status.Fail, "The relay refused the request (" + (int)code + ").",
-                       ExtractField(reply, "error"));
+                       RelayHttp.Field(reply, "error"));
                 return;
             }
 
-            string roomId = ExtractField(reply, "roomId");
-            string hostKey = ExtractField(reply, "hostKey");
-            string viewerPath = ExtractField(reply, "viewerPath");
+            string roomId = RelayHttp.Field(reply, "roomId");
+            string hostKey = RelayHttp.Field(reply, "hostKey");
+            string viewerPath = RelayHttp.Field(reply, "viewerPath");
 
             if (string.IsNullOrEmpty(roomId) || string.IsNullOrEmpty(hostKey))
             {
@@ -151,130 +148,6 @@ namespace Overlord
                    settings.viewerUrl);
         }
 
-        private static string Post(string url, string body, out HttpStatusCode code, out string reply)
-        {
-            code = 0;
-            reply = null;
-            HttpWebResponse response = null;
-            try
-            {
-                var request = (HttpWebRequest)WebRequest.Create(url);
-                request.Method = "POST";
-                request.ContentType = "application/json";
-                request.Timeout = 12000;
-                request.ReadWriteTimeout = 12000;
-                request.UserAgent = "Overlord-mod-join";
-                byte[] payload = Encoding.UTF8.GetBytes(body);
-                request.ContentLength = payload.Length;
-                using (var stream = request.GetRequestStream())
-                    stream.Write(payload, 0, payload.Length);
-
-                response = (HttpWebResponse)request.GetResponse();
-            }
-            catch (WebException we)
-            {
-                response = we.Response as HttpWebResponse;
-                if (response == null) return Describe(we);
-            }
-            catch (UriFormatException)
-            {
-                return "That is not a valid web address.";
-            }
-            catch (NotSupportedException e)
-            {
-                return e.Message;
-            }
-
-            try
-            {
-                code = response.StatusCode;
-                using (var stream = response.GetResponseStream())
-                {
-                    if (stream != null)
-                    {
-                        using (var reader = new StreamReader(stream))
-                        {
-                            char[] buffer = new char[8192];
-                            int read = reader.Read(buffer, 0, buffer.Length);
-                            reply = read > 0 ? new string(buffer, 0, read) : "";
-                        }
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                return "Could not read the reply: " + e.Message;
-            }
-            finally
-            {
-                response.Close();
-            }
-
-            return null;
-        }
-
-        private static string Describe(WebException we)
-        {
-            switch (we.Status)
-            {
-                case WebExceptionStatus.NameResolutionFailure:
-                    return "That host name does not resolve — check for a typo.";
-                case WebExceptionStatus.ConnectFailure:
-                    return "Nothing accepted a connection at that address.";
-                case WebExceptionStatus.Timeout:
-                    return "Timed out. A relay on a free tier can be asleep — try once more.";
-                case WebExceptionStatus.TrustFailure:
-                case WebExceptionStatus.SecureChannelFailure:
-                    return "The HTTPS certificate could not be validated.";
-                default:
-                    return we.Message;
-            }
-        }
-
-        /// <summary>
-        /// Minimal extractor for the few flat string fields the relay returns. A full
-        /// JSON parser is not worth pulling in for four keys, but this is deliberately
-        /// strict: it only matches "key":"value" at the top level of a small reply.
-        /// </summary>
-        private static string ExtractField(string json, string key)
-        {
-            if (string.IsNullOrEmpty(json)) return "";
-            string needle = "\"" + key + "\"";
-            int at = json.IndexOf(needle, StringComparison.Ordinal);
-            if (at < 0) return "";
-            int colon = json.IndexOf(':', at + needle.Length);
-            if (colon < 0) return "";
-            int i = colon + 1;
-            while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
-            if (i >= json.Length || json[i] != '"') return "";
-            i++;
-            var sb = new StringBuilder();
-            while (i < json.Length && json[i] != '"')
-            {
-                if (json[i] == '\\' && i + 1 < json.Length)
-                {
-                    i++;
-                    sb.Append(json[i] == 'n' ? '\n' : json[i]);
-                }
-                else sb.Append(json[i]);
-                i++;
-            }
-            return sb.ToString();
-        }
-
-        private static string JsonString(string value)
-        {
-            var sb = new StringBuilder("\"");
-            foreach (char c in value)
-            {
-                if (c == '"' || c == '\\') sb.Append('\\').Append(c);
-                else if (c == '\n') sb.Append("\\n");
-                else if (c < 32) sb.Append(' ');
-                else sb.Append(c);
-            }
-            return sb.Append('"').ToString();
-        }
-
         private static void Finish(Status s, string head, string det)
         {
             headline = head ?? "";
@@ -283,17 +156,5 @@ namespace Overlord
             Interlocked.Exchange(ref inFlight, 0);
         }
 
-        /// <summary>Same normalisation as RelayProbe — see the trim incident there.</summary>
-        private static string ToHttpBase(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return null;
-            url = url.Trim().TrimEnd('/');
-            if (url.Length == 0) return null;
-            if (url.EndsWith("/ws")) url = url.Substring(0, url.Length - 3).TrimEnd('/');
-            if (url.StartsWith("wss://")) url = "https://" + url.Substring(6);
-            else if (url.StartsWith("ws://")) url = "http://" + url.Substring(5);
-            else if (!url.StartsWith("http://") && !url.StartsWith("https://")) url = "https://" + url;
-            return url.TrimEnd('/');
-        }
     }
 }

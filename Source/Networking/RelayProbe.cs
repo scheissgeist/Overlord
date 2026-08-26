@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Net;
 using System.Threading;
 
@@ -63,11 +62,11 @@ namespace Overlord
             detail = "";
         }
 
-        public static void Start(string relayUrl, string hostSecret)
+        public static void Start(string relayUrl, string hostSecret, string hostKey = "")
         {
             if (Interlocked.CompareExchange(ref inFlight, 1, 0) != 0) return;
 
-            string baseUrl = ToHttpBase(relayUrl);
+            string baseUrl = RelayHttp.ToHttpBase(relayUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
                 Finish(Status.Fail, "No relay URL to test.",
@@ -81,7 +80,7 @@ namespace Overlord
 
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                try { Run(baseUrl, hostSecret); }
+                try { Run(baseUrl, hostSecret, hostKey); }
                 catch (Exception e)
                 {
                     LogUtil.Warn("Relay probe threw: " + e.Message);
@@ -90,21 +89,14 @@ namespace Overlord
             });
         }
 
-        private static void Run(string baseUrl, string hostSecret)
+        private static void Run(string baseUrl, string hostSecret, string hostKey)
         {
             // Mono's default protocol set is older than what most hosts now accept.
-            try
-            {
-                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            }
-            catch (NotSupportedException)
-            {
-                // Older runtime without Tls12 in the enum — leave the default alone.
-            }
+            RelayHttp.EnsureTls();
 
             string body;
             HttpStatusCode code;
-            string error = Get(baseUrl + "/health", null, out code, out body);
+            string error = RelayHttp.Get(baseUrl + "/health", null, out code, out body);
 
             if (error != null)
             {
@@ -127,9 +119,59 @@ namespace Overlord
                 return;
             }
 
-            bool twitchConfigured = body.IndexOf("\"twitch\":true", StringComparison.OrdinalIgnoreCase) >= 0;
-            bool guestLogin = body.IndexOf("\"guest\":true", StringComparison.OrdinalIgnoreCase) >= 0;
-            bool hostConnected = body.IndexOf("\"host\":true", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool twitchConfigured = RelayHttp.FlagTrue(body, "twitch");
+            bool guestLogin = RelayHttp.FlagTrue(body, "guest");
+            bool hostConnected = RelayHttp.FlagTrue(body, "host");
+
+            string note = hostConnected
+                ? "A host is already connected to this relay — if that is not this game, you are sharing a relay and will kick each other off."
+                : "No host connected yet; this game claims the slot when you load a save.";
+
+            // A game that JOINED this relay holds a key the relay issued and has no
+            // secret at all. Testing it against the admin API used to report "no host
+            // secret is set here", which is both false and unactionable on that path -
+            // there is no secret to set. Ask the question that actually applies: does
+            // this relay still know my key?
+            if (!string.IsNullOrEmpty(hostKey))
+            {
+                string keyBody = "{\"hostKey\":" + RelayHttp.JsonString(hostKey) + "}";
+                HttpStatusCode keyCode;
+                string keyReply;
+                string keyError = RelayHttp.Post(baseUrl + "/api/host/reclaim", keyBody, out keyCode, out keyReply);
+
+                if (keyError != null)
+                {
+                    Finish(Status.Warn, "Relay is up. Could not check your room.", keyError);
+                    return;
+                }
+                if (keyCode == HttpStatusCode.NotFound)
+                {
+                    Finish(Status.Warn, "This relay no longer knows your game.",
+                           "It was probably restarted or reset. Press Leave this relay, then Join again — you will get a new link to share.");
+                    return;
+                }
+                if (keyCode != HttpStatusCode.OK)
+                {
+                    Finish(Status.Warn, "Relay is up. Room check was inconclusive.",
+                           "The relay answered " + (int)keyCode + " when asked about your room.");
+                    return;
+                }
+
+                if (guestLogin)
+                {
+                    Finish(Status.Ok, "Ready. Your room is registered and viewers join by typing a name.",
+                           "Anyone with your link can join as any name on this relay. " + note);
+                    return;
+                }
+                if (!twitchConfigured)
+                {
+                    Finish(Status.Warn, "Your room is fine, but viewers cannot log in.",
+                           "This relay has neither Twitch login nor name-only login switched on. That is for whoever runs it to fix — you do not need to do anything.  " + note);
+                    return;
+                }
+                Finish(Status.Ok, "Ready. Your room is registered and viewers can sign in with Twitch.", note);
+                return;
+            }
 
             // Secret check. Only meaningful if one is set locally.
             if (string.IsNullOrEmpty(hostSecret))
@@ -139,7 +181,7 @@ namespace Overlord
                 return;
             }
 
-            string adminError = Get(baseUrl + "/admin/status", hostSecret, out code, out body);
+            string adminError = RelayHttp.Get(baseUrl + "/admin/status", hostSecret, out code, out body);
             if (adminError != null)
             {
                 Finish(Status.Warn, "Relay is up. Could not verify the host secret.",
@@ -161,10 +203,6 @@ namespace Overlord
                 return;
             }
 
-            string note = hostConnected
-                ? "A host is already connected to this relay — if that is not this game, you are sharing a relay and will kick each other off."
-                : "No host connected yet; this game claims the slot when you load a save.";
-
             if (guestLogin)
             {
                 Finish(Status.Ok, "Relay reachable, host secret accepted. Viewers join by typing a name.",
@@ -182,90 +220,6 @@ namespace Overlord
             Finish(Status.Ok, "Relay reachable, host secret accepted, Twitch login configured.", note);
         }
 
-        /// <summary>
-        /// Returns null on a completed request (check <paramref name="code"/>), or a
-        /// human-readable reason the request never completed.
-        /// </summary>
-        private static string Get(string url, string bearer, out HttpStatusCode code, out string body)
-        {
-            code = 0;
-            body = null;
-            HttpWebResponse response = null;
-            try
-            {
-                var request = (HttpWebRequest)WebRequest.Create(url);
-                request.Method = "GET";
-                request.Timeout = 8000;
-                request.ReadWriteTimeout = 8000;
-                request.UserAgent = "Overlord-mod-setup-probe";
-                if (!string.IsNullOrEmpty(bearer))
-                    request.Headers["Authorization"] = "Bearer " + bearer;
-
-                response = (HttpWebResponse)request.GetResponse();
-            }
-            catch (WebException we)
-            {
-                // A 401/404/500 arrives here too, with the response attached. That is a
-                // completed request and the caller wants the status code, not an error.
-                response = we.Response as HttpWebResponse;
-                if (response == null)
-                    return Describe(we);
-            }
-            catch (UriFormatException)
-            {
-                return "That is not a valid web address.";
-            }
-            catch (NotSupportedException e)
-            {
-                return e.Message;
-            }
-
-            try
-            {
-                code = response.StatusCode;
-                using (var stream = response.GetResponseStream())
-                {
-                    if (stream != null)
-                    {
-                        using (var reader = new StreamReader(stream))
-                        {
-                            char[] buffer = new char[8192];
-                            int read = reader.Read(buffer, 0, buffer.Length);
-                            body = read > 0 ? new string(buffer, 0, read) : "";
-                        }
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                return "Could not read the reply: " + e.Message;
-            }
-            finally
-            {
-                response.Close();
-            }
-
-            return null;
-        }
-
-        private static string Describe(WebException we)
-        {
-            switch (we.Status)
-            {
-                case WebExceptionStatus.NameResolutionFailure:
-                    return "That host name does not resolve — check for a typo in the address.";
-                case WebExceptionStatus.ConnectFailure:
-                    return "Nothing accepted a connection at that address. The relay may be stopped or asleep.";
-                case WebExceptionStatus.Timeout:
-                    return "Timed out after 8 seconds. A free-tier relay that has gone to sleep can take longer to wake — try once more.";
-                case WebExceptionStatus.TrustFailure:
-                case WebExceptionStatus.SecureChannelFailure:
-                    return "The HTTPS certificate could not be validated.";
-                default:
-                    return we.Message;
-            }
-        }
-
         private static void Finish(Status s, string head, string det)
         {
             headline = head ?? "";
@@ -274,25 +228,5 @@ namespace Overlord
             Interlocked.Exchange(ref inFlight, 0);
         }
 
-        /// <summary>
-        /// Mirrors RelayClient.NormalizeUrl in reverse: the settings field may hold
-        /// wss://, ws://, https://, http:// or a bare host, and the REST endpoints live
-        /// on http(s) at the root. Bare hosts default to https, matching the client's
-        /// default of wss.
-        /// </summary>
-        private static string ToHttpBase(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return null;
-            url = url.Trim().TrimEnd('/');
-            if (url.Length == 0) return null;
-
-            if (url.EndsWith("/ws")) url = url.Substring(0, url.Length - 3).TrimEnd('/');
-
-            if (url.StartsWith("wss://")) url = "https://" + url.Substring(6);
-            else if (url.StartsWith("ws://")) url = "http://" + url.Substring(5);
-            else if (!url.StartsWith("http://") && !url.StartsWith("https://")) url = "https://" + url;
-
-            return url.TrimEnd('/');
-        }
     }
 }

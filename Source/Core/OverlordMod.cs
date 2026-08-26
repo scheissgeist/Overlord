@@ -153,16 +153,29 @@ namespace Overlord
             }
             else if (Widgets.ButtonText(buttonRect, "Test connection"))
             {
-                RelayProbe.Start(Settings.relayUrl, Settings.hostSecret);
+                RelayProbe.Start(Settings.relayUrl, Settings.hostSecret, Settings.hostKey);
             }
 
+            DrawProbeResult(listing, "    Checks the relay without loading a save: is the address right, is it running, and can viewers get in.");
+        }
+
+        /// <summary>
+        /// One renderer for the probe result. There were two, and the copy used on the
+        /// joined-relay screen silently dropped Detail — which is the half that says
+        /// what to DO ("press Join again", "that is for whoever runs it to fix").
+        /// </summary>
+        private static void DrawProbeResult(Listing_Standard listing, string idleHint)
+        {
             Color prev = GUI.color;
             switch (RelayProbe.State)
             {
                 case RelayProbe.Status.Idle:
-                    GUI.color = Color.gray;
-                    listing.Label("    Checks the relay without loading a save: is the address right, is the relay up, does it accept this host secret, can viewers log in with Twitch.");
-                    GUI.color = prev;
+                    if (!string.IsNullOrEmpty(idleHint))
+                    {
+                        GUI.color = Color.gray;
+                        listing.Label(idleHint);
+                        GUI.color = prev;
+                    }
                     break;
 
                 case RelayProbe.Status.Running:
@@ -436,7 +449,7 @@ namespace Overlord
             var leaveRect = new Rect(openRect.xMax + 8f, btnRow.y, 150f, btnRow.height);
 
             if (RelayProbe.IsRunning) Widgets.ButtonText(testRect, "Testing...", true, true, false);
-            else if (Widgets.ButtonText(testRect, "Test connection")) RelayProbe.Start(Settings.relayUrl, Settings.hostSecret);
+            else if (Widgets.ButtonText(testRect, "Test connection")) RelayProbe.Start(Settings.relayUrl, Settings.hostSecret, Settings.hostKey);
             if (Widgets.ButtonText(openRect, "Open the link") && !string.IsNullOrEmpty(Settings.viewerUrl))
                 Application.OpenURL(Settings.viewerUrl);
             if (Widgets.ButtonText(leaveRect, "Leave this relay"))
@@ -449,24 +462,7 @@ namespace Overlord
                 RelayProbe.Reset();
             }
 
-            Color prev = GUI.color;
-            switch (RelayProbe.State)
-            {
-                case RelayProbe.Status.Idle:
-                    break;
-                case RelayProbe.Status.Running:
-                    GUI.color = Color.gray;
-                    listing.Label("    " + RelayProbe.Headline);
-                    GUI.color = prev;
-                    break;
-                default:
-                    GUI.color = RelayProbe.State == RelayProbe.Status.Ok ? Color.green
-                              : RelayProbe.State == RelayProbe.Status.Warn ? Color.yellow
-                              : Color.red;
-                    listing.Label("    " + RelayProbe.Headline);
-                    GUI.color = prev;
-                    break;
-            }
+            DrawProbeResult(listing, "");
         }
 
         /// <summary>The operator path: you deployed the relay, so you hold HOST_SECRET.</summary>
