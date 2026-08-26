@@ -72,3 +72,9 @@ output/playwright/
 # Scratch folder for eyeballing art side by side — every file in it is a COPY of
 # something already tracked in brand/hero or brand/concepts.
 brand/review/
+
+# Internal analysis/audit notes — same class as session logs. HOSTING_AND_FRIENDS_MODE
+# quotes the live relay hostname verbatim while explaining why that hostname should
+# not be published; tracking it re-published the thing it documents removing.
+docs/HOSTING_AND_FRIENDS_MODE.md
+docs/MULTI_STREAMER_READINESS.md
