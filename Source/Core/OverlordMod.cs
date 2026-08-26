@@ -113,13 +113,20 @@ namespace Overlord
                 GUI.color = Color.red;
                 listing.Label("Relay mode — NOT connected.");
                 GUI.color = prev;
-                listing.Label("    Check: the URL below is right, the host secret matches HOST_SECRET on the relay, and the relay is running.");
+                listing.Label(string.IsNullOrEmpty(Settings.hostKey)
+                    ? "    Check: the URL below is right, the host secret matches HOST_SECRET on the relay, and the relay is running."
+                    : "    Check the relay is running. Press Test connection below; if it says your key is unknown, press Join again to get a new one.");
             }
 
-            if (string.IsNullOrEmpty(Settings.hostSecret))
+            // Only the person running their OWN relay needs a secret. Someone who joined
+            // a relay holds a key the relay issued and never sees a secret at all - but
+            // this warned them anyway, in yellow, the instant they picked Twitch mode,
+            // and told them to press a Generate button that is collapsed out of sight on
+            // that path. That is what sent a tester hunting for a token to generate.
+            if (string.IsNullOrEmpty(Settings.hostSecret) && string.IsNullOrEmpty(Settings.hostKey) && showRunMyOwn)
             {
                 GUI.color = Color.yellow;
-                listing.Label("    No host secret set — the relay will reject this host. Use Generate below.");
+                listing.Label("    No host secret set — your own relay will reject this game. Use Generate below.");
                 GUI.color = prev;
             }
         }
@@ -335,7 +342,12 @@ namespace Overlord
             }
 
             StepLabel(listing, false, "Paste the relay address someone sent you, then press Join.");
-            listing.Label("        You do not need an account, a server, or a Twitch app. The relay hands your game a room and remembers it for you.");
+            // Spelled out because a tester went off and tried to generate a Twitch oauth
+            // token to host with. Nothing in Overlord ever asks a host for one - that is
+            // Twitch Toolkit's setup, a different and optional mod - but with nothing on
+            // screen saying so, Toolkit's demand for a token looks like Overlord's.
+            listing.Label("        Hosting needs NO Twitch account, NO token, and NO server of your own. If something is asking you for an oauth token, that is Twitch Toolkit (a separate, optional mod) - not this.");
+            listing.Label("        Only your VIEWERS sign in with Twitch, and they just click a button on the link you send them.");
 
             string urlBefore = Settings.relayUrl;
             // Trimmed on the way in: a URL pasted with padding used to pass the probe
@@ -363,7 +375,15 @@ namespace Overlord
             }
             joinLabel = Widgets.TextField(nameRect, joinLabel);
             inviteCode = Widgets.TextField(inviteRect, inviteCode);
-            listing.Label("        Middle box: a name for your game in the relay's list (optional). Right box: an invite code, only if you were given one.");
+            // Both boxes are optional and were indistinguishable from the required one.
+            // Say which is which where they are, not in a sentence underneath.
+            Color hint = GUI.color;
+            GUI.color = new Color(0.72f, 0.72f, 0.72f);
+            Widgets.Label(new Rect(nameRect.x + 2f, nameRect.yMax + 1f, nameRect.width, 18f), "name (optional)");
+            Widgets.Label(new Rect(inviteRect.x + 2f, inviteRect.yMax + 1f, inviteRect.width, 18f), "invite code (only if given one)");
+            GUI.color = hint;
+            listing.Gap(18f);
+            listing.Label("        Leave both empty unless you were told otherwise. Only the address above is required.");
 
             Color prev = GUI.color;
             switch (RelayJoin.State)
