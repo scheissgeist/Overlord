@@ -70,7 +70,7 @@ Viewers (browser + Twitch login)
 ```
 
 - **Mod** — runs in RimWorld; sends pawn/map state; applies viewer commands.
-- **Relay** — Node server (Fly.io, Docker, or local). One host connection per instance.
+- **Relay** — Node server (Fly.io, Docker, or local). Carries one game by default, or several at once when the operator turns on open hosting.
 - **Viewers** — open your relay URL, log in with Twitch, claim or wait for assignment.
 
 Native pawn control (draft, move, work, gear) is Overlord. Toolkit **Buy** still needs Toolkit loaded and its Twitch chat client connected in RimWorld.
@@ -108,14 +108,14 @@ check the log — it states which one happened.
 1. Subscribe: [Overlord on Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3760983440)
 2. Also subscribe to **[Harmony](https://steamcommunity.com/workshop/filedetails/?id=2009463077)** (or install Harmony another way).
 3. Enable **Harmony**, then **Overlord**, in the RimWorld mod list.
-4. Deploy **your own relay** — Workshop does not include a shared server. See **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
+4. For streaming: **join a relay** a friend runs (Mod Settings → paste their address → **Join this relay**), or deploy your own. See the **[Hosting guide](docs/HOSTING_GUIDE.md)**. For playing with friends, you need neither.
 
 ### From a GitHub Release
 
 1. Download the latest **Release** zip.
 2. Unzip into `RimWorld/Mods/Overlord`.
 3. Enable **Harmony**, then **Overlord**.
-4. Deploy your own relay — see **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
+4. Join a relay or deploy your own — see the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 
 ### From source
 
