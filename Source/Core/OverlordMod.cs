@@ -241,8 +241,24 @@ namespace Overlord
             DrawConnectionStatus(listing);
             listing.Gap(8f);
 
-            if (uiTwitchMode) DrawRelaySetup(listing);
-            else DrawFriendsSetup(listing);
+            // RimWorld stops drawing the rest of a settings window when the mod throws,
+            // so a single bad line renders as an EMPTY panel with no clue why - and an
+            // empty panel here means nobody can find the Join button at all. Show the
+            // failure instead of swallowing it.
+            try
+            {
+                if (uiTwitchMode) DrawRelaySetup(listing);
+                else DrawFriendsSetup(listing);
+            }
+            catch (System.Exception e)
+            {
+                Color err = GUI.color;
+                GUI.color = Color.red;
+                listing.Label("Overlord could not draw the setup panel: " + e.GetType().Name + " - " + e.Message);
+                GUI.color = err;
+                listing.Label("    This is a bug in the mod. The rest of the settings below still work.");
+                LogUtil.Error("Settings draw failed: " + e);
+            }
 
             DrawCopiedNote(listing);
         }
@@ -330,8 +346,12 @@ namespace Overlord
             listing.Gap(4f);
             var row = listing.GetRect(30f);
             var joinRect = new Rect(row.x, row.y, 150f, row.height);
-            var nameRect = new Rect(joinRect.xMax + 8f, row.y, Mathf.Min(220f, row.width - 320f), row.height);
-            var inviteRect = new Rect(nameRect.xMax + 8f, row.y, Mathf.Max(120f, row.xMax - nameRect.xMax - 8f), row.height);
+            // Clamped: on a narrow settings window row.width - 320f goes NEGATIVE, which
+            // produces inside-out Rects that swallow their own content.
+            float nameW = Mathf.Clamp(row.width - 320f, 60f, 220f);
+            var nameRect = new Rect(joinRect.xMax + 8f, row.y, nameW, row.height);
+            float inviteW = Mathf.Max(80f, row.xMax - nameRect.xMax - 8f);
+            var inviteRect = new Rect(nameRect.xMax + 8f, row.y, inviteW, row.height);
 
             if (RelayJoin.IsRunning)
             {
@@ -438,7 +458,7 @@ namespace Overlord
             StepLabel(listing, haveSecret, "1.  Make a host secret. This is the password your game uses to claim your relay.");
             var secretRect = listing.GetRect(28f);
             const float showW = 60f, genW = 80f, copyW = 70f;
-            var fieldRect = new Rect(secretRect.x, secretRect.y, secretRect.width - showW - genW - copyW - 12f, secretRect.height);
+            var fieldRect = new Rect(secretRect.x, secretRect.y, Mathf.Max(80f, secretRect.width - showW - genW - copyW - 12f), secretRect.height);
             var toggleRect = new Rect(fieldRect.xMax + 4f, secretRect.y, showW, secretRect.height);
             var genRect = new Rect(toggleRect.xMax + 4f, secretRect.y, genW, secretRect.height);
             var copyRect = new Rect(genRect.xMax + 4f, secretRect.y, copyW, secretRect.height);
