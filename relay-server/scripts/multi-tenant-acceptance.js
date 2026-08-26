@@ -112,6 +112,24 @@ function openHost(secret, room) {
   });
 }
 
+/** The path a streamer who is NOT the relay owner takes: a key the relay issued. */
+function openHostWithKey(hostKey, room) {
+  return new Promise(resolve => {
+    let url = `${WS_BASE}?role=host&key=${encodeURIComponent(hostKey)}`;
+    if (room) url += `&room=${encodeURIComponent(room)}`;
+    const ws = new WebSocket(url);
+    const state = { ws, url, opened: false, closeCode: null, closeReason: null, messages: [] };
+    ws.on('open', () => { state.opened = true; resolve(state); });
+    ws.on('close', (code, reason) => {
+      state.closeCode = code;
+      state.closeReason = reason ? reason.toString() : '';
+      if (!state.opened) resolve(state);
+    });
+    ws.on('error', () => { if (!state.opened) resolve(state); });
+    setTimeout(() => resolve(state), 4000);
+  });
+}
+
 function openViewer(sessionToken, room) {
   return new Promise(resolve => {
     let url = `${WS_BASE}?role=viewer&session=${encodeURIComponent(sessionToken)}&build=acceptance`;
@@ -171,12 +189,20 @@ async function main() {
     legacyHost.opened === true && legacyHost.closeCode === null,
     `opened=${legacyHost.opened} closeCode=${legacyHost.closeCode} reason=${legacyHost.closeReason || '-'}`);
 
-  // 2. A SECOND host with a DIFFERENT secret coexists. This is the whole ask.
-  // Today the relay closes 4001 (wrong secret), or with a matching secret evicts
-  // the incumbent with 4002.
-  const hostB = await openHost(SECRET_B);
+  // 2. A SECOND streamer hosts here. This is the whole ask, and it is done the way
+  // a real person would: the mod asks the relay for a room and is handed a key. No
+  // secret is invented, copied, or typed. Before this change the relay closed 4001
+  // (unknown secret) or, with the owner's secret, evicted the incumbent with 4002.
+  const reg = await postJson('/api/host/register', { label: 'Second Streamer' });
+  record('2a. a second streamer can register a room',
+    reg.code === 200 && !!(reg.json && reg.json.hostKey && reg.json.roomId),
+    `HTTP ${reg.code} ${(reg.raw || '').slice(0, 160)}`);
+
+  const hostB = reg.json && reg.json.hostKey
+    ? await openHostWithKey(reg.json.hostKey)
+    : { opened: false, closeCode: null, closeReason: 'no key issued', ws: { close() {} } };
   await sleep(600);
-  record('2. second host, different secret, is accepted',
+  record('2. second host is accepted alongside the first',
     hostB.opened === true && hostB.closeCode === null,
     `opened=${hostB.opened} closeCode=${hostB.closeCode} reason=${hostB.closeReason || '-'}`);
 
@@ -185,21 +211,6 @@ async function main() {
     legacyHost.closeCode === null
       ? 'still open'
       : `evicted with ${legacyHost.closeCode} "${legacyHost.closeReason}"`);
-
-  // 3b. The OTHER half of the single-tenant problem, and the one that bites when a
-  // streamer hands a friend their secret to "let them try it": the friend does not
-  // get rejected, he takes the slot and the first game is thrown off mid-stream.
-  // Case 3 alone cannot see this, because a wrong secret is refused before it can
-  // evict anyone.
-  const twinHost = await openHost(SECRET_A);
-  await sleep(700);
-  const twinCoexists = twinHost.opened === true && twinHost.closeCode === null && legacyHost.closeCode === null;
-  record('3b. same secret twice does not evict the incumbent',
-    twinCoexists,
-    `second-with-same-secret: opened=${twinHost.opened} closeCode=${twinHost.closeCode}; ` +
-    `incumbent closeCode=${legacyHost.closeCode} reason="${legacyHost.closeReason || '-'}"`);
-  try { twinHost.ws.close(); } catch (_) {}
-  await sleep(300);
 
   // 4. Directory lists both live games.
   const rooms = await getJson('/api/rooms');
@@ -254,6 +265,22 @@ async function main() {
     try { impostor.ws.close(); } catch (_) {}
   }
   record('6. a room cannot be stolen with a different rooms secret', ownershipPass, ownership);
+
+  // 8. Same credential twice is the SAME game reconnecting - a RimWorld restart or
+  // a dropped socket - so replacing the old socket is correct and must keep working.
+  // This used to be the second half of the single-tenant problem, because handing a
+  // friend your secret was the only way to let him host. It is not any more: he
+  // registers and gets his own key (2a), so nobody has a reason to share one.
+  // Runs last because it deliberately ends the owner room's host socket.
+  const twinHost = await openHost(SECRET_A);
+  await sleep(700);
+  record('8. same credential reconnecting replaces its own socket',
+    twinHost.opened === true && twinHost.closeCode === null && legacyHost.closeCode === 4002,
+    `reconnect: opened=${twinHost.opened} closeCode=${twinHost.closeCode}; ` +
+    `previous socket closed with ${legacyHost.closeCode} "${legacyHost.closeReason || '-'}" (4002 expected); ` +
+    `host B unaffected: ${hostB.closeCode === null}`);
+  try { twinHost.ws.close(); } catch (_) {}
+  await sleep(300);
 
   // 7. Health still answers.
   const health = await getJson('/health');

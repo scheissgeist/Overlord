@@ -23,8 +23,24 @@ const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
 // exclusive removes the impersonation path entirely instead of policing it.
 const GUEST_LOGIN = !TWITCH_CLIENT_ID
   && /^(1|true|yes|on)$/i.test(process.env.ALLOW_GUEST_LOGIN || '');
+// Open hosting: anyone can register a room on this relay and stream through it.
+// OFF by default, so a relay deployed from the README button stays private to the
+// person who deployed it and behaves exactly as it did before rooms existed.
+const OPEN_HOSTING = /^(1|true|yes|on)$/i.test(process.env.OPEN_HOSTING || '');
+// Optional gate on top of OPEN_HOSTING: only people who were handed this code can
+// register. Lets a streamer open the relay to friends without opening it to the web.
+const HOST_INVITE_CODE = process.env.HOST_INVITE_CODE || '';
+// Every room costs memory and, far more importantly, upstream bandwidth: each viewer
+// pulls ~10 JPEG frames/sec, so the bill scales rooms x viewers. This is the ceiling.
+const MAX_ROOMS = Math.max(1, parseInt(process.env.MAX_ROOMS || '8', 10));
+// A room with no host and no viewers is swept after this long.
+const ROOM_IDLE_MS = Math.max(60 * 1000, parseInt(process.env.ROOM_IDLE_MS || String(30 * 60 * 1000), 10));
+const ROOMS_FILE = process.env.ROOMS_FILE || path.join(LOG_DIR_FALLBACK(), 'rooms.json');
 const LOG_TRAFFIC      = process.env.LOG_TRAFFIC !== '0';
-const LOG_DIR          = process.env.LOG_DIR || path.join(__dirname, 'logs');
+function LOG_DIR_FALLBACK() {
+  return process.env.LOG_DIR || path.join(__dirname, 'logs');
+}
+const LOG_DIR          = LOG_DIR_FALLBACK();
 const INSTANCE_ID      = process.env.FLY_MACHINE_ID || `${process.pid}`;
 const MAX_WS_BUFFERED_BYTES = parseInt(process.env.MAX_WS_BUFFERED_BYTES || String(1024 * 1024), 10);
 const MAX_FRAME_BUFFERED_BYTES = parseInt(process.env.MAX_FRAME_BUFFERED_BYTES || String(768 * 1024), 10);
@@ -54,32 +70,120 @@ function normalizeMapTransport(value) {
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
-/** @type {WebSocket|null} */
-let hostSocket = null;
+// Everything belonging to ONE running game lives on a Room. The relay used to hold
+// exactly one of each of these at module scope, and that is what made it
+// single-tenant: a second streamer's game evicted the first (close 4002) because
+// there was only one `hostSocket` variable for a game to occupy.
+//
+// Relay-wide state stays at module scope on purpose. `admins` is the operator's
+// console, `sessions` is viewer identity (a person is the same person in any room),
+// and the ops log and frame counters measure this process, not any one game.
 
-/** @type {Map<string, WebSocket>} twitchLogin → socket */
-const viewers = new Map();
+/** @type {Map<string, ReturnType<typeof makeRoom>>} roomId -> room */
+const rooms = new Map();
 const admins = new Map();
-const viewerInfo = new Map();
-const viewerReplayCache = new Map();
+
+function makeRoom(roomId, opts) {
+  opts = opts || {};
+  const room = {
+    roomId,
+    // The credential a game presents to claim this room. For the owner room it is
+    // HOST_SECRET, so the already-shipped mod DLL keeps working untouched. For a
+    // registered room it is a key the relay generated and handed to the mod, which
+    // is why a streamer joining someone else's relay never invents or copies one.
+    hostKey: opts.hostKey || '',
+    owner: !!opts.owner,
+    label: opts.label || '',
+    createdAt: opts.createdAt || Date.now(),
+    lastActiveAt: Date.now(),
+    hostConnectedAt: 0,
+    hostSocket: null,
+    /** @type {Map<string, WebSocket>} viewer login -> socket */
+    viewers: new Map(),
+    viewerInfo: new Map(),
+    viewerReplayCache: new Map(),
+    roomReplayCache: new Map(),
+    viewerBatchQueues: new Map(),
+    contextMenuRequests: new Map(),
+  };
+  rooms.set(roomId, room);
+  return room;
+}
+
+function roomIsLive(room) {
+  return !!room && room.hostSocket !== null && room.hostSocket.readyState === WebSocket.OPEN;
+}
+
+function listLiveRooms() {
+  const out = [];
+  for (const room of rooms.values()) {
+    if (!roomIsLive(room)) continue;
+    out.push({
+      roomId: room.roomId,
+      label: roomDisplayLabel(room),
+      viewers: room.viewers.size,
+      since: room.hostConnectedAt || room.createdAt,
+    });
+  }
+  out.sort(function (a, b) { return (b.viewers - a.viewers) || (a.since - b.since); });
+  return out;
+}
+
+/**
+ * The name shown in the directory. The already-shipped mod broadcasts `game_info`
+ * carrying `mapName` (the colony name) and the relay already caches that as a
+ * room-level replay message - so a room gets a real label with no mod change at
+ * all. Before the first game_info arrives there is nothing yet to show.
+ */
+function roomDisplayLabel(room) {
+  if (room.label) return room.label;
+  const cached = room.roomReplayCache.get('game_info');
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached.text);
+      if (parsed && parsed.mapName) return String(parsed.mapName).slice(0, 48);
+    } catch (_) {}
+  }
+  return 'RimWorld colony';
+}
+
+function timingSafeEqualStr(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+function findRoomByHostKey(key) {
+  if (!key) return null;
+  for (const room of rooms.values()) {
+    if (room.hostKey && timingSafeEqualStr(room.hostKey, key)) return room;
+  }
+  return null;
+}
+
+// The owner room exists whenever HOST_SECRET is configured, so a relay deployed
+// before rooms existed behaves identically: the mod connects with
+// ?secret=HOST_SECRET, lands here, and a viewer with no ?room= is auto-placed.
+const OWNER_ROOM_ID = 'main';
+if (HOST_SECRET) makeRoom(OWNER_ROOM_ID, { hostKey: HOST_SECRET, owner: true });
 
 // Context menus are expensive host work and viewers only care about the latest
 // right-click. Allow one request in flight per viewer and keep at most one newer
 // target, paced by wall clock so a paused game cannot create retry storms.
 const CONTEXT_MENU_MIN_INTERVAL_MS = 150;
 const CONTEXT_MENU_RESPONSE_TIMEOUT_MS = 2000;
-const contextMenuRequests = new Map();
 
-function clearContextMenuRequest(login) {
-  const state = contextMenuRequests.get(login);
+function clearContextMenuRequest(room, login) {
+  const state = room.contextMenuRequests.get(login);
   if (state) {
     clearTimeout(state.sendTimer);
     clearTimeout(state.responseTimer);
   }
-  contextMenuRequests.delete(login);
+  room.contextMenuRequests.delete(login);
 }
 
-function dispatchContextMenuRequest(login, msg, state) {
+function dispatchContextMenuRequest(room, login, msg, state) {
   const delay = Math.max(0, CONTEXT_MENU_MIN_INTERVAL_MS - (Date.now() - state.lastSentAt));
   if (delay > 0) {
     state.queued = msg;
@@ -88,7 +192,7 @@ function dispatchContextMenuRequest(login, msg, state) {
         state.sendTimer = null;
         const latest = state.queued;
         state.queued = null;
-        if (latest && !state.inFlight) dispatchContextMenuRequest(login, latest, state);
+        if (latest && !state.inFlight) dispatchContextMenuRequest(room, login, latest, state);
       }, delay);
     }
     return;
@@ -96,43 +200,43 @@ function dispatchContextMenuRequest(login, msg, state) {
 
   state.inFlight = true;
   state.lastSentAt = Date.now();
-  sendToHost(msg);
+  sendToHost(room, msg);
   clearTimeout(state.responseTimer);
   state.responseTimer = setTimeout(() => {
     state.responseTimer = null;
     state.inFlight = false;
-    recordOps('context_menu_timeout', { username: login });
-    flushQueuedContextMenuRequest(login, state);
+    recordOps('context_menu_timeout', { room: room.roomId, username: login });
+    flushQueuedContextMenuRequest(room, login, state);
   }, CONTEXT_MENU_RESPONSE_TIMEOUT_MS);
 }
 
-function queueContextMenuRequest(login, msg) {
-  let state = contextMenuRequests.get(login);
+function queueContextMenuRequest(room, login, msg) {
+  let state = room.contextMenuRequests.get(login);
   if (!state) {
     state = { inFlight: false, queued: null, lastSentAt: 0, sendTimer: null, responseTimer: null };
-    contextMenuRequests.set(login, state);
+    room.contextMenuRequests.set(login, state);
   }
   if (state.inFlight || state.sendTimer) {
     state.queued = msg;
-    recordOps('context_menu_coalesced', { username: login });
+    recordOps('context_menu_coalesced', { room: room.roomId, username: login });
     return;
   }
-  dispatchContextMenuRequest(login, msg, state);
+  dispatchContextMenuRequest(room, login, msg, state);
 }
 
-function flushQueuedContextMenuRequest(login, state) {
+function flushQueuedContextMenuRequest(room, login, state) {
   const latest = state.queued;
   state.queued = null;
-  if (latest) dispatchContextMenuRequest(login, latest, state);
+  if (latest) dispatchContextMenuRequest(room, login, latest, state);
 }
 
-function completeContextMenuRequest(login) {
-  const state = contextMenuRequests.get(login);
+function completeContextMenuRequest(room, login) {
+  const state = room.contextMenuRequests.get(login);
   if (!state || !state.inFlight) return;
   clearTimeout(state.responseTimer);
   state.responseTimer = null;
   state.inFlight = false;
-  flushQueuedContextMenuRequest(login, state);
+  flushQueuedContextMenuRequest(room, login, state);
 }
 
 // ─── Per-viewer outbound batch queue ─────────────────────────────────────────
@@ -140,14 +244,11 @@ function completeContextMenuRequest(login) {
 // before being flushed as a single `{"type":"batch","msgs":[...]}` envelope.
 // This collapses the 3-6 individual sends per game tick into one TCP segment.
 const BATCH_FLUSH_MS = 16;
-/** @type {Map<string, {texts: string[], timer: ReturnType<typeof setTimeout>}>} */
-const viewerBatchQueues = new Map();
-
-function flushViewerBatch(login) {
-  const q = viewerBatchQueues.get(login);
-  if (!q || q.texts.length === 0) { viewerBatchQueues.delete(login); return; }
-  viewerBatchQueues.delete(login);
-  const ws = viewers.get(login);
+function flushViewerBatch(room, login) {
+  const q = room.viewerBatchQueues.get(login);
+  if (!q || q.texts.length === 0) { room.viewerBatchQueues.delete(login); return; }
+  room.viewerBatchQueues.delete(login);
+  const ws = room.viewers.get(login);
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (q.texts.length === 1) {
     sendWs(ws, q.texts[0], { type: 'batched_single', target: login });
@@ -158,11 +259,11 @@ function flushViewerBatch(login) {
   sendWs(ws, payload, { type: 'batch', target: login });
 }
 
-function queueForViewer(login, text) {
-  let q = viewerBatchQueues.get(login);
+function queueForViewer(room, login, text) {
+  let q = room.viewerBatchQueues.get(login);
   if (!q) {
-    q = { texts: [], timer: setTimeout(() => flushViewerBatch(login), BATCH_FLUSH_MS) };
-    viewerBatchQueues.set(login, q);
+    q = { texts: [], timer: setTimeout(() => flushViewerBatch(room, login), BATCH_FLUSH_MS) };
+    room.viewerBatchQueues.set(login, q);
   }
   q.texts.push(text);
 }
@@ -173,8 +274,6 @@ let backpressureStats = newBackpressureStats();
 
 /** @type {Map<string, {login: string, displayName: string, exp: number}>} sessionToken → identity */
 const sessions = new Map();
-/** Latest room-level broadcast messages (no target) for late-joining viewers. */
-let roomReplayCache = new Map();
 
 const REPLAYABLE_TARGETED_TYPES = new Set([
   'host_capabilities',
@@ -375,7 +474,7 @@ function parseBinaryFrame(raw) {
   return { msg, buffer };
 }
 
-function routeHostBinaryFrame(raw) {
+function routeHostBinaryFrame(room, raw) {
   const { msg, buffer } = parseBinaryFrame(raw);
   if (!msg || msg.type !== 'map_frame') {
     recordOps('host_binary_rejected', summarizeMessage(msg, buffer.length));
@@ -385,40 +484,46 @@ function routeHostBinaryFrame(raw) {
   recordFrame(msg, buffer.length);
 
   if (msg.target) {
-    const dest = viewers.get(msg.target);
+    const dest = room.viewers.get(msg.target);
     sendWs(dest, buffer, { type: msg.type, target: msg.target });
     return;
   }
 
-  for (const [, vws] of viewers) {
+  for (const [, vws] of room.viewers) {
     sendWs(vws, buffer, { type: msg.type });
   }
 }
 
-function clearRoomReplayCache(reason) {
-  if (viewerReplayCache.size > 0 || roomReplayCache.size > 0) {
+function clearRoomReplayCache(room, reason) {
+  if (room.viewerReplayCache.size > 0 || room.roomReplayCache.size > 0) {
     recordOps('replay_cache_clear', {
+      room: room.roomId,
       reason,
-      viewers: viewerReplayCache.size,
-      room: roomReplayCache.size,
+      viewers: room.viewerReplayCache.size,
+      roomLevel: room.roomReplayCache.size,
     });
   }
-  viewerReplayCache.clear();
-  roomReplayCache.clear();
+  room.viewerReplayCache.clear();
+  room.roomReplayCache.clear();
 }
 
-function clearViewerReplayCache(login, reason) {
+function clearViewerReplayCache(room, login, reason) {
   const key = String(login || '');
-  if (!key) return false;
-  const deleted = viewerReplayCache.delete(key);
-  if (deleted) recordOps('replay_cache_viewer_clear', { username: key, reason });
+  if (!key || !room) return false;
+  const deleted = room.viewerReplayCache.delete(key);
+  if (deleted) recordOps('replay_cache_viewer_clear', { room: room.roomId, username: key, reason });
   return deleted;
 }
 
-function clearViewerMapReplayCache(login, reason) {
+/** Every room a login has a cache in - used when a session expires relay-wide. */
+function clearViewerReplayCacheEverywhere(login, reason) {
+  for (const room of rooms.values()) clearViewerReplayCache(room, login, reason);
+}
+
+function clearViewerMapReplayCache(room, login, reason) {
   const key = String(login || '');
   if (!key) return false;
-  const cache = viewerReplayCache.get(key);
+  const cache = room.viewerReplayCache.get(key);
   if (!cache) return false;
   const hadFull = cache.messages.delete('map_full');
   const hadDelta = cache.messages.delete('map_delta');
@@ -429,43 +534,43 @@ function clearViewerMapReplayCache(login, reason) {
   const hadMap = hadFull || hadDelta || hadEntityKeyframe || hadEntityDelta || hadChunks;
   if (hadMap) {
     cache.updatedAt = Date.now();
-    recordOps('replay_cache_map_clear', { username: key, reason });
+    recordOps('replay_cache_map_clear', { room: room.roomId, username: key, reason });
   }
   return hadMap;
 }
 
-function getViewerCache(login) {
-  let cache = viewerReplayCache.get(login);
+function getViewerCache(room, login) {
+  let cache = room.viewerReplayCache.get(login);
   if (!cache) {
     cache = {
       updatedAt: Date.now(),
       messages: new Map(),
       mapChunks: new Map(),
     };
-    viewerReplayCache.set(login, cache);
+    room.viewerReplayCache.set(login, cache);
   }
   return cache;
 }
 
-function cacheHostTextMessage(msg, text) {
+function cacheHostTextMessage(room, msg, text) {
   if (!msg || typeof text !== 'string') return;
 
   if (msg.type === 'map_transport' && msg.target) {
-    clearViewerMapReplayCache(String(msg.target), 'map_transport_selected');
+    clearViewerMapReplayCache(room, String(msg.target), 'map_transport_selected');
   }
 
   if (msg.type === 'host_capabilities' && msg.tacticalMap === false) {
-    if (msg.target) clearViewerMapReplayCache(String(msg.target), 'tactical_map_disabled');
+    if (msg.target) clearViewerMapReplayCache(room, String(msg.target), 'tactical_map_disabled');
     else {
-      for (const login of viewerReplayCache.keys()) {
-        clearViewerMapReplayCache(login, 'tactical_map_disabled');
+      for (const login of room.viewerReplayCache.keys()) {
+        clearViewerMapReplayCache(room, login, 'tactical_map_disabled');
       }
     }
   }
 
-  // Room-level broadcasts (no target) — keep latest for late joiners.
+  // Room-level broadcasts (no target) - keep latest for late joiners.
   if (!msg.target && REPLAYABLE_ROOM_TYPES.has(msg.type)) {
-    roomReplayCache.set(msg.type, {
+    room.roomReplayCache.set(msg.type, {
       text,
       type: msg.type,
       updatedAt: Date.now(),
@@ -476,13 +581,13 @@ function cacheHostTextMessage(msg, text) {
   const target = String(msg.target);
 
   if (CLEAR_VIEWER_CACHE_TYPES.has(msg.type)) {
-    clearViewerReplayCache(target, msg.type);
+    clearViewerReplayCache(room, target, msg.type);
     return;
   }
 
   if (!REPLAYABLE_TARGETED_TYPES.has(msg.type)) return;
 
-  const cache = getViewerCache(target);
+  const cache = getViewerCache(room, target);
   if (!cache.mapChunks) cache.mapChunks = new Map();
   if (msg.type === 'map_full') {
     cache.messages.delete('map_delta');
@@ -617,23 +722,23 @@ function sendCachedReplay(ws, cached, type, login) {
   return sendWs(ws, payload, { type, target: login });
 }
 
-function replayRoomCachedState(ws, login, request = null) {
-  if (!ws || ws.readyState !== WebSocket.OPEN || roomReplayCache.size === 0) return 0;
+function replayRoomCachedState(room, ws, login, request = null) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || room.roomReplayCache.size === 0) return 0;
   let sent = 0;
   for (const type of ROOM_REPLAY_ORDER) {
     if (request && !wantedIncludes(request, type)) continue;
-    const cached = roomReplayCache.get(type);
+    const cached = room.roomReplayCache.get(type);
     if (!cached) continue;
     if (sendCachedReplay(ws, cached, type, login || 'room')) sent++;
   }
   return sent;
 }
 
-function replayCachedState(login, request) {
-  const cache = viewerReplayCache.get(login);
-  const ws = viewers.get(login);
+function replayCachedState(room, login, request) {
+  const cache = room.viewerReplayCache.get(login);
+  const ws = room.viewers.get(login);
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    recordOps('replay_cache_miss', { username: login, reason: 'viewer_unavailable' });
+    recordOps('replay_cache_miss', { room: room.roomId, username: login, reason: 'viewer_unavailable' });
     return false;
   }
 
@@ -655,22 +760,23 @@ function replayCachedState(login, request) {
     }
   }
 
-  // Room-level game_info etc. — fill gaps for late joiners even without a viewer cache.
-  sent += replayRoomCachedState(ws, login, request);
+  // Room-level game_info etc. - fill gaps for late joiners even without a viewer cache.
+  sent += replayRoomCachedState(room, ws, login, request);
 
   recordOps(sent > 0 ? 'replay_cache_hit' : 'replay_cache_miss', {
+    room: room.roomId,
     username: login,
     reason: request?.reason || '',
     wanted: Array.isArray(request?.wanted) ? request.wanted.join(',') : '',
     sent,
     cachedTypes: cache ? Array.from(cache.messages.keys()).join(',') : '',
-    roomTypes: Array.from(roomReplayCache.keys()).join(','),
+    roomTypes: Array.from(room.roomReplayCache.keys()).join(','),
   });
 
   return sent > 0;
 }
 
-app.get('/', (_req, res) => {
+function serveViewerPage(res, roomId) {
   try {
     let html = fs.readFileSync(indexHtmlPath, 'utf8');
     html = html.replace(
@@ -681,13 +787,19 @@ app.get('/', (_req, res) => {
       'data-allow-guest=""',
       `data-allow-guest="${GUEST_LOGIN ? 'true' : ''}"`
     );
+    // A /g/<id> link arrives with the room already chosen, so someone handed a
+    // link never sees a picker. Sanitised because it is written into an attribute.
+    const safeRoom = String(roomId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
+    html = html.replace('data-room=""', `data-room="${safeRoom}"`);
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
   } catch (e) {
     res.status(500).send('Server error');
   }
-});
+}
+
+app.get('/', (_req, res) => serveViewerPage(res, ''));
 
 app.get('/favicon.ico', (_req, res) => {
   res.status(204).end();
@@ -708,16 +820,40 @@ app.get('/health', (_req, res) => {
     pid:     process.pid,
     uptime:  Math.round(process.uptime()),
     clientBuild: CLIENT_BUILD,
-    viewers: viewers.size,
+    viewers: totalViewers(),
     sessions: sessions.size,
     sessionTtlSeconds: Math.round(SESSION_TTL_MS / 1000),
     sessionSlideSeconds: Math.round(SESSION_SLIDE_MS / 1000),
-    replayCacheViewers: viewerReplayCache.size,
-    host:    hostSocket !== null && hostSocket.readyState === WebSocket.OPEN,
+    replayCacheViewers: totalReplayCacheViewers(),
+    // `host` stays a boolean and keeps meaning "is a game connected", so every
+    // existing checker - the mod's Test connection, release:verify, dashboards -
+    // reads the same field it always did. It is now true if ANY room is live.
+    host:    liveRoomCount() > 0,
+    rooms:   liveRoomCount(),
+    openHosting: OPEN_HOSTING,
+    maxRooms: MAX_ROOMS,
     twitch:  !!TWITCH_CLIENT_ID,
     guest:   GUEST_LOGIN,
   });
 });
+
+function liveRoomCount() {
+  let n = 0;
+  for (const room of rooms.values()) if (roomIsLive(room)) n++;
+  return n;
+}
+
+function totalViewers() {
+  let n = 0;
+  for (const room of rooms.values()) n += room.viewers.size;
+  return n;
+}
+
+function totalReplayCacheViewers() {
+  let n = 0;
+  for (const room of rooms.values()) n += room.viewerReplayCache.size;
+  return n;
+}
 
 app.get('/admin/logs', adminAuth, (req, res) => {
   const limit = Math.max(1, Math.min(parseInt(req.query.limit || '200', 10), OPS_LOG_LIMIT));
@@ -788,7 +924,8 @@ app.post('/auth/guest', (req, res) => {
 
   // Two people on the same name would silently evict each other on the viewer
   // socket ("Reconnected from another tab"), which reads as a broken relay.
-  const existing = viewers.get(login);
+  // Checked across every room: the same login cannot be two people anywhere here.
+  const existing = findViewerSocketAnywhere(login);
   if (existing && existing.readyState === WebSocket.OPEN) {
     recordOps('auth_failed', { reason: 'guest_name_taken', username: login });
     return res.status(409).json({ error: 'Someone here is already using that name.' });
@@ -915,41 +1052,64 @@ wss.on('connection', (ws, req) => {
   const url     = new URL(req.url, 'http://localhost');
   const role    = url.searchParams.get('role');
   const secret  = url.searchParams.get('secret');
+  const hostKeyParam = url.searchParams.get('key');
+  const roomParam = String(url.searchParams.get('room') || '').trim();
   const sToken  = url.searchParams.get('session');
   const clientBuild = String(url.searchParams.get('build') || '').slice(0, 80);
   const mapTransport = normalizeMapTransport(url.searchParams.get('mapTransport'));
 
   // ── Host ──────────────────────────────────────────────────────────────────
   if (role === 'host') {
-    // FAIL CLOSED, matching adminAuth and the admin WebSocket role. With no
-    // HOST_SECRET configured this accepted ANY ?role=host connection — and the very
-    // next lines close the incumbent host socket, so an anonymous connection could
-    // evict the real streamer's game and then receive every viewer command.
-    if (!HOST_SECRET || secret !== HOST_SECRET) {
+    // The credential IS the room. A game presents either the key the relay issued
+    // it (?key=) or, for the relay owner's own game, HOST_SECRET (?secret=) - which
+    // is what the already-shipped mod DLL sends, so it keeps working with no update.
+    // Rooms are never addressed by name on this path, so there is nothing to squat:
+    // you cannot claim a room without holding its key.
+    const presented = hostKeyParam || secret;
+    const room = findRoomByHostKey(presented);
+    if (!room) {
       ws.close(4001, 'Unauthorized');
-      console.log(HOST_SECRET
-        ? '[relay] Host rejected: bad secret'
-        : '[relay] Host rejected: HOST_SECRET is not configured on this relay');
-      recordOps('host_rejected', { reason: HOST_SECRET ? 'bad_secret' : 'no_secret_configured' });
+      console.log(presented
+        ? '[relay] Host rejected: unknown key'
+        : '[relay] Host rejected: no key or secret presented');
+      recordOps('host_rejected', {
+        reason: presented ? 'unknown_key' : 'no_credential',
+        openHosting: OPEN_HOSTING,
+      });
       return;
     }
 
-    if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
-      hostSocket.close(4002, 'Replaced by new host');
+    // If the game named a room as well as presenting a key, the two must agree.
+    // The key alone already decides which room this is, so a mismatch means the
+    // caller believes it is somewhere it is not - refuse rather than silently put
+    // it somewhere else and let it stream into a stranger's room.
+    if (roomParam && roomParam !== room.roomId) {
+      ws.close(4001, 'Unauthorized');
+      recordOps('host_rejected', { reason: 'room_key_mismatch', requested: roomParam, actual: room.roomId });
+      return;
     }
 
-    hostSocket = ws;
-    clearRoomReplayCache('host_connected');
-    console.log('[relay] Host connected');
-    recordOps('host_connected');
-    broadcastToAdmins({ type: 'host_status', connected: true });
+    // Only ever evicts the SAME game reconnecting (a RimWorld restart, a dropped
+    // socket). A different streamer holds a different key and therefore a different
+    // room, so one game can no longer throw another off the relay.
+    if (room.hostSocket && room.hostSocket.readyState === WebSocket.OPEN) {
+      room.hostSocket.close(4002, 'Replaced by new host');
+    }
+
+    room.hostSocket = ws;
+    room.hostConnectedAt = Date.now();
+    room.lastActiveAt = Date.now();
+    clearRoomReplayCache(room, 'host_connected');
+    console.log(`[relay] Host connected: room ${room.roomId}`);
+    recordOps('host_connected', { room: room.roomId });
+    broadcastToAdmins({ type: 'host_status', connected: true, room: room.roomId });
     const hostConnectedNotice = JSON.stringify({ type: 'host_connected', instance: INSTANCE_ID });
-    for (const [, vws] of viewers) {
+    for (const [, vws] of room.viewers) {
       sendWs(vws, hostConnectedNotice, { type: 'host_connected' });
     }
 
     // Send existing viewers to the newly connected host so quickloads/reconnects rebuild host state.
-    for (const viewer of getViewerList()) {
+    for (const viewer of getViewerList(room)) {
       sendWs(ws, JSON.stringify({
         type: 'viewer_joined',
         username: viewer.login,
@@ -960,8 +1120,9 @@ wss.on('connection', (ws, req) => {
 
     ws.on('message', (raw, isBinary) => {
       try {
+        room.lastActiveAt = Date.now();
         if (isBinary) {
-          routeHostBinaryFrame(raw);
+          routeHostBinaryFrame(room, raw);
           return;
         }
 
@@ -970,27 +1131,27 @@ wss.on('connection', (ws, req) => {
         const summary = summarizeMessage(msg, Buffer.byteLength(text));
         if (msg.type === 'map_frame') recordFrame(msg, summary.bytes);
         else recordOps('host_message', summary);
-        cacheHostTextMessage(msg, text);
+        cacheHostTextMessage(room, msg, text);
 
         if (msg.target) {
           const login = msg.target;
           if (msg.type === 'context_menu' || (msg.type === 'action_result' && msg.action === 'context_menu')) {
-            completeContextMenuRequest(login);
+            completeContextMenuRequest(room, login);
           }
-          // Kick/ban must arrive immediately and close the socket — bypass batch queue
+          // Kick/ban must arrive immediately and close the socket - bypass batch queue
           if (msg.type === 'viewer_kick' || msg.type === 'banned') {
-            const dest = viewers.get(login);
+            const dest = room.viewers.get(login);
             sendWs(dest, text, { type: msg.type, target: login });
             if (dest && dest.readyState === WebSocket.OPEN) {
               setTimeout(() => {
                 try { dest.close(4007, msg.type === 'banned' ? 'Banned by streamer' : 'Kicked by streamer'); } catch (e) {}
               }, 50);
             }
-            recordOps('host_moderation', { type: msg.type, target: login });
+            recordOps('host_moderation', { room: room.roomId, type: msg.type, target: login });
             return;
           }
           // All other targeted messages are batched into a 16ms flush window
-          queueForViewer(login, text);
+          queueForViewer(room, login, text);
           return;
         }
 
@@ -999,7 +1160,7 @@ wss.on('connection', (ws, req) => {
           return;
         }
 
-        for (const [, vws] of viewers) {
+        for (const [, vws] of room.viewers) {
           sendWs(vws, text, { type: msg.type });
         }
         if (msg.type === 'map_frame') return;
@@ -1010,16 +1171,17 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-      if (hostSocket === ws) {
-        hostSocket = null;
-        for (const login of contextMenuRequests.keys()) clearContextMenuRequest(login);
-        console.log('[relay] Host disconnected');
-        recordOps('host_disconnected');
+      if (room.hostSocket === ws) {
+        room.hostSocket = null;
+        room.lastActiveAt = Date.now();
+        for (const login of Array.from(room.contextMenuRequests.keys())) clearContextMenuRequest(room, login);
+        console.log(`[relay] Host disconnected: room ${room.roomId}`);
+        recordOps('host_disconnected', { room: room.roomId });
         const notice = JSON.stringify({ type: 'host_disconnected' });
-        for (const [, vws] of viewers) {
+        for (const [, vws] of room.viewers) {
           sendWs(vws, notice, { type: 'host_disconnected' });
         }
-        broadcastToAdmins({ type: 'host_status', connected: false });
+        broadcastToAdmins({ type: 'host_status', connected: false, room: room.roomId });
       }
     });
 
@@ -1028,6 +1190,7 @@ wss.on('connection', (ws, req) => {
   }
 
   // ── Viewer ────────────────────────────────────────────────────────────────
+  // -- Viewer ------------------------------------------------------------
   if (role === 'viewer') {
     const identity = resolveSession(sToken);
     if (!identity) {
@@ -1036,10 +1199,23 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
+    const room = resolveViewerRoom(roomParam);
+    if (!room) {
+      // No room named and none to fall back on, or a room id that no longer exists.
+      // Hand back the directory so the page can show what IS live rather than an
+      // opaque failure, then close - the client reconnects with a ?room= choice.
+      const live = listLiveRooms();
+      recordOps('viewer_room_choice', { requested: roomParam || '(none)', live: live.length });
+      sendWs(ws, JSON.stringify({ type: 'room_choice', rooms: live, requested: roomParam || '' }),
+        { type: 'room_choice' });
+      setTimeout(() => { try { ws.close(4009, 'Choose a game'); } catch (_) {} }, 120);
+      return;
+    }
+
     const { login, displayName } = identity;
-    const prev = viewers.get(login);
-    if (!prev && viewers.size >= MAX_VIEWERS) {
-      recordOps('viewer_rejected', { username: login, reason: 'server_full', viewers: viewers.size });
+    const prev = room.viewers.get(login);
+    if (!prev && room.viewers.size >= MAX_VIEWERS) {
+      recordOps('viewer_rejected', { room: room.roomId, username: login, reason: 'server_full', viewers: room.viewers.size });
       ws.close(4004, 'Server full');
       return;
     }
@@ -1047,20 +1223,36 @@ wss.on('connection', (ws, req) => {
     if (prev && prev.readyState === WebSocket.OPEN) {
       prev.close(4005, 'Reconnected from another tab');
     }
-    clearContextMenuRequest(login);
+    // The same person switching rooms must not leave a socket behind in the old one.
+    for (const other of rooms.values()) {
+      if (other === room) continue;
+      const stale = other.viewers.get(login);
+      if (stale) {
+        try { stale.close(4005, 'Joined another game'); } catch (_) {}
+        other.viewers.delete(login);
+        other.viewerInfo.delete(login);
+        clearContextMenuRequest(other, login);
+        sendToHost(other, { type: 'viewer_left', username: login });
+      }
+    }
+    clearContextMenuRequest(room, login);
 
-    viewers.set(login, ws);
-    viewerInfo.set(login, { login, displayName: displayName || login, connectedAt: Date.now(), clientBuild, mapTransport });
-    console.log(`[relay] Viewer joined: ${displayName} (${login})`);
-    recordOps('viewer_joined', { username: login, displayName, clientBuild });
-    sendToHost({ type: 'viewer_joined', username: login, displayName, mapTransport });
-    broadcastToAdmins({ type: 'viewer_update', action: 'joined', login, displayName });
+    room.viewers.set(login, ws);
+    room.lastActiveAt = Date.now();
+    room.viewerInfo.set(login, { login, displayName: displayName || login, connectedAt: Date.now(), clientBuild, mapTransport });
+    console.log(`[relay] Viewer joined: ${displayName} (${login}) -> room ${room.roomId}`);
+    recordOps('viewer_joined', { room: room.roomId, username: login, displayName, clientBuild });
+    sendToHost(room, { type: 'viewer_joined', username: login, displayName, mapTransport });
+    broadcastToAdmins({ type: 'viewer_update', action: 'joined', login, displayName, room: room.roomId });
     suggestClientReload(ws, login, clientBuild);
-    sendWs(ws, JSON.stringify(RELAY_CAPABILITIES), { type: 'relay_capabilities', target: login });
-    if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
+    sendWs(ws, JSON.stringify(Object.assign({}, RELAY_CAPABILITIES, {
+      room: room.roomId,
+      roomLabel: roomDisplayLabel(room),
+    })), { type: 'relay_capabilities', target: login });
+    if (room.hostSocket && room.hostSocket.readyState === WebSocket.OPEN) {
       sendWs(ws, JSON.stringify({ type: 'host_connected', instance: INSTANCE_ID }), { type: 'host_connected', target: login });
       // Immediately replay room-level state (game_info) so the pill isn't stuck on "Host waiting".
-      replayRoomCachedState(ws, login);
+      replayRoomCachedState(room, ws, login);
     } else {
       // This else was missing, and its absence is the whole "I can't see his game"
       // experience: host_connected was the ONLY signal about the game's existence and
@@ -1068,10 +1260,14 @@ wss.on('connection', (ws, req) => {
       // arriving at a relay with no game got neither, so the page showed a green
       // "Connected" pill and "Waiting for colonists…" indefinitely. That pill was
       // always about the viewer's own socket to the relay, never about the game.
-      sendWs(ws, JSON.stringify({ type: 'host_absent', instance: INSTANCE_ID }), { type: 'host_absent', target: login });
+      sendWs(ws, JSON.stringify({
+        type: 'host_absent',
+        instance: INSTANCE_ID,
+        rooms: listLiveRooms(),
+      }), { type: 'host_absent', target: login });
     }
-    if (viewerReplayCache.has(login)) {
-      replayCachedState(login, { type: 'state_resync_request', reason: 'viewer_reconnected' });
+    if (room.viewerReplayCache.has(login)) {
+      replayCachedState(room, login, { type: 'state_resync_request', reason: 'viewer_reconnected' });
     }
 
     // Per-viewer send budget: ~20 msg/s sustained, burst 40. Every accepted message
@@ -1134,29 +1330,30 @@ wss.on('connection', (ws, req) => {
         }
         if (msg.type === 'map_transport') {
           msg.transport = normalizeMapTransport(msg.transport);
-          const info = viewerInfo.get(login);
+          const info = room.viewerInfo.get(login);
           if (info) info.mapTransport = msg.transport;
           if (msg.transport === 'jpeg') clearViewerMapReplayCache(login, 'viewer_selected_jpeg');
         }
         if (msg.type === 'command' && msg.action === 'context_menu') {
-          queueContextMenuRequest(login, msg);
+          queueContextMenuRequest(room, login, msg);
           return;
         }
-        sendToHost(msg);
+        sendToHost(room, msg);
       } catch (e) {
         console.error(`[relay] Bad viewer message from ${login}:`, e.message);
       }
     });
 
     ws.on('close', () => {
-      if (viewers.get(login) === ws) {
-        viewers.delete(login);
-        viewerInfo.delete(login);
-        clearContextMenuRequest(login);
-        console.log(`[relay] Viewer left: ${login}`);
-        recordOps('viewer_left', { username: login });
-        sendToHost({ type: 'viewer_left', username: login });
-        broadcastToAdmins({ type: 'viewer_update', action: 'left', login });
+      if (room.viewers.get(login) === ws) {
+        room.viewers.delete(login);
+        room.viewerInfo.delete(login);
+        room.lastActiveAt = Date.now();
+        clearContextMenuRequest(room, login);
+        console.log(`[relay] Viewer left: ${login} (room ${room.roomId})`);
+        recordOps('viewer_left', { room: room.roomId, username: login });
+        sendToHost(room, { type: 'viewer_left', username: login });
+        broadcastToAdmins({ type: 'viewer_update', action: 'left', login, room: room.roomId });
       }
     });
 
@@ -1178,18 +1375,22 @@ wss.on('connection', (ws, req) => {
     ws._isAdmin = true;
     admins.set(adminKey, ws);
 
-    // Send current state immediately
+    // The admin console is the RELAY OPERATOR's view, so it defaults to the owner
+    // room (what it always showed) and can be pointed at any room with ?room=.
+    const adminRoom = resolveAdminRoom(roomParam);
     sendWs(ws, JSON.stringify({
       type: 'admin_sync',
-      host: hostSocket !== null && hostSocket.readyState === WebSocket.OPEN,
-      viewers: getViewerList(),
+      room: adminRoom ? adminRoom.roomId : '',
+      host: roomIsLive(adminRoom),
+      viewers: getViewerList(adminRoom),
+      rooms: listLiveRooms(),
       sessions: sessions.size,
       uptime: process.uptime(),
       instance: INSTANCE_ID,
       clientBuild: CLIENT_BUILD,
-      replayCacheViewers: viewerReplayCache.size,
+      replayCacheViewers: adminRoom ? adminRoom.viewerReplayCache.size : 0,
     }), { type: 'admin_sync', target: 'admin' });
-    sendToHost({ type: 'request_colonist_list', source: 'admin', adminCommand: true });
+    if (adminRoom) sendToHost(adminRoom, { type: 'request_colonist_list', source: 'admin', adminCommand: true });
 
     ws.on('close', () => {
       admins.delete(adminKey);
@@ -1205,20 +1406,29 @@ wss.on('connection', (ws, req) => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function sendToHost(msg) {
-  if (!hostSocket || hostSocket.readyState !== WebSocket.OPEN) {
+function sendToHost(room, msg) {
+  if (!room || !room.hostSocket || room.hostSocket.readyState !== WebSocket.OPEN) {
     const summary = typeof msg === 'string'
       ? { type: 'raw', bytes: Buffer.byteLength(msg) }
       : summarizeMessage(msg, Buffer.byteLength(JSON.stringify(msg || {})));
+    summary.room = room ? room.roomId : '(none)';
     recordOps('host_message_dropped', summary);
     return;
   }
   try {
     const type = typeof msg === 'string' ? '' : msg && msg.type;
-    sendWs(hostSocket, typeof msg === 'string' ? msg : JSON.stringify(msg), { type, target: 'host' });
+    sendWs(room.hostSocket, typeof msg === 'string' ? msg : JSON.stringify(msg), { type, target: 'host' });
   } catch (e) {
     console.error('[relay] Failed to send to host:', e.message);
   }
+}
+
+function findViewerSocketAnywhere(login) {
+  for (const room of rooms.values()) {
+    const ws = room.viewers.get(login);
+    if (ws) return ws;
+  }
+  return null;
 }
 
 function suggestClientReload(ws, login, clientBuild, delayMs = 800) {
@@ -1234,10 +1444,11 @@ function suggestClientReload(ws, login, clientBuild, delayMs = 800) {
   return sent;
 }
 
-function getViewerList() {
+function getViewerList(room) {
   const list = [];
-  for (const [login, ws] of viewers) {
-    const info = viewerInfo.get(login) || { login, displayName: login, connectedAt: 0 };
+  if (!room) return list;
+  for (const [login, ws] of room.viewers) {
+    const info = room.viewerInfo.get(login) || { login, displayName: login, connectedAt: 0 };
     list.push({
       login,
       displayName: info.displayName || login,
@@ -1251,7 +1462,7 @@ function getViewerList() {
   return list;
 }
 
-function describeReplayCacheEntry(login, cache, now = Date.now()) {
+function describeReplayCacheEntry(room, login, cache, now = Date.now()) {
   const messages = [];
   for (const [type, cached] of cache.messages) {
     messages.push({
@@ -1279,12 +1490,208 @@ function describeReplayCacheEntry(login, cache, now = Date.now()) {
   return {
     login,
     ageMs: cache.updatedAt ? now - cache.updatedAt : null,
-    connected: viewers.has(login),
+    connected: room.viewers.has(login),
     messageCount: messages.length,
     mapChunkCount: cache.mapChunks ? cache.mapChunks.size : 0,
     messages,
   };
 }
+
+// -- Room resolution -------------------------------------------------------
+
+/**
+ * Which game a viewer socket belongs to.
+ *  - an explicit ?room= wins, and an id that does not exist is NOT silently
+ *    redirected somewhere else - the viewer gets the directory instead, because
+ *    quietly putting someone in a different streamer's game is worse than an error.
+ *  - with no ?room=, a single live game is chosen automatically. That is what
+ *    keeps a one-streamer relay behaving exactly as it did before rooms existed.
+ *  - with no ?room= and several live games, there is nothing to guess: return null
+ *    and let the caller hand back the directory.
+ */
+function resolveViewerRoom(roomParam) {
+  if (roomParam) {
+    const room = rooms.get(roomParam);
+    return room || null;
+  }
+  const live = [];
+  for (const room of rooms.values()) if (roomIsLive(room)) live.push(room);
+  if (live.length === 1) return live[0];
+  if (live.length === 0) {
+    // Nothing is hosting. Fall back to the owner room so the viewer still lands
+    // somewhere and receives host_absent, which is a readable state; a relay with
+    // no owner room and no live games has genuinely nothing to show.
+    return rooms.get(OWNER_ROOM_ID) || null;
+  }
+  return null;
+}
+
+/** The relay operator's console: owner room by default, any room via ?room=. */
+function resolveAdminRoom(roomParam) {
+  if (roomParam && rooms.has(roomParam)) return rooms.get(roomParam);
+  const owner = rooms.get(OWNER_ROOM_ID);
+  if (owner) return owner;
+  for (const room of rooms.values()) if (roomIsLive(room)) return room;
+  return rooms.values().next().value || null;
+}
+
+function reapIdleRooms() {
+  const now = Date.now();
+  for (const [roomId, room] of Array.from(rooms.entries())) {
+    if (room.owner) continue;                       // the operator's own room is permanent
+    if (roomIsLive(room)) continue;
+    if (room.viewers.size > 0) continue;
+    if (now - room.lastActiveAt < ROOM_IDLE_MS) continue;
+    for (const login of Array.from(room.contextMenuRequests.keys())) clearContextMenuRequest(room, login);
+    rooms.delete(roomId);
+    recordOps('room_reaped', { room: roomId, idleMs: now - room.lastActiveAt });
+    persistRooms();
+  }
+}
+setInterval(reapIdleRooms, 60 * 1000);
+
+// -- Room registry persistence --------------------------------------------
+// Best effort only. A relay restart on a machine with no volume loses this, and
+// that is survivable: the mod re-registers automatically when its key is refused,
+// so a streamer sees a reconnect rather than a dead end.
+function persistRooms() {
+  try {
+    const out = [];
+    for (const room of rooms.values()) {
+      if (room.owner) continue;
+      out.push({ roomId: room.roomId, hostKey: room.hostKey, label: room.label, createdAt: room.createdAt });
+    }
+    fs.mkdirSync(path.dirname(ROOMS_FILE), { recursive: true });
+    fs.writeFileSync(ROOMS_FILE, JSON.stringify(out), 'utf8');
+  } catch (_) {}
+}
+
+function restoreRooms() {
+  try {
+    if (!fs.existsSync(ROOMS_FILE)) return;
+    const saved = JSON.parse(fs.readFileSync(ROOMS_FILE, 'utf8'));
+    if (!Array.isArray(saved)) return;
+    let restored = 0;
+    for (const entry of saved) {
+      if (!entry || !entry.roomId || !entry.hostKey) continue;
+      if (rooms.has(entry.roomId)) continue;
+      if (rooms.size >= MAX_ROOMS) break;
+      makeRoom(entry.roomId, {
+        hostKey: entry.hostKey,
+        label: entry.label || '',
+        createdAt: entry.createdAt || Date.now(),
+      });
+      restored++;
+    }
+    if (restored) console.log(`[relay] Restored ${restored} room(s) from ${ROOMS_FILE}`);
+  } catch (e) {
+    console.warn('[relay] Could not restore rooms:', e.message);
+  }
+}
+restoreRooms();
+
+// -- Public room directory -------------------------------------------------
+app.get('/api/rooms', (_req, res) => {
+  res.json({
+    ok: true,
+    instance: INSTANCE_ID,
+    openHosting: OPEN_HOSTING,
+    inviteRequired: OPEN_HOSTING && !!HOST_INVITE_CODE,
+    maxRooms: MAX_ROOMS,
+    rooms: listLiveRooms(),
+  });
+});
+
+// -- Self-serve hosting ----------------------------------------------------
+// The whole point: a streamer who is not the relay operator should never see an
+// env var, a secret, or a deploy button. The mod calls this once, is handed a
+// room and a key, stores them itself, and connects. Nothing is typed by hand.
+const registerHits = new Map(); // ip -> {count, windowStart}
+const REGISTER_WINDOW_MS = 10 * 60 * 1000;
+const REGISTER_MAX_PER_WINDOW = 5;
+
+function registerRateLimited(ip) {
+  const now = Date.now();
+  const hit = registerHits.get(ip);
+  if (!hit || now - hit.windowStart > REGISTER_WINDOW_MS) {
+    registerHits.set(ip, { count: 1, windowStart: now });
+    return false;
+  }
+  hit.count++;
+  return hit.count > REGISTER_MAX_PER_WINDOW;
+}
+
+function newRoomId() {
+  // Short, unambiguous, URL-safe. No vowels, so it cannot spell anything.
+  const alphabet = '23456789bcdfghjkmnpqrstvwxz';
+  let id = '';
+  const bytes = crypto.randomBytes(8);
+  for (const b of bytes) id += alphabet[b % alphabet.length];
+  return rooms.has(id) ? newRoomId() : id;
+}
+
+app.post('/api/host/register', (req, res) => {
+  if (!OPEN_HOSTING) {
+    return res.status(403).json({
+      error: 'This relay does not accept other hosts.',
+      detail: 'The person who runs it can enable OPEN_HOSTING=1.',
+    });
+  }
+
+  const ip = String(req.headers['fly-client-ip'] || req.ip || req.socket.remoteAddress || '');
+  if (registerRateLimited(ip)) {
+    recordOps('host_register_rate_limited', { ip });
+    return res.status(429).json({ error: 'Too many attempts. Wait a few minutes.' });
+  }
+
+  if (HOST_INVITE_CODE) {
+    const given = String((req.body && req.body.invite) || '').trim();
+    if (!given || !timingSafeEqualStr(HOST_INVITE_CODE, given)) {
+      recordOps('host_register_bad_invite', { ip });
+      return res.status(403).json({ error: 'That invite code is not right.' });
+    }
+  }
+
+  if (rooms.size >= MAX_ROOMS) {
+    recordOps('host_register_full', { rooms: rooms.size });
+    return res.status(503).json({
+      error: 'This relay is full.',
+      detail: `It is set to allow ${MAX_ROOMS} games at once.`,
+    });
+  }
+
+  const label = String((req.body && req.body.label) || '').trim().slice(0, 48);
+  const roomId = newRoomId();
+  const hostKey = crypto.randomBytes(24).toString('base64url');
+  makeRoom(roomId, { hostKey, label });
+  persistRooms();
+  recordOps('host_registered', { room: roomId, label, ip });
+
+  res.json({
+    ok: true,
+    roomId,
+    hostKey,
+    label,
+    // Handed back ready to paste into chat - the streamer never assembles a URL.
+    viewerPath: `/g/${roomId}`,
+  });
+});
+
+// A game whose key was refused (relay restarted without a volume, room reaped)
+// re-registers with this so the streamer sees a reconnect instead of a dead end.
+app.post('/api/host/reclaim', (req, res) => {
+  const key = String((req.body && req.body.hostKey) || '');
+  const existing = findRoomByHostKey(key);
+  if (existing) {
+    return res.json({ ok: true, roomId: existing.roomId, hostKey: existing.hostKey, viewerPath: `/g/${existing.roomId}` });
+  }
+  res.status(404).json({ error: 'That key is not known to this relay.' });
+});
+
+// -- Pretty viewer link ----------------------------------------------------
+app.get('/g/:roomId', (req, res) => {
+  serveViewerPage(res, String(req.params.roomId || '').trim());
+});
 
 // ─── Admin API (protected by HOST_SECRET) ─────────────────────────────────────
 function adminAuth(req, res, next) {
@@ -1300,38 +1707,42 @@ function adminAuth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-app.get('/admin/status', adminAuth, (_req, res) => {
+app.get('/admin/status', adminAuth, (req, res) => {
+  const room = resolveAdminRoom(String(req.query.room || '').trim());
   res.json({
     instance: INSTANCE_ID,
     pid:      process.pid,
-    host:     hostSocket !== null && hostSocket.readyState === WebSocket.OPEN,
+    room:     room ? room.roomId : '',
+    host:     roomIsLive(room),
     clientBuild: CLIENT_BUILD,
-    viewers:  getViewerList(),
-    replayCacheViewers: viewerReplayCache.size,
+    viewers:  getViewerList(room),
+    rooms:    listLiveRooms(),
+    replayCacheViewers: room ? room.viewerReplayCache.size : 0,
     sessions: sessions.size,
     uptime:   Math.round(process.uptime()),
   });
 });
 
-function sendReplayCacheSummary(res) {
+function sendReplayCacheSummary(room, res) {
   const now = Date.now();
   res.json({
     ok: true,
     instance: INSTANCE_ID,
-    host: hostSocket !== null && hostSocket.readyState === WebSocket.OPEN,
-    replayCacheViewers: viewerReplayCache.size,
-    viewers: Array.from(viewerReplayCache.entries())
-      .map(([login, cache]) => describeReplayCacheEntry(login, cache, now))
-      .sort((a, b) => a.login.localeCompare(b.login)),
+    room: room ? room.roomId : '',
+    host: roomIsLive(room),
+    replayCacheViewers: room ? room.viewerReplayCache.size : 0,
+    viewers: room ? Array.from(room.viewerReplayCache.entries())
+      .map(([login, cache]) => describeReplayCacheEntry(room, login, cache, now))
+      .sort((a, b) => a.login.localeCompare(b.login)) : [],
   });
 }
 
-app.get('/admin/cache', adminAuth, (_req, res) => {
-  sendReplayCacheSummary(res);
+app.get('/admin/cache', adminAuth, (req, res) => {
+  sendReplayCacheSummary(resolveAdminRoom(String(req.query.room || '').trim()), res);
 });
 
-app.get('/admin/replay-cache', adminAuth, (_req, res) => {
-  sendReplayCacheSummary(res);
+app.get('/admin/replay-cache', adminAuth, (req, res) => {
+  sendReplayCacheSummary(resolveAdminRoom(String(req.query.room || '').trim()), res);
 });
 
 app.post('/admin/viewer-session', adminAuth, (req, res) => {
@@ -1344,7 +1755,7 @@ app.post('/admin/viewer-session', adminAuth, (req, res) => {
   const rawDisplay = String(req.body?.displayName || rawLogin || login).trim();
   const displayName = rawDisplay.slice(0, 32) || login;
   const ttlMs = Math.max(60 * 1000, Math.min(Number(req.body?.ttlMs || SESSION_TTL_MS), SESSION_TTL_MS));
-  clearViewerReplayCache(login, 'admin_viewer_session');
+  clearViewerReplayCacheEverywhere(login, 'admin_viewer_session');
   const session = createViewerSession(login, displayName, ttlMs);
   recordOps('admin_viewer_session', {
     username: login,
@@ -1357,13 +1768,14 @@ app.post('/admin/viewer-session', adminAuth, (req, res) => {
 app.post('/admin/kick', adminAuth, (req, res) => {
   const { username } = req.body || {};
   if (!username) return res.status(400).json({ error: 'Missing username' });
-  const ws = viewers.get(username);
+  const room = resolveAdminRoom(String((req.body && req.body.room) || req.query.room || '').trim());
+  const ws = room && room.viewers.get(username);
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.close(4006, 'Kicked by admin');
-    viewers.delete(username);
-    viewerInfo.delete(username);
-    recordOps('admin_kick', { username });
-    sendToHost({ type: 'viewer_left', username });
+    room.viewers.delete(username);
+    room.viewerInfo.delete(username);
+    recordOps('admin_kick', { room: room.roomId, username });
+    sendToHost(room, { type: 'viewer_left', username });
     return res.json({ ok: true, message: `Kicked ${username}` });
   }
   res.json({ ok: false, message: 'Viewer not found or not connected' });
@@ -1376,7 +1788,7 @@ app.post('/admin/message', adminAuth, (req, res) => {
   const payload = JSON.stringify({ type: 'admin_message', message });
 
   if (username) {
-    const ws = viewers.get(username);
+    const ws = findViewerSocketAnywhere(username);
     if (ws && ws.readyState === WebSocket.OPEN) {
       recordOps('admin_message', { target: username, bytes: Buffer.byteLength(message) });
       sendWs(ws, payload, { type: 'admin_message', target: username });
@@ -1385,12 +1797,16 @@ app.post('/admin/message', adminAuth, (req, res) => {
     return res.json({ ok: false, message: 'Viewer not found' });
   }
 
-  // Broadcast to all
-  for (const [, ws] of viewers) {
-    sendWs(ws, payload, { type: 'admin_message' });
+  // Broadcast to every viewer on the relay - an operator notice is relay-wide.
+  let count = 0;
+  for (const room of rooms.values()) {
+    for (const [, ws] of room.viewers) {
+      sendWs(ws, payload, { type: 'admin_message' });
+      count++;
+    }
   }
-  recordOps('admin_message', { target: 'all', bytes: Buffer.byteLength(message), viewers: viewers.size });
-  res.json({ ok: true, message: `Sent to ${viewers.size} viewers` });
+  recordOps('admin_message', { target: 'all', bytes: Buffer.byteLength(message), viewers: count });
+  res.json({ ok: true, message: `Sent to ${count} viewers` });
 });
 
 app.post('/admin/reload', adminAuth, (req, res) => {
@@ -1398,21 +1814,26 @@ app.post('/admin/reload', adminAuth, (req, res) => {
   const message = req.body?.message || 'Viewer update available. Reloading...';
   const payload = JSON.stringify({ type: 'client_reload', build: CLIENT_BUILD, delayMs, message });
   let sent = 0;
-  for (const [login, ws] of viewers) {
-    if (sendWs(ws, payload, { type: 'client_reload', target: login })) sent++;
+  let total = 0;
+  for (const room of rooms.values()) {
+    for (const [login, ws] of room.viewers) {
+      total++;
+      if (sendWs(ws, payload, { type: 'client_reload', target: login })) sent++;
+    }
   }
-  recordOps('admin_reload', { viewers: viewers.size, sent, build: CLIENT_BUILD, delayMs });
-  res.json({ ok: true, build: CLIENT_BUILD, viewers: viewers.size, sent });
+  recordOps('admin_reload', { viewers: total, sent, build: CLIENT_BUILD, delayMs });
+  res.json({ ok: true, build: CLIENT_BUILD, viewers: total, sent });
 });
 
 app.post('/admin/host-command', adminAuth, (req, res) => {
   const { command } = req.body || {};
   if (!command) return res.status(400).json({ error: 'Missing command' });
-  if (!hostSocket || hostSocket.readyState !== WebSocket.OPEN) {
+  const room = resolveAdminRoom(String((req.body && req.body.room) || req.query.room || '').trim());
+  if (!roomIsLive(room)) {
     return res.json({ ok: false, message: 'Host not connected' });
   }
   recordOps('admin_command', summarizeMessage(command, Buffer.byteLength(JSON.stringify(command))));
-  sendToHost({ ...command, source: 'admin', adminCommand: true });
+  sendToHost(room, { ...command, source: 'admin', adminCommand: true });
   res.json({ ok: true });
 });
 
@@ -1440,7 +1861,7 @@ setInterval(() => {
     if (now > s.exp) {
       sessions.delete(k);
       if (!hasActiveSessionForLogin(s.login, now)) {
-        clearViewerReplayCache(s.login, 'session_expired');
+        clearViewerReplayCacheEverywhere(s.login, 'session_expired');
       }
     }
   }
@@ -1449,6 +1870,12 @@ setInterval(() => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 server.listen(PORT, () => {
   console.log(`[relay] Overlord relay server listening on port ${PORT}`);
+  if (OPEN_HOSTING) {
+    console.log(`[relay] Open hosting is ON - up to ${MAX_ROOMS} games at once${HOST_INVITE_CODE ? ', invite code required' : ', no invite code'}.`);
+    console.log('[relay] Bandwidth scales with games x viewers. MAX_ROOMS and MAX_VIEWERS are the ceilings.');
+  } else {
+    console.log('[relay] Open hosting is OFF - only the game holding HOST_SECRET can host. Set OPEN_HOSTING=1 to let others host here.');
+  }
   if (!TWITCH_CLIENT_ID) {
     // NOT a "guest mode" — there is no anonymous login on the relay path. With no
     // client id, /auth/twitch returns 503 and the viewer UI shows "Twitch auth is
