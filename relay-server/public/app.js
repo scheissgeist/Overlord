@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-rooms-v1';
+const UI_BUILD = '20260826-rooms-v2';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -1487,6 +1487,78 @@ async function chooseRoom() {
   if (rooms.length > 1) renderRoomPicker(rooms);
 }
 
+/**
+ * While the page is sitting on "no game on this relay", keep asking whether one has
+ * started. Without this the screen is a dead end: the relay only tells a viewer
+ * about games at the moment their socket opens, so a friend starting RimWorld
+ * changed nothing until you thought to refresh — and "do I need to refresh?" is
+ * exactly the question this whole screen exists to stop you having to ask.
+ */
+let roomWatchTimer = null;
+
+function stopRoomWatch() {
+  if (roomWatchTimer) { clearInterval(roomWatchTimer); roomWatchTimer = null; }
+}
+
+function startRoomWatch() {
+  if (roomWatchTimer) return;
+  roomWatchTimer = setInterval(async () => {
+    let rooms = [];
+    try {
+      const res = await fetch('/api/rooms', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    } catch (_) { return; }
+
+    if (!rooms.length) return;
+
+    if (rooms.length === 1) {
+      // One game is live and nothing else is competing for the slot, so join it
+      // rather than making someone click a list of one. Same rule the login screen
+      // already follows.
+      stopRoomWatch();
+      selectedRoom = rooms[0].roomId;
+      try { history.replaceState(null, '', '/g/' + selectedRoom); } catch (_) {}
+      if (identity) connect();
+      return;
+    }
+    renderRoomsInLobby(rooms);
+  }, 6000);
+}
+
+/**
+ * The live-game list, drawn into the lobby's colonist area. Same rows as the login
+ * picker; this is the copy you see once you are already signed in.
+ */
+function renderRoomsInLobby(rooms) {
+  if (!colonistList) return;
+  colonistList.innerHTML = '';
+  for (const room of rooms) {
+    const btn = document.createElement('button');
+    btn.className = 'room-item';
+    btn.type = 'button';
+
+    const name = document.createElement('span');
+    name.className = 'room-item-name';
+    name.textContent = room.label || room.roomId;
+    btn.appendChild(name);
+
+    const count = document.createElement('span');
+    count.className = 'room-item-count';
+    count.textContent = room.viewers === 1 ? '1 watching' : room.viewers + ' watching';
+    btn.appendChild(count);
+
+    btn.addEventListener('click', () => {
+      stopRoomWatch();
+      selectedRoom = room.roomId;
+      try { history.replaceState(null, '', '/g/' + room.roomId); } catch (_) {}
+      if (identity) connect();
+    });
+    colonistList.appendChild(btn);
+  }
+}
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 (function initLoginUi() {
   if (!EMBEDDED_MODE && !GUEST_MODE) return;
@@ -1993,6 +2065,7 @@ function handleMessage(msg) {
     case 'item_icons':       handleItemIcons(msg);       break;
     case 'roster_state':     handleRosterState(msg);     break;
     case 'host_connected':
+      stopRoomWatch();
       const forceHostResync = hasSeenHostConnection;
       hasSeenHostConnection = true;
       markHostOnline('host_connected');
@@ -2031,6 +2104,10 @@ function handleMessage(msg) {
         message: 'The host needs to load a RimWorld save with Overlord active. Hang tight.',
         statusHtml: '<span class="off">Host offline</span>'
       });
+      // They may come back, or another game on this relay may already be running.
+      // Watching costs one small request every six seconds and stops the moment a
+      // host connects.
+      startRoomWatch();
       break;
     case 'room_choice':
       // The relay could not decide which game we meant. It sends the live list and
@@ -2047,15 +2124,26 @@ function handleMessage(msg) {
       // do, describes the socket and hides the only fact that matters.
       markHostOffline();
       statusText.textContent = 'No game';
-      showLobbyState({
-        phase: 'lobby',
-        title: 'No game on this relay',
-        message: 'This relay is up, but no RimWorld game is connected to it. The streamer needs to load a save with Overlord running — or you may be on the wrong address.',
-        statusHtml: '<span class="off">No game connected</span>'
-      });
-      // Otherwise the colonist panel keeps its optimistic "Waiting for colonists…"
-      // underneath, which reads as though colonists are on their way.
-      renderColonistWaiting('No colonists — nothing is hosting here.');
+      {
+        // host_absent carries the relay's live-game list. If other games ARE running
+        // (you just landed on a room whose streamer stopped), say so and list them
+        // instead of claiming the whole relay is empty.
+        const live = Array.isArray(msg.rooms) ? msg.rooms : [];
+        const others = live.filter(r => r.roomId !== selectedRoom);
+        showLobbyState({
+          phase: 'lobby',
+          title: others.length ? 'That game is not running' : 'No game on this relay',
+          message: others.length
+            ? 'Pick one of the games below, or wait here — new ones appear on their own.'
+            : 'This relay is up, but no RimWorld game is connected to it. Leave this open — when someone starts hosting, this page joins them automatically.',
+          statusHtml: '<span class="off">No game connected</span>'
+        });
+        if (others.length) renderRoomsInLobby(others);
+        // Otherwise the colonist panel keeps its optimistic "Waiting for colonists…"
+        // underneath, which reads as though colonists are on their way.
+        else renderColonistWaiting('No colonists — nothing is hosting here.');
+      }
+      startRoomWatch();
       break;
   }
 }
