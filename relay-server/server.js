@@ -1061,6 +1061,14 @@ wss.on('connection', (ws, req) => {
       sendWs(ws, JSON.stringify({ type: 'host_connected', instance: INSTANCE_ID }), { type: 'host_connected', target: login });
       // Immediately replay room-level state (game_info) so the pill isn't stuck on "Host waiting".
       replayRoomCachedState(ws, login);
+    } else {
+      // This else was missing, and its absence is the whole "I can't see his game"
+      // experience: host_connected was the ONLY signal about the game's existence and
+      // host_disconnected only fires for a host that had already connected. A viewer
+      // arriving at a relay with no game got neither, so the page showed a green
+      // "Connected" pill and "Waiting for colonists…" indefinitely. That pill was
+      // always about the viewer's own socket to the relay, never about the game.
+      sendWs(ws, JSON.stringify({ type: 'host_absent', instance: INSTANCE_ID }), { type: 'host_absent', target: login });
     }
     if (viewerReplayCache.has(login)) {
       replayCachedState(login, { type: 'state_resync_request', reason: 'viewer_reconnected' });

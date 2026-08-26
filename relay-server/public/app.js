@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-guest-login-v1';
+const UI_BUILD = '20260826-host-absent-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -1946,6 +1946,23 @@ function handleMessage(msg) {
         message: 'The host needs to load a RimWorld save with Overlord active. Hang tight.',
         statusHtml: '<span class="off">Host offline</span>'
       });
+      break;
+    case 'host_absent':
+      // Distinct from host_disconnected: that one means a game was here and left.
+      // This means no game has connected at all — you are looking at a relay with
+      // nothing behind it. Saying "Connected" here, which is what the page used to
+      // do, describes the socket and hides the only fact that matters.
+      markHostOffline();
+      statusText.textContent = 'No game';
+      showLobbyState({
+        phase: 'lobby',
+        title: 'No game on this relay',
+        message: 'This relay is up, but no RimWorld game is connected to it. The streamer needs to load a save with Overlord running — or you may be on the wrong address.',
+        statusHtml: '<span class="off">No game connected</span>'
+      });
+      // Otherwise the colonist panel keeps its optimistic "Waiting for colonists…"
+      // underneath, which reads as though colonists are on their way.
+      renderColonistWaiting('No colonists — nothing is hosting here.');
       break;
   }
 }
