@@ -13,8 +13,11 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 
 ### Deploy your own relay
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https%3A%2F%2Fgithub.com%2Fscheissgeist%2FOverlord&rootDirectory=relay-server&envs=HOST_SECRET%2CTWITCH_CLIENT_ID)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scheissgeist/Overlord)
+
+One click, no CLI. Render reads [`render.yaml`](render.yaml) from this repo, which
+already points the service at the `relay-server` folder and asks you for the two
+values below.
 
 The relay runs **under your own account**, so the bill (usually $0 on a free tier)
 is yours and never someone else's. You will be asked for two values:
@@ -23,6 +26,11 @@ is yours and never someone else's. You will be asked for two values:
 |---|---|
 | `HOST_SECRET` | Mod Settings → Overlord → **Generate**, then copy |
 | `TWITCH_CLIENT_ID` | [Twitch Developer Console](https://dev.twitch.tv/console/apps) → your app |
+
+**On Railway instead:** [import this repo from GitHub](https://railway.com/new/github?repo=https://github.com/scheissgeist/Overlord).
+Railway only one-clicks templates published to its own marketplace, so there is no
+button here — after the import, set **Root Directory** to `relay-server` and add the
+two variables above by hand in the service's Variables tab.
 
 Prefer the CLI, or want Fly.io / Docker? See **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
 
