@@ -38,6 +38,12 @@ namespace Overlord
         public static string Detail => detail;
         public static bool IsRunning => state == Status.Running;
 
+        /// <summary>
+        /// Set once by the mod to GUIUtility.systemCopyBuffer. Left null outside
+        /// RimWorld so this class stays Unity-free and testable.
+        /// </summary>
+        public static Action<string> CopyLink;
+
         public static void Reset()
         {
             if (state == Status.Running) return;
@@ -144,8 +150,18 @@ namespace Overlord
             settings.Write();
 
             LogUtil.Log("Joined relay " + baseUrl + " as room " + roomId);
-            Finish(Status.Ok, "You're set up. Send people this link:",
-                   settings.viewerUrl);
+            // Put it on the clipboard immediately. The link is the entire product of
+            // pressing Join, and the next thing anyone does is paste it into a chat -
+            // so the Copy button is a step that exists only to be forgotten.
+            //
+            // Through a delegate rather than calling UnityEngine directly: this file is
+            // compiled into a headless harness to verify the friend's join path, and a
+            // hard Unity reference here breaks the only test that covers it.
+            try { CopyLink?.Invoke(settings.viewerUrl); }
+            catch (Exception e) { LogUtil.Warn("Could not copy the link: " + e.Message); }
+
+            Finish(Status.Ok, "You're set up, and your link is already copied:",
+                   settings.viewerUrl + "   (paste it anywhere — it opens YOUR colony)");
         }
 
         private static void Finish(Status s, string head, string det)

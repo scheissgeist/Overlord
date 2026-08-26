@@ -20,6 +20,10 @@ namespace Overlord
             harmony = new Harmony("BroTeamPill.Overlord");
             harmony.PatchAll(Assembly.GetExecutingAssembly());
 
+            // RelayJoin copies the viewer link the moment a join succeeds; it reaches
+            // the clipboard through here so it keeps compiling without UnityEngine.
+            RelayJoin.CopyLink = value => GUIUtility.systemCopyBuffer = value;
+
             LogUtil.Log("Mod loaded, Harmony patches applied");
         }
 
@@ -300,6 +304,13 @@ namespace Overlord
             string link = haveLink ? $"http://{lan}:{Settings.localPort}" : null;
 
             StepLabel(listing, true, "1.  Nothing to deploy and no accounts to make. Your game is the server.");
+            if (!running)
+            {
+                Color c = GUI.color;
+                GUI.color = Color.yellow;
+                listing.Label("NEXT: load or start a save. The link below does not exist until a game is open — that is normal, not a fault.");
+                GUI.color = c;
+            }
             StepLabel(listing, running, "2.  Load or start a save." + (running ? "" : "   The page only exists while a game is open."));
 
             StepLabel(listing, haveLink, "3.  Send your friends this link:");
@@ -429,8 +440,35 @@ namespace Overlord
         /// </summary>
         private static void DrawJoinedRelay(Listing_Standard listing)
         {
-            StepLabel(listing, true, "You are hosting on " + Settings.relayUrl);
-            listing.Gap(2f);
+            var comp = OverlordGameComponent.Instance;
+            bool live = comp?.Relay != null && comp.Relay.IsConnected;
+            bool inGame = comp != null;
+
+            StepLabel(listing, true, "You are set up on " + Settings.relayUrl);
+
+            // The single most common stall: everything is configured, nothing is
+            // happening, and no screen says the missing step is "load a save". The mod
+            // does not connect until a game exists, so from the main menu this is the
+            // only instruction that matters.
+            Color prev = GUI.color;
+            if (live)
+            {
+                GUI.color = Color.green;
+                listing.Label("NEXT: nothing — you are live. Send the link below to anyone who wants to play.");
+            }
+            else if (!inGame)
+            {
+                GUI.color = Color.yellow;
+                listing.Label("NEXT: load or start a save. Nothing connects from the main menu — that is normal, not a fault.");
+            }
+            else
+            {
+                GUI.color = Color.yellow;
+                listing.Label("NEXT: connecting... if this does not turn green in a few seconds, press Test connection below.");
+            }
+            GUI.color = prev;
+
+            listing.Gap(4f);
             listing.Label("Send people this link:");
 
             var row = listing.GetRect(28f);
@@ -440,7 +478,7 @@ namespace Overlord
             if (Widgets.ButtonText(copyRect, "Copy") && !string.IsNullOrEmpty(Settings.viewerUrl))
                 CopyToClipboard(Settings.viewerUrl, "your viewer link");
 
-            listing.Label("        They open it, sign in the way that relay is set up, and claim a colonist. Load a save and you are live.");
+            listing.Label("        This link is YOURS — it opens your colony, not the relay owner's. Paste it in your chat, your panels, wherever.");
 
             listing.Gap(6f);
             var btnRow = listing.GetRect(28f);

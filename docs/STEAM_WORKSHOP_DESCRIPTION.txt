@@ -7,8 +7,10 @@ Twitch viewers control your RimWorld colonists from a browser.
 
 [list]
 [*] [b]Local / friends mode[/b] — no Twitch, no relay, no stream. Leave the Relay URL blank in Mod Settings and your friends open your local address in a browser, type any name, and claim a colonist.
-[*] [b]Twitch / stream mode[/b] — viewers log in with Twitch through a relay you host. There is no shared public server; each streamer deploys their own.
+[*] [b]Twitch / stream mode[/b] — viewers log in with Twitch through a relay. If a friend already runs one, paste their address into Mod Settings and press [b]Join this relay[/b]: no account, no secret, no server, no Twitch application. Otherwise run your own (one click on Render, free tier).
 [/list]
+
+[b]Hosting needs no Twitch account and no token.[/b] Only your viewers sign in, and they just click a button on the link you send them. If something asks you for an oauth token, that is Twitch Toolkit — a different, optional mod.
 
 [b]Hosting guide[/b] (both modes, step by step):
 [url=https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md]https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md[/url]
@@ -37,11 +39,25 @@ Release zip (optional):
 Friends outside your network need a port-forward or a tunnel (Tailscale, cloudflared, ngrok). If only your own machine can connect, run RimWorld as administrator.
 
 [h2]Install — streaming to Twitch viewers[/h2]
+[b]Playing with friends — about a minute:[/b]
 [olist]
-[*] Subscribe to [b]Harmony[/b], then [b]Overlord[/b]
-[*] Deploy your own relay (see the GitHub self-host guide)
-[*] In Mod Settings → Overlord: set Relay URL + Host secret
-[*] Send viewers your relay's public HTTPS URL (never the host secret)
+[*] Subscribe to [b]Harmony[/b], then [b]Overlord[/b]. Enable both. Restart RimWorld.
+[*] Mod Settings → Overlord → leave the relay address empty.
+[*] Load a save. The settings screen shows the exact link to send your friends.
+[/olist]
+
+[b]Streaming on a relay a friend runs — about a minute:[/b]
+[olist]
+[*] Subscribe to [b]Harmony[/b], then [b]Overlord[/b]. Enable both. Restart RimWorld.
+[*] Mod Settings → Overlord → [b]Stream to Twitch[/b] → paste their address → [b]Join this relay[/b].
+[*] Copy the link it gives you and load a save. That link is yours, not theirs.
+[/olist]
+
+[b]Running your own relay — about twenty minutes, once:[/b]
+[olist]
+[*] Deploy it from the GitHub page (one-click on Render, or Fly/Docker).
+[*] Mod Settings → Overlord → [b]I run my own relay[/b] → Generate a host secret, put the same value on the relay.
+[*] Paste your relay's address, then press [b]Test connection[/b] before going live.
 [/olist]
 
 [h2]Credits[/h2]
