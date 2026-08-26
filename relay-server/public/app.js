@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-host-absent-v1';
+const UI_BUILD = '20260826-rooms-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -171,6 +171,15 @@ const btnTwitch     = $('btn-twitch');
 const localLogin    = $('local-login');
 const usernameInput = $('username-input');
 const btnLocalConnect = $('btn-local-connect');
+const roomPicker      = $('room-picker');
+const roomPickerTitle = $('room-picker-title');
+const roomList        = $('room-list');
+
+// Which game this page is watching. A /g/<id> link arrives with it already chosen,
+// so someone handed a link never sees a picker. Otherwise it is filled in from the
+// directory: exactly one live game is auto-selected, which is what keeps a
+// one-streamer relay looking exactly as it did before rooms existed.
+let selectedRoom = (document.body.dataset.room || '').trim();
 
 const lobbyUser = $('lobby-user');
 const lobbyStatus = $('lobby-status');
@@ -1408,6 +1417,76 @@ function clearTwitchAccessToken() {
   try { localStorage.removeItem(TWITCH_TOKEN_KEY); } catch (_) {}
 }
 
+// ─── Room directory ──────────────────────────────────────────────────────
+
+function renderRoomPicker(rooms, note) {
+  if (!roomPicker || !roomList) return;
+  roomList.innerHTML = '';
+
+  if (!rooms.length) {
+    roomPickerTitle.textContent = 'No games running right now';
+    const empty = document.createElement('div');
+    empty.className = 'room-empty';
+    empty.textContent = note || 'Nobody is hosting on this relay. Check back when the streamer starts a save.';
+    roomList.appendChild(empty);
+    roomPicker.classList.remove('hidden');
+    return;
+  }
+
+  roomPickerTitle.textContent = rooms.length === 1 ? 'One game is live' : rooms.length + ' games are live';
+  for (const room of rooms) {
+    const btn = document.createElement('button');
+    btn.className = 'room-item';
+    btn.type = 'button';
+
+    const name = document.createElement('span');
+    name.className = 'room-item-name';
+    name.textContent = room.label || room.roomId;
+    btn.appendChild(name);
+
+    const count = document.createElement('span');
+    count.className = 'room-item-count';
+    count.textContent = room.viewers === 1 ? '1 watching' : room.viewers + ' watching';
+    btn.appendChild(count);
+
+    btn.addEventListener('click', () => {
+      selectedRoom = room.roomId;
+      // Reflected in the address bar so a refresh, or a link copied out of it,
+      // lands back on the same game instead of the picker.
+      try { history.replaceState(null, '', '/g/' + room.roomId); } catch (_) {}
+      roomPicker.classList.add('hidden');
+      if (identity) connect();
+    });
+    roomList.appendChild(btn);
+  }
+  roomPicker.classList.remove('hidden');
+}
+
+/**
+ * Pick a game before login where possible, so signing in lands you somewhere real.
+ * Resolves once selectedRoom is settled (or deliberately left blank).
+ */
+async function chooseRoom() {
+  if (selectedRoom) return;
+  let rooms = [];
+  try {
+    const res = await fetch('/api/rooms', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    }
+  } catch (_) {
+    // A relay too old to have /api/rooms, or offline. Fall through with no room:
+    // the server places a lone game automatically, so this stays working.
+    return;
+  }
+  if (rooms.length === 1) {
+    selectedRoom = rooms[0].roomId;
+    return;
+  }
+  if (rooms.length > 1) renderRoomPicker(rooms);
+}
+
 // ─── Login ────────────────────────────────────────────────────────────────────
 (function initLoginUi() {
   if (!EMBEDDED_MODE && !GUEST_MODE) return;
@@ -1421,7 +1500,7 @@ function clearTwitchAccessToken() {
   if (localLogin) localLogin.classList.remove('hidden');
 })();
 
-(function initLogin() {
+(async function initLogin() {
   if (EMBEDDED_MODE) {
     const saved = sessionStorage.getItem(LOCAL_SESSION_KEY);
     if (saved) {
@@ -1436,6 +1515,11 @@ function clearTwitchAccessToken() {
     showScreen('login');
     return;
   }
+
+  // Settle which game this page is watching BEFORE signing in, so a viewer who
+  // logs in lands in a real game instead of an empty lobby. A /g/<id> link and a
+  // relay with exactly one live game both skip the picker entirely.
+  await chooseRoom();
 
   // Check if returning from Twitch OAuth redirect (hash contains access_token)
   const hash = new URLSearchParams(location.hash.slice(1));
@@ -1641,6 +1725,7 @@ function connect() {
     build: UI_BUILD,
     mapTransport: PREFERRED_MAP_TRANSPORT
   });
+  if (selectedRoom) params.set('room', selectedRoom);
   const url = EMBEDDED_MODE ? WS_URL : `${WS_URL}?${params.toString()}`;
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
@@ -1946,6 +2031,14 @@ function handleMessage(msg) {
         message: 'The host needs to load a RimWorld save with Overlord active. Hang tight.',
         statusHtml: '<span class="off">Host offline</span>'
       });
+      break;
+    case 'room_choice':
+      // The relay could not decide which game we meant. It sends the live list and
+      // closes; the picker is shown so the next connect carries a ?room=.
+      selectedRoom = '';
+      showScreen('login');
+      renderRoomPicker(Array.isArray(msg.rooms) ? msg.rooms : [],
+        msg.requested ? 'That game is not running any more.' : '');
       break;
     case 'host_absent':
       // Distinct from host_disconnected: that one means a game was here and left.

@@ -23,6 +23,13 @@
           <div class="login-descriptor">Command a colonist. Shape their fate.</div>
         </div>
         <div class="login-ornament" aria-hidden="true"><span></span><span class="login-ornament-diamond"></span><span></span></div>
+        <!-- Shown only when this relay is hosting more than one game, or none. A
+             single live game is chosen automatically, so a one-streamer relay never
+             sees this and looks exactly as it always did. -->
+        <div id="room-picker" class="room-picker hidden">
+          <div id="room-picker-title" class="room-picker-title"></div>
+          <div id="room-list" class="room-list"></div>
+        </div>
         <div class="login-action-row">
           <button id="btn-twitch" class="btn-twitch">Connect with Twitch</button>
           <div id="local-login" class="local-login hidden">

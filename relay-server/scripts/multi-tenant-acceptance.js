@@ -38,6 +38,8 @@ const PORT = parseInt(process.env.ACCEPT_PORT || '8097', 10);
 const BASE = process.env.ACCEPT_URL || `http://localhost:${PORT}`;
 const WS_BASE = BASE.replace(/^http/, 'ws') + '/ws';
 
+const ROOMS_FILE = path.join(require('os').tmpdir(), 'overlord-acceptance-rooms-' + process.pid + '.json');
+
 const results = [];
 let relayProc = null;
 
@@ -148,6 +150,7 @@ function openViewer(sessionToken, room) {
 
 function startRelay() {
   return new Promise((resolve, reject) => {
+    try { require('fs').unlinkSync(ROOMS_FILE); } catch (_) {}
     const serverPath = path.join(__dirname, '..', 'server.js');
     relayProc = spawn(process.execPath, [serverPath], {
       env: {
@@ -159,6 +162,10 @@ function startRelay() {
         ALLOW_GUEST_LOGIN: '1',
         LOG_TRAFFIC: '0',
         OPEN_HOSTING: '1',
+        // Its own registry, deleted below. Sharing the real one made run N+1 fail
+        // at registration with "This relay is full" - rooms from earlier runs were
+        // still holding slots. A test that contaminates the next run is not a test.
+        ROOMS_FILE: ROOMS_FILE,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -282,6 +289,27 @@ async function main() {
   try { twinHost.ws.close(); } catch (_) {}
   await sleep(300);
 
+  // 9. Abandoned Join attempts must not permanently consume a room slot.
+  // Measured failure this cost: a second run of THIS suite against a shared
+  // registry died at registration with HTTP 503 "This relay is full", because
+  // every room ever registered - hosted or not - was written to disk and restored
+  // forever. On a real relay that means a handful of typos locks out every future
+  // streamer. Rooms that never had a game in them are now never persisted.
+  const before = await postJson('/api/host/register', { label: 'never hosted' });
+  await postJson('/api/host/register', { label: 'also never hosted' });
+  await sleep(400);
+  let persisted = [];
+  let persistErr = '';
+  try {
+    persisted = JSON.parse(require('fs').readFileSync(ROOMS_FILE, 'utf8'));
+  } catch (e) { persistErr = e.message; }
+  const hostedIds = persisted.map(r => r.roomId);
+  record('9. rooms that never hosted are not persisted',
+    before.code === 200 && Array.isArray(persisted) && !hostedIds.includes(before.json.roomId),
+    `registry holds ${persisted.length} room(s): ${hostedIds.join(', ') || '(none)'}; ` +
+    `the unhosted room ${before.json ? before.json.roomId : '?'} is ${hostedIds.includes(before.json && before.json.roomId) ? 'PRESENT (bug)' : 'absent'}` +
+    (persistErr ? ` [read error: ${persistErr}]` : ''));
+
   // 7. Health still answers.
   const health = await getJson('/health');
   record('7. /health responds',
@@ -296,6 +324,7 @@ async function main() {
   console.log(`\n${pass} passed, ${fail} failed, ${skip} skipped`);
 
   if (relayProc) relayProc.kill();
+  try { require('fs').unlinkSync(ROOMS_FILE); } catch (_) {}
   process.exit(fail > 0 ? 1 : 0);
 }
 

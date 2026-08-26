@@ -220,6 +220,13 @@ html, body {
 
 .subtitle.hidden { display: none !important; }
 
+/* The login subtitle sits on the light parchment panel and inherited the page's
+   near-white ink, so "Type a name to join" - the only instruction a guest gets -
+   was barely readable. Same defect as the room list; measured the same way. */
+#login-subtitle {
+  color: var(--parchment-text-muted);
+}
+
 .claim-btn,
 .btn-respawn,
 .overlay-box button,
@@ -5491,4 +5498,61 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
     border-width: 5px;
     font-size: 10px;
   }
+}
+
+/* ── Room picker ──────────────────────────────────────────────────────────────
+   Shown on the login screen only when the relay is hosting more than one game,
+   or none. One live game is chosen for you, so a single-streamer relay never
+   renders this. Flat rows, no cards, no icons — it is a list of names. */
+.room-picker {
+  margin: 0 0 18px;
+  text-align: left;
+}
+/* Explicit parchment ink, not opacity. These elements sit on the light login panel
+   but inherit the page's near-white text (rgb(236,231,218) on rgb(232,212,168)) -
+   measured with getComputedStyle after a screenshot showed the list washed out.
+   Tuning opacity could never fix that: the colour itself was wrong. */
+.room-picker-title {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--parchment-text-muted);
+  margin-bottom: 8px;
+}
+.room-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--parchment-rule);
+}
+.room-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 9px 2px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--parchment-rule);
+  font: inherit;
+  color: var(--parchment-text);
+  text-align: left;
+  cursor: pointer;
+}
+.room-item:hover,
+.room-item:focus-visible {
+  background: rgba(42, 29, 16, 0.08);
+}
+.room-item-name {
+  font-weight: 700;
+}
+.room-item-count {
+  font-size: 11px;
+  color: var(--parchment-text-muted);
+  white-space: nowrap;
+}
+.room-empty {
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--parchment-rule);
+  font-size: 12px;
+  color: var(--parchment-text-muted);
 }

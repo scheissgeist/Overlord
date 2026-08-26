@@ -35,6 +35,19 @@ const HOST_INVITE_CODE = process.env.HOST_INVITE_CODE || '';
 const MAX_ROOMS = Math.max(1, parseInt(process.env.MAX_ROOMS || '8', 10));
 // A room with no host and no viewers is swept after this long.
 const ROOM_IDLE_MS = Math.max(60 * 1000, parseInt(process.env.ROOM_IDLE_MS || String(30 * 60 * 1000), 10));
+// A room that registered and NEVER hosted is swept much sooner. Without this, every
+// abandoned Join attempt - a typo, a closed game, a user who changed their mind -
+// permanently consumed one of MAX_ROOMS, and the relay answered the next real
+// streamer with "This relay is full." Measured: a second run of the acceptance
+// suite against a persisted registry failed at registration with HTTP 503.
+const ROOM_UNCLAIMED_MS = Math.max(60 * 1000, parseInt(process.env.ROOM_UNCLAIMED_MS || String(10 * 60 * 1000), 10));
+// MAX_VIEWERS is PER ROOM, so the real ceiling was MAX_ROOMS x MAX_VIEWERS - 400 at
+// the defaults, eight times what the operator thinks they capped. Egress is the
+// thing that costs money, so it needs its own relay-wide limit.
+const MAX_TOTAL_VIEWERS = Math.max(
+  MAX_VIEWERS,
+  parseInt(process.env.MAX_TOTAL_VIEWERS || String(MAX_VIEWERS * 2), 10)
+);
 const ROOMS_FILE = process.env.ROOMS_FILE || path.join(LOG_DIR_FALLBACK(), 'rooms.json');
 const LOG_TRAFFIC      = process.env.LOG_TRAFFIC !== '0';
 function LOG_DIR_FALLBACK() {
@@ -832,6 +845,8 @@ app.get('/health', (_req, res) => {
     rooms:   liveRoomCount(),
     openHosting: OPEN_HOSTING,
     maxRooms: MAX_ROOMS,
+    maxViewersPerRoom: MAX_VIEWERS,
+    maxTotalViewers: MAX_TOTAL_VIEWERS,
     twitch:  !!TWITCH_CLIENT_ID,
     guest:   GUEST_LOGIN,
   });
@@ -1214,6 +1229,11 @@ wss.on('connection', (ws, req) => {
 
     const { login, displayName } = identity;
     const prev = room.viewers.get(login);
+    if (!prev && totalViewers() >= MAX_TOTAL_VIEWERS) {
+      recordOps('viewer_rejected', { room: room.roomId, username: login, reason: 'relay_full', viewers: totalViewers() });
+      ws.close(4004, 'Relay full');
+      return;
+    }
     if (!prev && room.viewers.size >= MAX_VIEWERS) {
       recordOps('viewer_rejected', { room: room.roomId, username: login, reason: 'server_full', viewers: room.viewers.size });
       ws.close(4004, 'Server full');
@@ -1541,10 +1561,17 @@ function reapIdleRooms() {
     if (room.owner) continue;                       // the operator's own room is permanent
     if (roomIsLive(room)) continue;
     if (room.viewers.size > 0) continue;
-    if (now - room.lastActiveAt < ROOM_IDLE_MS) continue;
+    // A room that has never had a host is an abandoned Join, not a stream between
+    // sessions, and it must not hold a slot for half an hour.
+    const grace = room.hostConnectedAt === 0 ? ROOM_UNCLAIMED_MS : ROOM_IDLE_MS;
+    if (now - room.lastActiveAt < grace) continue;
     for (const login of Array.from(room.contextMenuRequests.keys())) clearContextMenuRequest(room, login);
     rooms.delete(roomId);
-    recordOps('room_reaped', { room: roomId, idleMs: now - room.lastActiveAt });
+    recordOps('room_reaped', {
+      room: roomId,
+      idleMs: now - room.lastActiveAt,
+      everHosted: room.hostConnectedAt !== 0,
+    });
     persistRooms();
   }
 }
@@ -1559,7 +1586,16 @@ function persistRooms() {
     const out = [];
     for (const room of rooms.values()) {
       if (room.owner) continue;
-      out.push({ roomId: room.roomId, hostKey: room.hostKey, label: room.label, createdAt: room.createdAt });
+      // A room that never had a game in it is not worth surviving a restart; keeping
+      // them is what let abandoned Join attempts accumulate across reboots.
+      if (room.hostConnectedAt === 0) continue;
+      out.push({
+        roomId: room.roomId,
+        hostKey: room.hostKey,
+        label: room.label,
+        createdAt: room.createdAt,
+        lastActiveAt: room.lastActiveAt,
+      });
     }
     fs.mkdirSync(path.dirname(ROOMS_FILE), { recursive: true });
     fs.writeFileSync(ROOMS_FILE, JSON.stringify(out), 'utf8');
@@ -1576,11 +1612,17 @@ function restoreRooms() {
       if (!entry || !entry.roomId || !entry.hostKey) continue;
       if (rooms.has(entry.roomId)) continue;
       if (rooms.size >= MAX_ROOMS) break;
-      makeRoom(entry.roomId, {
+      const room = makeRoom(entry.roomId, {
         hostKey: entry.hostKey,
         label: entry.label || '',
         createdAt: entry.createdAt || Date.now(),
       });
+      // Carry the real idle clock across the restart. Resetting it to now (which is
+      // what makeRoom does) meant a relay that restarts often never reaps anything.
+      if (entry.lastActiveAt) room.lastActiveAt = entry.lastActiveAt;
+      // It hosted before the restart, so it is a returning streamer, not an
+      // abandoned registration - the long idle grace applies.
+      room.hostConnectedAt = entry.lastActiveAt || entry.createdAt || Date.now();
       restored++;
     }
     if (restored) console.log(`[relay] Restored ${restored} room(s) from ${ROOMS_FILE}`);
@@ -1652,6 +1694,9 @@ app.post('/api/host/register', (req, res) => {
     }
   }
 
+  // Sweep first. Otherwise the relay reports "full" while most of the slots are
+  // held by rooms nobody ever hosted in, which is how it filled up in testing.
+  reapIdleRooms();
   if (rooms.size >= MAX_ROOMS) {
     recordOps('host_register_full', { rooms: rooms.size });
     return res.status(503).json({
@@ -1872,7 +1917,7 @@ server.listen(PORT, () => {
   console.log(`[relay] Overlord relay server listening on port ${PORT}`);
   if (OPEN_HOSTING) {
     console.log(`[relay] Open hosting is ON - up to ${MAX_ROOMS} games at once${HOST_INVITE_CODE ? ', invite code required' : ', no invite code'}.`);
-    console.log('[relay] Bandwidth scales with games x viewers. MAX_ROOMS and MAX_VIEWERS are the ceilings.');
+    console.log(`[relay] Ceilings: ${MAX_ROOMS} games, ${MAX_VIEWERS} viewers per game, ${MAX_TOTAL_VIEWERS} viewers total on this relay.`);
   } else {
     console.log('[relay] Open hosting is OFF - only the game holding HOST_SECRET can host. Set OPEN_HOSTING=1 to let others host here.');
   }
