@@ -124,6 +124,58 @@ namespace Overlord
             }
         }
 
+        /// <summary>
+        /// "Test connection" — asks the relay directly, from the main menu, before any
+        /// save exists. DrawConnectionStatus can only report the live host socket, so
+        /// during first-time setup it says "not started yet" no matter how wrong the
+        /// URL or secret are. This is the check that separates the three setup
+        /// failures — unreachable, wrong secret, no Twitch client id — which otherwise
+        /// all present as the same silence.
+        /// </summary>
+        private static void DrawRelayTest(Listing_Standard listing)
+        {
+            if (string.IsNullOrEmpty(Settings.relayUrl)) return;
+
+            listing.Gap(4f);
+            var row = listing.GetRect(28f);
+            var buttonRect = new Rect(row.x, row.y, 160f, row.height);
+
+            if (RelayProbe.IsRunning)
+            {
+                Widgets.ButtonText(buttonRect, "Testing...", true, true, false);
+            }
+            else if (Widgets.ButtonText(buttonRect, "Test connection"))
+            {
+                RelayProbe.Start(Settings.relayUrl, Settings.hostSecret);
+            }
+
+            Color prev = GUI.color;
+            switch (RelayProbe.State)
+            {
+                case RelayProbe.Status.Idle:
+                    GUI.color = Color.gray;
+                    listing.Label("    Checks the relay without loading a save: is the address right, is the relay up, does it accept this host secret, can viewers log in with Twitch.");
+                    GUI.color = prev;
+                    break;
+
+                case RelayProbe.Status.Running:
+                    GUI.color = Color.gray;
+                    listing.Label("    " + RelayProbe.Headline);
+                    GUI.color = prev;
+                    break;
+
+                default:
+                    GUI.color = RelayProbe.State == RelayProbe.Status.Ok ? Color.green
+                              : RelayProbe.State == RelayProbe.Status.Warn ? Color.yellow
+                              : Color.red;
+                    listing.Label("    " + RelayProbe.Headline);
+                    GUI.color = prev;
+                    if (!string.IsNullOrEmpty(RelayProbe.Detail))
+                        listing.Label("        " + RelayProbe.Detail);
+                    break;
+            }
+        }
+
         public override string SettingsCategory()
         {
             return "Overlord";
@@ -196,7 +248,9 @@ namespace Overlord
 
             listing.Label("Relay Server URL (leave blank to play with friends — no Twitch, no stream):");
             listing.Label($"    Blank = the mod serves the viewer UI itself on port {Settings.localPort}. Friends open http://<your-LAN-IP>:{Settings.localPort} in a browser, type any name, and claim a colonist. No Twitch app, no relay, no host secret. Set a URL below only for Twitch/stream mode.");
+            string urlBefore = Settings.relayUrl;
             Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
+            if (Settings.relayUrl != urlBefore) RelayProbe.Reset();
 
             listing.Gap(4f);
             listing.Label("Host secret (must match HOST_SECRET on relay server):");
@@ -208,7 +262,9 @@ namespace Overlord
             var genRect = new Rect(toggleRect.xMax + 4f, secretRect.y, genWidth, secretRect.height);
             if (showHostSecret)
             {
+                string secretBefore = Settings.hostSecret;
                 Settings.hostSecret = Widgets.TextField(fieldRect, Settings.hostSecret);
+                if (Settings.hostSecret != secretBefore) RelayProbe.Reset();
             }
             else
             {
@@ -221,8 +277,11 @@ namespace Overlord
             {
                 Settings.hostSecret = GenerateHostSecret();
                 showHostSecret = true;
+                RelayProbe.Reset();
             }
             listing.Label("    Must match HOST_SECRET on your relay exactly. Generate makes a strong one — copy it to the relay.");
+
+            DrawRelayTest(listing);
 
             listing.Gap(6f);
             listing.Label("Local server port:");
