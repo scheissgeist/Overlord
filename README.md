@@ -9,7 +9,9 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 **You do not need Twitch, and you do not need to be streaming.** Overlord runs in two modes:
 
 - **Local / friends mode** — no Twitch, no relay, no stream. Friends open a link on your network and type any name. See [Play with friends](#play-with-friends-no-twitch-no-streaming) or the full **[Hosting guide](docs/HOSTING_GUIDE.md)**.
-- **Twitch / stream mode** — viewers log in with Twitch through a relay you host. There is no shared public server; each streamer runs their own relay. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
+- **Twitch / stream mode** — viewers log in with Twitch through a relay. You can **join a relay someone else runs** (paste their address, press one button — no account, no secret, no deploy) or run your own. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
+
+One relay can carry several games at once. Viewers landing on it see a list of what is live and pick one; a relay with a single game skips the list entirely.
 
 ### Deploy your own relay
 
@@ -20,7 +22,10 @@ already points the service at the `relay-server` folder and asks you for the two
 values below.
 
 The relay runs **under your own account**, so the bill (usually $0 on a free tier)
-is yours and never someone else's. You will be asked for two values:
+is yours and never someone else's. You only need this if you want to run one —
+if a friend already has, use **Join this relay** in Mod Settings instead.
+
+You will be asked for two values:
 
 | Variable | Where it comes from |
 |---|---|
@@ -38,6 +43,12 @@ to run both.
 Railway only one-clicks templates published to its own marketplace, so there is no
 button here — after the import, set **Root Directory** to `relay-server` and add the
 two variables above by hand in the service's Variables tab.
+
+**Letting friends host on your relay:** set `OPEN_HOSTING=1`. They press Join in
+their own Mod Settings and get a room of their own — you never issue anyone a
+credential. `MAX_TOTAL_VIEWERS` (default 100) bounds what it can cost you, since
+their viewers use your bandwidth. `HOST_INVITE_CODE` limits it to people you gave a
+code to.
 
 Prefer the CLI, or want Fly.io / Docker? See **[docs/SELF_HOST.md](docs/SELF_HOST.md)**.
 

@@ -6,10 +6,16 @@ what you want to do.
 | I want to… | Path | Cost | Setup time |
 |---|---|---|---|
 | Play with friends, no stream | **Path A — Friends mode** | Free | ~2 minutes |
-| Let Twitch viewers control colonists | **Path B — Your own relay** | Free tier is enough | ~20 minutes |
+| Host on a relay somebody else runs | **Path B — Join a relay** | Free | ~1 minute |
+| Run a relay for myself (and maybe others) | **Path C — Your own relay** | Free tier is enough | ~20 minutes |
 
-There is **no shared public server**. Nobody else's relay will work for you, and
-you should not point your game at one — it can only serve one streamer at a time.
+**Path B is new and it is the easy one.** If a friend already runs a relay, you do
+not need an account, a server, a Twitch application, or a secret — you paste their
+address into Mod Settings and press one button. Several games can share one relay
+at the same time without interfering with each other.
+
+There is still **no shared public server** run by the Overlord project. Somebody has
+to run the relay; Path B just means it does not have to be you.
 
 ---
 
@@ -42,10 +48,46 @@ The link above only works on your own network. For remote friends, either:
 
 ---
 
-## Path B — Your own relay (for Twitch viewers)
+## Path B — Join a relay somebody else runs
+
+Someone you know deployed a relay and turned on open hosting. You need one thing
+from them: **the address**, something like `https://their-relay.fly.dev`.
+
+1. Subscribe to **Harmony**, then **Overlord**. Enable both.
+2. **Mod Settings → Overlord.** Paste the address into the box at the top.
+3. Press **Join this relay.**
+4. The line under it turns green: *You're set up. Send people this link:* followed
+   by your own link, like `https://their-relay.fly.dev/g/kjkksh92`. Press **Copy**.
+5. Load or start a save. You're live. Anyone you send that link to sees **your**
+   game, not the relay owner's.
+
+The middle box next to Join names your game in the relay's list (optional). The
+right box is for an invite code, only if you were given one.
+
+**What you never do:** invent a secret, copy one between two places, set an
+environment variable, or deploy anything. The relay hands your game a key and the
+mod stores it. The key is never shown, because there is no reason for you to see it.
+
+### If Join fails
+| It says | What to do |
+|---|---|
+| `This relay does not accept other hosts` | Whoever runs it needs to set `OPEN_HOSTING=1`. Ask them. |
+| `That invite code is not right` | They gave you a code and it did not match, or you left it blank. |
+| `This relay is full` | It is set to allow a limited number of games at once. Try later. |
+| `That host name does not resolve` | Typo in the address. |
+| `Cannot reach that relay` | It may be asleep on a free tier — press Join again. |
+
+### Leaving
+**Leave this relay** in Mod Settings forgets the room and the key. Your old link
+stops working; press Join again to get a new one.
+
+---
+
+## Path C — Your own relay (for Twitch viewers)
 
 For a public stream you need a small server ("relay") sitting between RimWorld
-and your viewers, because your viewers are not on your home network.
+and your viewers, because your viewers are not on your home network. Run one and
+you can also let friends host on it — see **Letting other people host** below.
 
 **You host your own, on your own account.** That keeps the bill yours (usually
 $0 on a free tier) and means nobody else's traffic touches it.
@@ -116,7 +158,30 @@ and claim a colonist, or you assign one from the Overlord tab.
 | `Friends mode — not started yet` | Load a save; the server starts with the game. |
 | Viewers can't log in | Neither `TWITCH_CLIENT_ID` nor `ALLOW_GUEST_LOGIN` is set on the relay, or the Twitch redirect URL doesn't exactly match the address viewers open. **Test connection** in Mod Settings names which one. |
 | The name box didn't appear | `ALLOW_GUEST_LOGIN` is ignored while `TWITCH_CLIENT_ID` is set. Clear the client id to use guest login. |
-| Another streamer kicked you off | You're both on one relay. Each streamer needs their own. |
+| Another streamer kicked you off | You are both using the same credential. Press **Join this relay** to get a room of your own instead of sharing one. |
+
+## Letting other people host on your relay
+
+Set **`OPEN_HOSTING=1`** on the relay. Anyone with the address can then press Join
+in their own Mod Settings and get a room of their own; several games run side by
+side and viewers pick which one to watch from the front page.
+
+Guard rails, all environment variables on the relay:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OPEN_HOSTING` | off | Must be `1` before anyone else can host. |
+| `HOST_INVITE_CODE` | none | If set, a joiner must type this code. Opens the relay to friends without opening it to the internet. |
+| `MAX_ROOMS` | `8` | How many games at once. |
+| `MAX_VIEWERS` | `50` | Viewers **per game**. |
+| `MAX_TOTAL_VIEWERS` | `100` | Viewers across the whole relay. This is the one that bounds your bill. |
+
+**You pay for their viewers.** Each viewer receives a live map image several times a
+second, so bandwidth scales with games × viewers. `MAX_TOTAL_VIEWERS` is the real
+ceiling; the other two shape how it is divided.
+
+A game that registers and never hosts is dropped after 10 minutes, so abandoned
+attempts do not use up your room slots.
 
 ## Costs
 

@@ -32,5 +32,21 @@ services:
       # Anyone with the URL can join as any name while this is on. Test/private use.
       - key: ALLOW_GUEST_LOGIN
         value: ""
+      # "1" lets OTHER streamers press Join in their own Mod Settings and host on
+      # this relay, each in their own room. Their viewers use YOUR bandwidth, which
+      # is what MAX_TOTAL_VIEWERS bounds. Off by default.
+      - key: OPEN_HOSTING
+        value: ""
+      # Optional: with OPEN_HOSTING on, only people you gave this code to can join.
+      - key: HOST_INVITE_CODE
+        sync: false
+      # Viewers PER GAME.
       - key: MAX_VIEWERS
         value: "50"
+      # Games at once.
+      - key: MAX_ROOMS
+        value: "8"
+      # Viewers across the whole relay - the ceiling that actually bounds the bill,
+      # because MAX_VIEWERS is per room and multiplies by MAX_ROOMS without it.
+      - key: MAX_TOTAL_VIEWERS
+        value: "100"
