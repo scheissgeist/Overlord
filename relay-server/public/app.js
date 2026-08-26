@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-rooms-v2';
+const UI_BUILD = '20260826-rooms-v3';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -18,6 +18,12 @@ const EMBEDDED_MODE    = document.body.dataset.embeddedMode === 'true';
 const GUEST_MODE       = !EMBEDDED_MODE && document.body.dataset.allowGuest === 'true';
 const RELAY_SESSION_KEY = 'overlord_session';
 const TWITCH_TOKEN_KEY = 'overlord_twitch_token';
+// Twitch always sends people back to the ROOT (redirect_uri is location.origin + '/'
+// and it must match what is registered on the Twitch app, so it cannot carry the
+// room). Without stashing it, a viewer handed a /g/<id> link who signs in lands on
+// the front page with the room forgotten - and on a relay with several games live
+// they get asked to pick one they were already sent to.
+const PENDING_ROOM_KEY = 'overlord_pending_room';
 const LOCAL_SESSION_KEY = 'overlord_local_identity';
 const AUDIO_MODE_KEY = 'overlord_audio_mode';
 const FOLLOW_PAWN_KEY = 'overlord_follow_pawn';
@@ -1588,16 +1594,28 @@ function renderRoomsInLobby(rooms) {
     return;
   }
 
+  // Coming back from Twitch? Recover the game they were sent to BEFORE chooseRoom
+  // runs, so it short-circuits instead of asking them to pick again.
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const returningFromTwitch = !!hash.get('access_token');
+  if (returningFromTwitch && !selectedRoom) {
+    try {
+      const pending = sessionStorage.getItem(PENDING_ROOM_KEY);
+      if (pending) selectedRoom = pending;
+    } catch (_) {}
+  }
+  try { sessionStorage.removeItem(PENDING_ROOM_KEY); } catch (_) {}
+
   // Settle which game this page is watching BEFORE signing in, so a viewer who
   // logs in lands in a real game instead of an empty lobby. A /g/<id> link and a
   // relay with exactly one live game both skip the picker entirely.
   await chooseRoom();
 
-  // Check if returning from Twitch OAuth redirect (hash contains access_token)
-  const hash = new URLSearchParams(location.hash.slice(1));
-  if (hash.get('access_token')) {
+  if (returningFromTwitch) {
     const token = hash.get('access_token');
-    history.replaceState(null, '', location.pathname); // clean URL
+    // Put the room back in the address too, so a later refresh still works.
+    const clean = selectedRoom ? '/g/' + selectedRoom : location.pathname;
+    history.replaceState(null, '', clean);
     exchangeTwitchToken(token);
     return;
   }
@@ -1620,6 +1638,11 @@ if (btnTwitch) {
       return;
     }
     const scope = 'user:read:email';
+    // Survive the round-trip through Twitch, which drops the path.
+    try {
+      if (selectedRoom) sessionStorage.setItem(PENDING_ROOM_KEY, selectedRoom);
+      else sessionStorage.removeItem(PENDING_ROOM_KEY);
+    } catch (_) {}
     const url = `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=${TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT)}&scope=${scope}`;
     location.href = url;
   });

@@ -1735,7 +1735,16 @@ app.post('/api/host/reclaim', (req, res) => {
 
 // -- Pretty viewer link ----------------------------------------------------
 app.get('/g/:roomId', (req, res) => {
-  serveViewerPage(res, String(req.params.roomId || '').trim());
+  const roomId = String(req.params.roomId || '').trim();
+  // Only room-shaped ids. Without this, ANY path under /g/ returned the viewer HTML
+  // - including /g/app.js, which is what a relative <script src="app.js"> on a
+  // /g/<id> page asks for. The browser then parsed HTML as JavaScript
+  // ("Unexpected token '<'") and the entire client failed to start. Assets are
+  // absolute now; this makes the wrong request a plain 404 instead of a booby trap.
+  if (!/^[a-z0-9_-]{1,32}$/i.test(roomId)) {
+    return res.status(404).send('Not found');
+  }
+  serveViewerPage(res, roomId);
 });
 
 // ─── Admin API (protected by HOST_SECRET) ─────────────────────────────────────
