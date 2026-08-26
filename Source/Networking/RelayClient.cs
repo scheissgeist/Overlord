@@ -287,7 +287,11 @@ namespace Overlord
 
         private static string NormalizeUrl(string url)
         {
-            url = url.TrimEnd('/');
+            // .Trim() matters: RelayProbe trims before it tests, and this did not, so a
+            // URL pasted with a trailing space made "Test connection" report success
+            // while the game never connected — the settings screen contradicting itself
+            // is worse than having no test button at all.
+            url = (url ?? string.Empty).Trim().TrimEnd('/');
             if (url.StartsWith("https://"))
                 url = "wss://" + url.Substring(8);
             else if (url.StartsWith("http://"))

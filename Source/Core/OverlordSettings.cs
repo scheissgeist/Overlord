@@ -98,9 +98,20 @@ namespace Overlord
         public int maxTickets = 5;
         public int ticketEarnIntervalTicks = 180000; // ~50 minutes; 0 = disabled
 
+        /// <summary>
+        /// True when a relay URL is actually set. Whitespace-only counts as BLANK —
+        /// IsNullOrEmpty does not, and that mismatch put the game into relay mode
+        /// against an unparseable URL while also skipping the embedded server, so
+        /// neither mode ran. Every relay/friends decision must go through this.
+        /// </summary>
+        public bool HasRelayUrl => !string.IsNullOrWhiteSpace(relayUrl);
+
         public override void ExposeData()
         {
             Scribe_Values.Look(ref relayUrl, "relayUrl", "");
+            // A config saved before the trim fix can still hold padding.
+            if (Scribe.mode == LoadSaveMode.LoadingVars || Scribe.mode == LoadSaveMode.PostLoadInit)
+                relayUrl = (relayUrl ?? string.Empty).Trim();
             Scribe_Values.Look(ref hostSecret, "hostSecret", "");
             Scribe_Values.Look(ref localPort, "localPort", 8421);
             Scribe_Values.Look(ref mapImageSize, "mapImageSize", 720);

@@ -48,7 +48,7 @@ namespace Overlord
         /// </summary>
         private static void DrawConnectionStatus(Listing_Standard listing)
         {
-            bool relayMode = !string.IsNullOrEmpty(Settings.relayUrl);
+            bool relayMode = Settings.HasRelayUrl;
             var comp = OverlordGameComponent.Instance;
 
             Color prev = GUI.color;
@@ -134,7 +134,7 @@ namespace Overlord
         /// </summary>
         private static void DrawRelayTest(Listing_Standard listing)
         {
-            if (string.IsNullOrEmpty(Settings.relayUrl)) return;
+            if (!Settings.HasRelayUrl) return;
 
             listing.Gap(4f);
             var row = listing.GetRect(28f);
@@ -194,7 +194,7 @@ namespace Overlord
         {
             if (!uiModeInitialized)
             {
-                uiTwitchMode = !string.IsNullOrEmpty(Settings.relayUrl);
+                uiTwitchMode = Settings.HasRelayUrl;
                 uiModeInitialized = true;
             }
 
@@ -214,7 +214,7 @@ namespace Overlord
             GUI.color = uiTwitchMode ? off : Color.green;
             if (Widgets.ButtonText(friendsRect, "Play with friends"))
             {
-                if (!string.IsNullOrEmpty(Settings.relayUrl)) stashedRelayUrl = Settings.relayUrl;
+                if (Settings.HasRelayUrl) stashedRelayUrl = Settings.relayUrl;
                 Settings.relayUrl = "";
                 uiTwitchMode = false;
                 RelayProbe.Reset();
@@ -222,7 +222,7 @@ namespace Overlord
             GUI.color = uiTwitchMode ? Color.green : off;
             if (Widgets.ButtonText(twitchRect, "Stream to Twitch"))
             {
-                if (string.IsNullOrEmpty(Settings.relayUrl)) Settings.relayUrl = stashedRelayUrl;
+                if (!Settings.HasRelayUrl) Settings.relayUrl = stashedRelayUrl;
                 uiTwitchMode = true;
                 RelayProbe.Reset();
             }
@@ -300,7 +300,7 @@ namespace Overlord
         private static void DrawRelaySetup(Listing_Standard listing)
         {
             bool haveSecret = !string.IsNullOrEmpty(Settings.hostSecret);
-            bool haveUrl = !string.IsNullOrEmpty(Settings.relayUrl);
+            bool haveUrl = Settings.HasRelayUrl;
 
             // ── 1. secret ──
             StepLabel(listing, haveSecret, "1.  Make a host secret. This is the password your game uses to claim the relay.");
@@ -352,7 +352,9 @@ namespace Overlord
             listing.Gap(6f);
             StepLabel(listing, haveUrl, "3.  Paste the address the host gave you (https://your-app.onrender.com):");
             string urlBefore = Settings.relayUrl;
-            Settings.relayUrl = listing.TextEntry(Settings.relayUrl);
+            // Trimmed on the way in: a URL pasted with padding used to pass the probe
+            // (which trims) and fail the real connection (which did not).
+            Settings.relayUrl = listing.TextEntry(Settings.relayUrl).Trim();
             if (Settings.relayUrl != urlBefore) RelayProbe.Reset();
             if (!haveUrl)
             {
