@@ -58,6 +58,18 @@ namespace Overlord
                 return;
             }
 
+            // The tab is the ONLY part of this mod a player finds on their own - it is
+            // a button in the game's own toolbar. Mod Settings is not discoverable, and
+            // a tester who never found it followed a DIFFERENT mod's instructions
+            // instead ("host server", "go into mod options") and concluded the whole
+            // thing was beyond him. So setup happens here, in front of him, or it does
+            // not happen.
+            if (!IsSetUp())
+            {
+                DrawFirstRun(inRect);
+                return;
+            }
+
             var colonists = GetColonists();
             SyncSelection(vm, colonists);
 
@@ -76,6 +88,72 @@ namespace Overlord
 
             var actionsRect = new Rect(inRect.x, inRect.yMax - actionHeight, inRect.width, actionHeight);
             DrawActionStrip(actionsRect, comp, vm);
+        }
+
+        /// <summary>
+        /// Set up = one of the two modes can actually serve someone. Friends mode needs
+        /// nothing at all, so a blank relay address counts as ready.
+        /// </summary>
+        private static bool IsSetUp()
+        {
+            var settings = OverlordMod.Settings;
+            if (settings == null) return true;                 // never block on a null
+            if (!settings.HasRelayUrl) return true;            // friends mode: nothing to do
+            return !string.IsNullOrEmpty(settings.hostKey)     // joined someone's relay
+                || !string.IsNullOrEmpty(settings.hostSecret); // running your own
+        }
+
+        /// <summary>
+        /// First-run panel. Plain words, no jargon: no "relay", no "host server", no
+        /// "secret". Two buttons that do the whole job, and the link to hand out once
+        /// one of them works.
+        /// </summary>
+        private void DrawFirstRun(Rect inRect)
+        {
+            Widgets.DrawBoxSolid(inRect, WindowFill);
+            DrawFineBorder(inRect, BrassDimColor);
+
+            var pad = inRect.ContractedBy(24f);
+            var listing = new Listing_Standard();
+            listing.Begin(pad);
+
+            Text.Font = GameFont.Medium;
+            GUI.color = BrassColor;
+            listing.Label("Let people play your colonists");
+            GUI.color = TextColor;
+            Text.Font = GameFont.Small;
+            listing.Gap(6f);
+
+            listing.Label("Pick one. You can change it later, and neither needs a Twitch account, a password, or anything installed.");
+            listing.Gap(12f);
+
+            var row = listing.GetRect(42f);
+            float half = (row.width - 12f) / 2f;
+            var friendsRect = new Rect(row.x, row.y, half, row.height);
+            var onlineRect = new Rect(friendsRect.xMax + 12f, row.y, half, row.height);
+
+            if (Widgets.ButtonText(friendsRect, "People in my house"))
+            {
+                OverlordMod.Settings.relayUrl = "";
+                OverlordMod.Settings.Write();
+            }
+            if (Widgets.ButtonText(onlineRect, "People anywhere / my stream"))
+            {
+                Find.WindowStack.Add(new Dialog_ModSettings(OverlordMod.Instance));
+            }
+
+            listing.Gap(8f);
+            GUI.color = MutedColor;
+            listing.Label("Left: your game hands out a link that works on your home network. Nothing to sign up for.");
+            listing.Label("Right: opens the setup box. Paste the address a friend sent you and press one button — that is the whole thing.");
+            GUI.color = TextColor;
+
+            listing.Gap(16f);
+            GUI.color = WaitingColor;
+            listing.Label("If some guide is telling you about \"host servers\", tokens, or oauth, that is a different mod. Overlord does not use any of that.");
+            GUI.color = TextColor;
+
+            listing.End();
         }
 
         // Brand seal, loaded once. Silent-fail if the texture is missing so the tab

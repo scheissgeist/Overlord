@@ -64,13 +64,13 @@ namespace Overlord
             string baseUrl = RelayHttp.ToHttpBase(relayUrl);
             if (string.IsNullOrEmpty(baseUrl))
             {
-                Finish(Status.Fail, "No relay address to join.",
-                       "Paste the address the person running the relay gave you, then press Join.");
+                Finish(Status.Fail, "No address to set up with.",
+                       "Paste the address your friend sent you into the box, then press the button.");
                 return;
             }
 
             state = Status.Running;
-            headline = "Joining " + baseUrl + " ...";
+            headline = "Setting up with " + baseUrl + " ...";
             detail = "";
 
             ThreadPool.QueueUserWorkItem(_ =>
@@ -97,7 +97,7 @@ namespace Overlord
 
             if (error != null)
             {
-                Finish(Status.Fail, "Cannot reach that relay.",
+                Finish(Status.Fail, "Could not reach that address.",
                        error + "  —  check the address is exactly what you were given, including https://");
                 return;
             }
@@ -106,27 +106,27 @@ namespace Overlord
             {
                 // 403 covers both "closed relay" and "wrong invite code"; the relay's
                 // own message distinguishes them, so pass it through rather than guess.
-                Finish(Status.Fail, "That relay is not accepting other hosts.",
+                Finish(Status.Fail, "That server is not letting other people in.",
                        RelayHttp.Field(reply, "error") + " " + RelayHttp.Field(reply, "detail"));
                 return;
             }
 
             if ((int)code == 429)
             {
-                Finish(Status.Fail, "Too many attempts.", "Wait a few minutes and press Join again.");
+                Finish(Status.Fail, "Too many tries.", "Wait a few minutes and press the button again.");
                 return;
             }
 
             if (code == HttpStatusCode.ServiceUnavailable)
             {
-                Finish(Status.Fail, "That relay is full right now.",
+                Finish(Status.Fail, "That server is full right now.",
                        RelayHttp.Field(reply, "detail"));
                 return;
             }
 
             if (code != HttpStatusCode.OK)
             {
-                Finish(Status.Fail, "The relay refused the request (" + (int)code + ").",
+                Finish(Status.Fail, "That server said no (" + (int)code + ").",
                        RelayHttp.Field(reply, "error"));
                 return;
             }
@@ -137,8 +137,8 @@ namespace Overlord
 
             if (string.IsNullOrEmpty(roomId) || string.IsNullOrEmpty(hostKey))
             {
-                Finish(Status.Fail, "That address answered, but not like an Overlord relay.",
-                       "It did not return a room to host in.");
+                Finish(Status.Fail, "Something answered, but it was not an Overlord server.",
+                       "Double-check the address your friend sent you.");
                 return;
             }
 

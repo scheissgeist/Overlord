@@ -71,7 +71,7 @@ namespace Overlord
                         GUI.color = Color.green;
                         listing.Label($"Friends mode — ready. Send friends:  http://{lan}:{Settings.localPort}");
                         GUI.color = prev;
-                        listing.Label("    They open that in a browser, type any name, and claim a colonist. No Twitch, no relay.");
+                        listing.Label("    They open that in a browser, type any name, and claim a colonist. No Twitch, no signup.");
                     }
                     else if (server.BoundAllInterfaces)
                     {
@@ -102,24 +102,24 @@ namespace Overlord
             if (comp?.Relay == null)
             {
                 GUI.color = Color.gray;
-                listing.Label("Relay mode — not started yet.");
+                listing.Label("Online play — not started yet.");
                 GUI.color = prev;
                 listing.Label("    The host connects when you load or begin a save.");
             }
             else if (comp.Relay.IsConnected)
             {
                 GUI.color = Color.green;
-                listing.Label("Relay mode — connected. Send viewers your relay's public URL.");
+                listing.Label("Online play — connected. Anyone with your link can join.");
                 GUI.color = prev;
             }
             else
             {
                 GUI.color = Color.red;
-                listing.Label("Relay mode — NOT connected.");
+                listing.Label("Online play — NOT connected.");
                 GUI.color = prev;
                 listing.Label(string.IsNullOrEmpty(Settings.hostKey)
-                    ? "    Check: the URL below is right, the host secret matches HOST_SECRET on the relay, and the relay is running."
-                    : "    Check the relay is running. Press Test connection below; if it says your key is unknown, press Join again to get a new one.");
+                    ? "    Check: the address below is right, your host secret matches the one on your server, and your server is running."
+                    : "    Press Test connection below — it will say what is wrong. Usually the server is asleep or has been reset.");
             }
 
             // Only the person running their OWN relay needs a secret. Someone who joined
@@ -130,7 +130,7 @@ namespace Overlord
             if (string.IsNullOrEmpty(Settings.hostSecret) && string.IsNullOrEmpty(Settings.hostKey) && showRunMyOwn)
             {
                 GUI.color = Color.yellow;
-                listing.Label("    No host secret set — your own relay will reject this game. Use Generate below.");
+                listing.Label("    No host secret set — your own server will reject this game. Use Generate below.");
                 GUI.color = prev;
             }
         }
@@ -160,7 +160,7 @@ namespace Overlord
                 RelayProbe.Start(Settings.relayUrl, Settings.hostSecret, Settings.hostKey);
             }
 
-            DrawProbeResult(listing, "    Checks the relay without loading a save: is the address right, is it running, and can viewers get in.");
+            DrawProbeResult(listing, "    Checks it without loading a save: is the address right, is it running, and can people get in.");
         }
 
         /// <summary>
@@ -236,7 +236,7 @@ namespace Overlord
             Color off = new Color(0.6f, 0.6f, 0.6f);
 
             GUI.color = uiTwitchMode ? off : Color.green;
-            if (Widgets.ButtonText(friendsRect, "Play with friends"))
+            if (Widgets.ButtonText(friendsRect, "People in my house"))
             {
                 if (Settings.HasRelayUrl) stashedRelayUrl = Settings.relayUrl;
                 Settings.relayUrl = "";
@@ -244,7 +244,7 @@ namespace Overlord
                 RelayProbe.Reset();
             }
             GUI.color = uiTwitchMode ? Color.green : off;
-            if (Widgets.ButtonText(twitchRect, "Stream to Twitch"))
+            if (Widgets.ButtonText(twitchRect, "People anywhere / my stream"))
             {
                 if (!Settings.HasRelayUrl) Settings.relayUrl = stashedRelayUrl;
                 uiTwitchMode = true;
@@ -258,8 +258,8 @@ namespace Overlord
             // which is the only reading that matters. Never put a bare duration next to
             // the words "free tier"; say what the number measures, or drop it.
             listing.Label(uiTwitchMode
-                ? "    Viewers log in with Twitch through a relay. Join one a friend already runs, or run your own. No time limits either way."
-                : "    No Twitch, no relay, no stream, no accounts. Your game serves the page itself.");
+                ? "    For people who are not on your home network. Someone has to run a small server for this; the easy way is to use one a friend already runs."
+                : "    Your game hands out a link that works on your home network. Nothing to sign up for, nothing to install, no accounts.");
             listing.Gap(6f);
 
             DrawConnectionStatus(listing);
@@ -365,7 +365,7 @@ namespace Overlord
                 return;
             }
 
-            StepLabel(listing, false, "Paste the relay address someone sent you, then press Join.");
+            StepLabel(listing, false, "Paste the address a friend sent you, then press the button.");
             // Spelled out because a tester went off and tried to generate a Twitch oauth
             // token to host with. Nothing in Overlord ever asks a host for one - that is
             // Twitch Toolkit's setup, a different and optional mod - but with nothing on
@@ -391,9 +391,9 @@ namespace Overlord
 
             if (RelayJoin.IsRunning)
             {
-                Widgets.ButtonText(joinRect, "Joining...", true, true, false);
+                Widgets.ButtonText(joinRect, "Setting up...", true, true, false);
             }
-            else if (Widgets.ButtonText(joinRect, "Join this relay"))
+            else if (Widgets.ButtonText(joinRect, "Set me up"))
             {
                 RelayJoin.Start(Settings.relayUrl, joinLabel, inviteCode);
             }
@@ -427,7 +427,7 @@ namespace Overlord
             }
 
             listing.Gap(8f);
-            if (listing.ButtonText(showRunMyOwn ? "Hide: I run my own relay" : "I run my own relay"))
+            if (listing.ButtonText(showRunMyOwn ? "Hide advanced setup" : "Advanced: I want to run the server myself"))
                 showRunMyOwn = !showRunMyOwn;
             if (showRunMyOwn) DrawRunMyOwnRelay(listing);
         }
@@ -478,7 +478,7 @@ namespace Overlord
             if (Widgets.ButtonText(copyRect, "Copy") && !string.IsNullOrEmpty(Settings.viewerUrl))
                 CopyToClipboard(Settings.viewerUrl, "your viewer link");
 
-            listing.Label("        This link is YOURS — it opens your colony, not the relay owner's. Paste it in your chat, your panels, wherever.");
+            listing.Label("        This link is YOURS — it opens your colony, not your friend's. Paste it in your chat, your panels, wherever.");
 
             listing.Gap(6f);
             var btnRow = listing.GetRect(28f);
@@ -490,7 +490,7 @@ namespace Overlord
             else if (Widgets.ButtonText(testRect, "Test connection")) RelayProbe.Start(Settings.relayUrl, Settings.hostSecret, Settings.hostKey);
             if (Widgets.ButtonText(openRect, "Open the link") && !string.IsNullOrEmpty(Settings.viewerUrl))
                 Application.OpenURL(Settings.viewerUrl);
-            if (Widgets.ButtonText(leaveRect, "Leave this relay"))
+            if (Widgets.ButtonText(leaveRect, "Start over"))
             {
                 Settings.hostKey = "";
                 Settings.roomId = "";
