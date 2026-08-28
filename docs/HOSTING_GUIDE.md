@@ -81,6 +81,21 @@ mod stores it. The key is never shown, because there is no reason for you to see
 **Start over** in Mod Settings forgets the room and the key. Your old link stops
 working; press **Set me up** again to get a new one.
 
+### During a stream
+
+The in-game **Overlord** tab is the authoritative host console. It can assign
+viewers, change permissions, broadcast messages, run votes, create VOD markers,
+and start a community goal. A goal advances by one only after the game accepts a
+meaningful viewer action; refreshes and relay reconnects cannot invent progress.
+
+If you operate a custom relay, its operator console at
+`https://YOUR-RELAY/admin` exposes the same live exceptions and stream tools. Its
+password is that relay's `HOST_SECRET`; shared official-relay hosts use the
+in-game console and are not given operator access. Do not share an admin address
+or credential with viewers. VOD markers record relay UTC plus the RimWorld tick,
+date, and colony name, and remain available after a relay restart. They are edit
+markers, not Twitch-created clips.
+
 ---
 
 ## Path C — Your own relay (for Twitch viewers)

@@ -30,7 +30,11 @@ Let Twitch viewers or friends control your RimWorld colonists from a browser.
 [list]
 [*] Assign colonists to Twitch viewers or friends
 [*] Browser control panel for needs, health, skills, map, draft, movement, work, and gear
-[*] Host controls for sessions, assignments, and permissions
+[*] Viewer history that survives refreshes, reconnects, deaths, and reassignment
+[*] Host controls for sessions, assignments, permissions, claims, failures, votes, and broadcasts
+[*] Durable VOD markers with real-world and RimWorld timestamps
+[*] Community goals that viewers advance by completing successful actions
+[*] Capability-aware controls that hide features the connected host cannot support
 [*] Optional Twitch Toolkit Buy / Story integration
 [/list]
 

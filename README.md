@@ -13,6 +13,15 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 
 One relay can carry several games at once. Viewers landing on it see a list of what is live and pick one; a relay with a single game skips the list entirely.
 
+### What ships now
+
+- Persistent viewer identity and history across refreshes, host reconnects, deaths, and reassignment.
+- Capability-aware controls: a newer browser hides features an older or limited host cannot perform.
+- Tactical map rendering from RimWorld terrain/entity manifests, with host-authoritative state and relay replay repair.
+- Streamer operations in-game and at `/admin`: assignments, permissions, pending claims, failures, votes, broadcasts, VOD markers, and community goals.
+- Durable VOD/edit markers with relay UTC plus RimWorld tick/date context.
+- Save-backed community goals that advance only after successful viewer actions and remain visible through reconnect and death screens.
+
 ### Optional: deploy your own relay
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scheissgeist/Overlord)
