@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-rooms-v3';
+const UI_BUILD = '20260826-relay-standby-v2';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -1185,6 +1185,7 @@ function showLobbyState(options = {}) {
   const phase = options.phase || 'lobby';
   setViewerPhase(phase);
   showScreen('lobby');
+  if (screenLobby) screenLobby.dataset.lobbyState = options.state || phase;
 
   const name = identity?.displayName || identity?.login || 'viewer';
   if (lobbyUser) lobbyUser.textContent = name;
@@ -2155,6 +2156,7 @@ function handleMessage(msg) {
         const others = live.filter(r => r.roomId !== selectedRoom);
         showLobbyState({
           phase: 'lobby',
+          state: others.length ? 'room-missing' : 'relay-empty',
           title: others.length ? 'That game is not running' : 'No game on this relay',
           message: others.length
             ? 'Pick one of the games below, or wait here — new ones appear on their own.'

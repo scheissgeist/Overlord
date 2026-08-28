@@ -384,6 +384,15 @@ html, body {
   /* ops-header already styled above with parchment background */
 }
 
+.lobby-ops .ops-mark {
+  color: var(--parchment-text);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+}
+
 /* Title row: large, commanding — this is the state headline */
 .lobby-title-row {
   margin: 28px 32px 10px;
@@ -474,6 +483,210 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   margin: 16px 32px 0;
   height: 1px;
   background: linear-gradient(90deg, rgba(240, 223, 181, 0.22) 0%, rgba(240, 223, 181, 0.06) 100%);
+}
+
+.relay-standby { display: none; }
+
+/* True host absence is a live status surface, not an empty colonist list. */
+#screen-lobby[data-lobby-state="relay-empty"] > :is(
+  .lobby-title-row,
+  .lobby-msg,
+  .lobby-divider,
+  .lobby-spectate,
+  .lobby-note,
+  .lobby-death,
+  .colonist-list
+) { display: none !important; }
+
+#screen-lobby[data-lobby-state="relay-empty"] .relay-standby {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 720px);
+  grid-template-rows: auto auto;
+  place-content: center;
+  padding: clamp(24px, 5vw, 64px);
+  background:
+    var(--tex-wood-dark) 0 0 / 256px 256px repeat,
+    var(--wood-dark);
+}
+
+.standby-hero {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.standby-kicker {
+  width: max-content;
+  margin-bottom: 18px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.standby-hero h1 {
+  max-width: 720px;
+  color: var(--parchment-hi);
+  font-family: var(--font-display);
+  font-size: clamp(48px, 7vw, 86px);
+  font-weight: 900;
+  letter-spacing: -0.055em;
+  line-height: 0.84;
+  text-wrap: balance;
+}
+
+.standby-hero p {
+  max-width: 540px;
+  margin-top: 22px;
+  color: var(--text-secondary);
+  font-size: clamp(13px, 1.35vw, 16px);
+  line-height: 1.65;
+}
+
+.standby-armed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  color: var(--parchment-lo);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.standby-armed-mark {
+  width: 26px;
+  height: 1px;
+  background: var(--accent);
+}
+
+.standby-route {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 28px;
+  padding: 18px 22px 20px;
+  background: rgba(9, 11, 10, 0.92);
+  border: 1px solid rgba(210, 169, 93, 0.34);
+}
+
+.standby-route-head {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 13px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.standby-route-head img {
+  flex: 0 0 auto;
+  image-rendering: crisp-edges;
+}
+
+.standby-route-head div,
+.standby-node div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.standby-route-head strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.standby-nodes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr) 38px minmax(0, 1fr);
+  align-items: center;
+  padding: 18px 0 0;
+}
+
+.standby-node {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 9px;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.standby-node-number {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.standby-node strong {
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 14px;
+}
+
+.standby-node div span {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.standby-node i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.standby-node.online i {
+  color: var(--green);
+  background: var(--green);
+}
+
+.standby-node.waiting i {
+  color: var(--yellow);
+  background: transparent;
+}
+
+.standby-link {
+  position: relative;
+  width: 100%;
+  height: 1px;
+  margin: 0;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.standby-link.online { background: rgba(130, 197, 140, 0.55); }
+
+.standby-link.scanning i {
+  position: absolute;
+  top: 0;
+  left: -12px;
+  width: 12px;
+  height: 1px;
+  background: var(--accent-strong);
+  animation: standby-scan 2.4s ease-in-out infinite;
+}
+
+@keyframes standby-scan {
+  0% { transform: translateX(0); opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { transform: translateX(62px); opacity: 0; }
+}
+
+@keyframes standby-scan-vertical {
+  0% { transform: translateY(0); opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { transform: translateY(50px); opacity: 0; }
 }
 
 .lobby-note {
@@ -710,6 +923,65 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   .colonist-row .claim-btn {
     width: 100%;
   }
+
+}
+
+@media (max-width: 700px) {
+  #screen-lobby[data-lobby-state="relay-empty"] .relay-standby { padding: 24px; }
+  .standby-hero h1 { font-size: clamp(48px, 11vw, 64px); }
+  .standby-route-head img { width: 28px; height: 28px; }
+  .standby-node-number { display: none; }
+  .standby-node { grid-template-columns: minmax(0, 1fr) 9px; }
+}
+
+@media (max-width: 480px) {
+  #screen-lobby[data-lobby-state="relay-empty"] {
+    overflow-y: auto;
+  }
+
+  #screen-lobby[data-lobby-state="relay-empty"] .relay-standby {
+    min-height: 720px;
+    place-content: start center;
+    padding: 38px 24px;
+  }
+
+  .standby-hero h1 { font-size: clamp(48px, 15vw, 66px); }
+  .standby-hero p { margin-top: 20px; }
+  .standby-armed { margin-top: 22px; }
+
+  .standby-nodes {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+    padding-top: 16px;
+  }
+
+  .standby-node {
+    grid-template-columns: minmax(0, 1fr) 9px;
+    width: min(210px, 100%);
+    margin: 0 auto;
+  }
+
+  .standby-link {
+    width: 1px;
+    height: 26px;
+    margin: 5px auto;
+  }
+
+  .standby-link.scanning i {
+    top: -12px;
+    left: 0;
+    width: 1px;
+    height: 12px;
+    animation-name: standby-scan-vertical;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standby-link.scanning i { animation: none; left: 45%; opacity: 1; }
+}
+
+@media (max-width: 480px) and (prefers-reduced-motion: reduce) {
+  .standby-link.scanning i { top: 45%; left: 0; }
 }
 
 .lobby-empty {

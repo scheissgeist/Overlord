@@ -56,6 +56,48 @@
         <span id="lobby-capabilities" class="ops-caps"></span>
       </div>
 
+      <section class="relay-standby" aria-labelledby="relay-standby-title" role="status" aria-live="polite">
+        <div class="standby-hero">
+          <div class="standby-kicker">Relay standby</div>
+          <h1 id="relay-standby-title">No game<br>connected</h1>
+          <p>Keep this page open. It will enter the colony automatically when RimWorld comes online.</p>
+          <div class="standby-armed">
+            <span class="standby-armed-mark" aria-hidden="true"></span>
+            Auto-join armed
+          </div>
+        </div>
+
+        <div class="standby-route" aria-label="Connection route">
+          <div class="standby-route-head">
+            <img src="/favicon.svg" alt="" width="34" height="34">
+            <div>
+              <strong>Connection route</strong>
+            </div>
+          </div>
+
+          <div class="standby-nodes">
+            <div class="standby-node online">
+              <span class="standby-node-number">01</span>
+              <div><strong>Viewer</strong><span>Connected</span></div>
+              <i aria-hidden="true"></i>
+            </div>
+            <div class="standby-link online" aria-hidden="true"></div>
+            <div class="standby-node online">
+              <span class="standby-node-number">02</span>
+              <div><strong>Relay</strong><span>Online</span></div>
+              <i aria-hidden="true"></i>
+            </div>
+            <div class="standby-link scanning" aria-hidden="true"><i></i></div>
+            <div class="standby-node waiting">
+              <span class="standby-node-number">03</span>
+              <div><strong>RimWorld</strong><span>Awaiting host</span></div>
+              <i aria-hidden="true"></i>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       <div id="lobby-title" class="lobby-title-row">
         <span class="lobby-title-text">Waiting for assignment</span>
       </div>
