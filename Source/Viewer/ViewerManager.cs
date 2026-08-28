@@ -304,9 +304,7 @@ namespace Overlord
 
             if (session.assignedPawn == pawn)
             {
-                pendingClaims.Remove(username);
-                foreach (var claim in pendingClaims.Values.Where(c => c.pawnId == pawn.thingIDNumber).ToList())
-                    pendingClaims.Remove(claim.username);
+                ResolvePendingClaimsForAssignment(username, pawn);
                 pawnToViewer[pawn.thingIDNumber] = username;
                 session.lastStateHash = 0;
                 TwitchToolkitBridge.QueueViewerPawnSync(username, pawn);
@@ -354,9 +352,7 @@ namespace Overlord
             // mods rename them too, and display names can collide, so a name is
             // a derived label rather than an identity.
             RememberLastOwner(pawn.thingIDNumber, username);
-            pendingClaims.Remove(username);
-            foreach (var claim in pendingClaims.Values.Where(c => c.pawnId == pawn.thingIDNumber).ToList())
-                pendingClaims.Remove(claim.username);
+            ResolvePendingClaimsForAssignment(username, pawn);
 
             // Rename pawn to viewer's display name
             if (pawn.Name is NameTriple nameTriple)
@@ -670,7 +666,7 @@ namespace Overlord
             username = NormalizeUsername(username);
             if (string.IsNullOrEmpty(username)) return;
             UnassignPawn(username);
-            pendingClaims.Remove(username);
+            ResolvePendingClaim(username, "dismissed");
             SendModerationMessage(username, StateProtocol.ViewerKick, reason ?? "Kicked by streamer");
             LogUtil.Log($"Streamer kicked {username}: {reason ?? "no reason"}");
             ActionLog.Append(ActionLogKind.Moderation, username, "kick", reason ?? "Kicked");
@@ -686,7 +682,7 @@ namespace Overlord
             if (string.IsNullOrEmpty(username)) return;
             bannedUsernames.Add(username);
             UnassignPawn(username);
-            pendingClaims.Remove(username);
+            ResolvePendingClaim(username, "dismissed");
             SendModerationMessage(username, StateProtocol.Banned, reason ?? "Banned by streamer");
             LogUtil.Log($"Streamer banned {username}: {reason ?? "no reason"}");
             ActionLog.Append(ActionLogKind.Moderation, username, "ban", reason ?? "Banned");
@@ -1115,6 +1111,49 @@ namespace Overlord
             return claim;
         }
 
+        private void ResolvePendingClaimsForAssignment(string assignedUsername, Pawn pawn)
+        {
+            if (pawn == null) return;
+            var claims = pendingClaims.Values
+                .Where(claim => string.Equals(claim.username, assignedUsername, StringComparison.OrdinalIgnoreCase)
+                    || claim.pawnId == pawn.thingIDNumber)
+                .ToList();
+            foreach (var claim in claims)
+            {
+                pendingClaims.Remove(claim.username);
+                bool sameViewer = string.Equals(claim.username, assignedUsername, StringComparison.OrdinalIgnoreCase);
+                string resolution = sameViewer
+                    ? (claim.pawnId == pawn.thingIDNumber ? "approved" : "reassigned")
+                    : "taken";
+                BroadcastClaimResolved(
+                    claim,
+                    resolution,
+                    assignedUsername);
+            }
+        }
+
+        private void ResolvePendingClaim(string username, string resolution)
+        {
+            var claim = GetPendingClaim(username);
+            if (claim == null) return;
+            pendingClaims.Remove(claim.username);
+            BroadcastClaimResolved(claim, resolution, null);
+        }
+
+        private static void BroadcastClaimResolved(PendingClaim claim, string resolution, string assignedTo)
+        {
+            if (claim == null) return;
+            OverlordGameComponent.Instance?.Relay?.Broadcast(new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.ClaimResolved,
+                ["username"] = claim.username,
+                ["pawnId"] = claim.pawnId,
+                ["resolution"] = resolution ?? "resolved",
+                ["assignedTo"] = assignedTo ?? "",
+                ["adminOnly"] = true
+            });
+        }
+
         public void RejectClaim(string username)
         {
             username = NormalizeUsername(username);
@@ -1122,7 +1161,7 @@ namespace Overlord
             if (claim == null)
                 return;
 
-            pendingClaims.Remove(username);
+            ResolvePendingClaim(username, "rejected");
             ActionLog.Append(ActionLogKind.Claim, username, "claim_rejected", $"Claim for {claim.pawnName} rejected", claim.pawnId);
             OverlordGameComponent.Instance?.SendToViewerPublic(username, new Dictionary<string, object>
             {

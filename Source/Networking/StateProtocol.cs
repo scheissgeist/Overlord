@@ -101,6 +101,7 @@ namespace Overlord
         public const string VoteUpdate = "vote_update";
         public const string GameEvent = "game_event";
         public const string ClaimRequest = "claim_request";
+        public const string ClaimResolved = "claim_resolved";
         public const string CmdConsume = "consume";
         public const string CmdDropInventory = "drop_inventory";
         public const string CmdContextMenu = "context_menu";

@@ -60,6 +60,7 @@ function main() {
   run('relay syntax', 'node', ['--check', path.join(ROOT, 'server.js')]);
   run('relay restart durability smoke', 'node', [path.join(ROOT, 'scripts', 'smoke-relay-restart.js')]);
   run('production host transport smoke', 'node', [path.join(ROOT, 'scripts', 'smoke-host-transport.js')], { timeout: 60000 });
+  run('admin exception console smoke', 'node', [path.join(ROOT, 'scripts', 'smoke-admin-console.js')], { timeout: 60000 });
   run('smoke syntax', 'node', ['--check', path.join(ROOT, 'scripts', 'smoke-viewer-intake.js')]);
   run('live verifier syntax', 'node', ['--check', path.join(ROOT, 'scripts', 'verify-live-release.js')]);
   run('whitespace gate', 'git', ['diff', '--check'], { cwd: REPO });

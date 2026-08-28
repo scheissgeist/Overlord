@@ -40,10 +40,14 @@ function localAssets() {
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   const style = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
   const index = normalizeIndex(fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8'));
+  const tilemap = fs.readFileSync(path.join(ROOT, 'public', 'tilemap.js'), 'utf8');
+  const admin = fs.readFileSync(path.join(ROOT, 'public', 'admin.html'), 'utf8');
   return {
     app: sha256(app),
     style: sha256(style),
     index: sha256(index),
+    tilemap: sha256(tilemap),
+    admin: sha256(admin),
   };
 }
 
@@ -62,11 +66,15 @@ async function observe(baseUrl, expected) {
   const appUrl = new URL('app.js', baseUrl).toString();
   const styleUrl = new URL('style.css', baseUrl).toString();
   const indexUrl = new URL('', baseUrl).toString();
-  const [healthResponse, appResponse, styleResponse, indexResponse] = await Promise.all([
+  const tilemapUrl = new URL('tilemap.js', baseUrl).toString();
+  const adminUrl = new URL('admin', baseUrl).toString();
+  const [healthResponse, appResponse, styleResponse, indexResponse, tilemapResponse, adminResponse] = await Promise.all([
     fetchText(healthUrl),
     fetchText(appUrl),
     fetchText(styleUrl),
     fetchText(indexUrl),
+    fetchText(tilemapUrl),
+    fetchText(adminUrl),
   ]);
   const health = JSON.parse(healthResponse.text);
   const appBuild = servedBuild(appResponse.text);
@@ -75,11 +83,15 @@ async function observe(baseUrl, expected) {
     app: sha256(appResponse.text),
     style: sha256(styleResponse.text),
     index: sha256(normalizeIndex(indexResponse.text)),
+    tilemap: sha256(tilemapResponse.text),
+    admin: sha256(adminResponse.text),
   };
   const cacheControl = {
     app: appResponse.headers.get('cache-control') || '',
     style: styleResponse.headers.get('cache-control') || '',
     index: indexResponse.headers.get('cache-control') || '',
+    tilemap: tilemapResponse.headers.get('cache-control') || '',
+    admin: adminResponse.headers.get('cache-control') || '',
   };
   const assetsMatch = Object.keys(expectedAssets).every(key => expectedAssets[key] === liveAssets[key]);
   const noStore = Object.values(cacheControl).every(value => /(?:^|,)\s*no-store(?:,|$)/i.test(value));

@@ -5,18 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Overlord Admin</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --bg: #0e0f10; --surface: #1a1b1d; --border: #2e2f33; --text: #d8d9db; --muted: #6b6d72; --accent: #4a9eff; --green: #3da64a; --red: #c0392b; --purple: #8e44ad; --amber: #c8922a; --radius: 3px; }
-    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
+    :root { --bg: #0c0d0d; --surface: #171918; --surface-2: #111312; --border: #343732; --text: #e3ded0; --muted: #9a978d; --accent: #c49a57; --green: #71a879; --red: #d26355; --purple: #8e6a9e; --amber: #d1a24f; --radius: 2px; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: "IBM Plex Mono", Consolas, monospace; font-size: 13px; }
 
     #app { max-width: 860px; margin: 0 auto; padding: 20px 16px; }
     h1 { font-size: 20px; margin-bottom: 12px; }
-    h2 { font-size: 12px; color: var(--muted); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    h2 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; font-weight: 500; }
+
+    .exception-strip { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 6px; margin: 10px 0 14px; }
+    .exception-chip { min-height: 54px; border: 1px solid var(--border); background: var(--surface-2); padding: 8px 10px; border-radius: var(--radius); }
+    .exception-chip .chip-label { color: var(--muted); font-size: 10px; display: block; margin-bottom: 5px; }
+    .exception-chip .chip-value { color: var(--text); font-size: 13px; font-weight: 600; }
+    .exception-chip.warn { border-color: var(--amber); background: #211b11; }
+    .exception-chip.warn .chip-value { color: var(--amber); }
+    .exception-chip.bad { border-color: var(--red); background: #241411; }
+    .exception-chip.bad .chip-value { color: var(--red); }
+    .exception-chip.good .chip-value { color: var(--green); }
 
     .auth-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; display: flex; flex-direction: column; gap: 10px; max-width: 360px; margin: 60px auto; }
     .auth-box input { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; color: var(--text); font-size: 14px; }
-    .auth-box button { background: var(--accent); border: none; border-radius: var(--radius); padding: 9px; color: #fff; font-weight: 600; cursor: pointer; }
+    .auth-box button { background: var(--accent); border: none; border-radius: var(--radius); padding: 9px; color: #111; font-weight: 600; cursor: pointer; }
     #error-msg { color: var(--red); font-size: 12px; }
 
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin-bottom: 6px; }
@@ -38,24 +51,21 @@
     .claim-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 4px; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
     .claim-actions { display: flex; gap: 4px; }
     .claim-actions button { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 4px 8px; cursor: pointer; font-size: 12px; }
-    .claim-actions button:first-child { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .claim-actions button:first-child { background: var(--accent); color: #111; border-color: var(--accent); }
 
     .action-bar { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
-    .action-btn { border: none; border-radius: var(--radius); padding: 7px 16px; color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .action-btn { border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 16px; background: var(--surface); color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer; }
     .action-btn:hover { filter: brightness(1.1); }
     .action-btn:disabled { opacity: 0.4; cursor: default; }
-    .btn-assign { background: var(--accent); }
-    .btn-unassign { background: #555; }
-    .btn-spawn { background: var(--purple); }
-    .btn-kick { background: #555; }
+    .btn-assign { background: var(--accent); color: #111; border-color: var(--accent); }
+    .btn-unassign, .btn-spawn, .btn-kick, .btn-ticket { background: var(--surface); }
     .btn-ban { background: var(--red); }
-    .btn-ticket { background: var(--amber); }
-    .btn-vote { background: var(--green); }
+    .btn-vote { background: var(--accent); color: #111; }
     .btn-end-vote { background: var(--red); }
 
     .msg-bar { display: flex; gap: 6px; margin-top: 8px; }
     .msg-bar input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: var(--text); font-size: 13px; }
-    .msg-bar button { background: var(--accent); border: none; border-radius: var(--radius); padding: 6px 14px; color: #fff; font-size: 13px; cursor: pointer; }
+    .msg-bar button { background: var(--accent); border: none; border-radius: var(--radius); padding: 6px 14px; color: #111; font-size: 13px; cursor: pointer; }
 
     .vote-bar { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
     .vote-bar input { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: var(--text); font-size: 13px; }
@@ -73,9 +83,10 @@
     .log { background: #111; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; max-height: 160px; overflow-y: auto; font-size: 11px; color: var(--muted); margin-top: 8px; }
     .log-entry { padding: 1px 0; border-bottom: 1px solid #1a1a1a; }
     .none { color: var(--muted); font-style: italic; font-size: 12px; }
-    .refresh-note { color: #444; font-size: 10px; margin-top: 3px; }
+    .refresh-note { color: var(--muted); font-size: 10px; }
     .selected-label { font-size: 12px; color: var(--muted); margin: 6px 0 2px; min-height: 18px; }
 
+    @media (max-width: 760px) { .exception-strip { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
     @media (max-width: 600px) { .assign-grid { grid-template-columns: 1fr; } }
         .log-err { color: var(--red, #e06c5a); }
     </style>
@@ -94,12 +105,24 @@
     <div id="dashboard" style="display:none">
       <h1>Overlord Admin</h1>
 
+      <div class="exception-strip" aria-label="Live exceptions">
+        <div class="exception-chip" id="chip-admin"><span class="chip-label">Admin link</span><span class="chip-value">Connecting</span></div>
+        <div class="exception-chip" id="chip-host"><span class="chip-label">Game</span><span class="chip-value">Checking</span></div>
+        <div class="exception-chip" id="chip-claims"><span class="chip-label">Claims</span><span class="chip-value">None</span></div>
+        <div class="exception-chip" id="chip-failures"><span class="chip-label">Failures · 10 min</span><span class="chip-value">None</span></div>
+        <div class="exception-chip" id="chip-vote"><span class="chip-label">Vote</span><span class="chip-value">Inactive</span></div>
+      </div>
+
       <h2>Status</h2>
       <div class="card">
         <div class="status-row"><span class="label">Host</span><span id="host-status">...</span></div>
         <div class="status-row"><span class="label">Viewers</span><span id="viewer-count">0</span></div>
         <div class="status-row"><span class="label">Uptime</span><span id="uptime">0s</span></div>
+        <div class="status-row"><span class="label">Freshness</span><span class="refresh-note">Waiting for relay</span></div>
       </div>
+
+      <h2>Claim Requests</h2>
+      <div class="card" id="claim-list"><span class="none">No pending claims</span></div>
 
       <h2>Assignments</h2>
       <div class="assign-grid">
@@ -129,9 +152,6 @@
         <button onclick="doTimeout(900)">15m</button>
       </div>
 
-      <h2>Claim Requests</h2>
-      <div class="card" id="claim-list"><span class="none">No pending claims</span></div>
-
       <h2>Broadcast</h2>
       <div class="msg-bar">
         <input id="msg-input" type="text" placeholder="Message to all viewers" maxlength="200">
@@ -155,7 +175,6 @@
 
       <h2>Log</h2>
       <div class="log" id="event-log"></div>
-      <p class="refresh-note">Auto-refreshes every 15s</p>
     </div>
   </div>
 
@@ -167,6 +186,10 @@
     let colonists = [];
     let claimRequests = [];
     let activeVote = null;
+    let recentCommandFailures = [];
+    let adminLinkUp = false;
+    let hostConnected = false;
+    const requestedRoom = new URLSearchParams(location.search).get('room') || '';
 
     // ── Auth ──
     $('btn-auth').addEventListener('click', tryAuth);
@@ -192,6 +215,9 @@
     }
 
     async function api(path, body) {
+      if (requestedRoom && path.startsWith('/admin/status') && !path.includes('room=')) {
+        path += `${path.includes('?') ? '&' : '?'}room=${encodeURIComponent(requestedRoom)}`;
+      }
       const opts = { headers: { Authorization: `Bearer ${secret}` } };
       if (body !== undefined) {
         opts.method = 'POST';
@@ -199,7 +225,9 @@
         opts.body = JSON.stringify(body);
       }
       const r = await fetch(path, opts);
-      return r.json();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      return data;
     }
 
     // ── Admin WebSocket ──
@@ -215,11 +243,14 @@
         try { adminWs.onclose = null; adminWs.onerror = null; adminWs.close(1000, 'Reconnecting'); } catch {}
       }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${location.host}/ws?role=admin&secret=${encodeURIComponent(secret)}`;
+      const roomQuery = requestedRoom ? `&room=${encodeURIComponent(requestedRoom)}` : '';
+      const url = `${proto}//${location.host}/ws?role=admin&secret=${encodeURIComponent(secret)}${roomQuery}`;
       adminWs = new WebSocket(url);
 
       adminWs.onopen = () => {
         if (seq !== adminConnectSeq) { try { adminWs.close(); } catch {} return; }
+        adminLinkUp = true;
+        renderExceptions();
         log('WebSocket connected');
         pollStatus();
       };
@@ -231,15 +262,26 @@
           switch (msg.type) {
             case 'admin_sync':
               liveViewers = msg.viewers || [];
+              hostConnected = msg.host === true;
+              claimRequests = Array.isArray(msg.pendingClaims) ? msg.pendingClaims : [];
+              recentCommandFailures = Array.isArray(msg.recentCommandFailures) ? msg.recentCommandFailures : [];
+              activeVote = msg.activeVote || null;
               $('host-status').innerHTML = msg.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
               $('viewer-count').textContent = liveViewers.length;
               $('uptime').textContent = formatUptime(msg.uptime);
               renderViewers(liveViewers);
+              renderClaims();
+              renderVote(activeVote);
+              markFresh();
+              renderExceptions();
               break;
 
             case 'host_status':
+              hostConnected = msg.connected === true;
               $('host-status').innerHTML = msg.connected ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
               log(msg.connected ? 'Host connected' : 'Host disconnected');
+              markFresh();
+              renderExceptions();
               break;
 
             case 'viewer_update':
@@ -264,20 +306,37 @@
               renderColonists();
               renderViewers(liveViewers);
               renderClaims();
+              markFresh();
+              renderExceptions();
               break;
 
             case 'claim_request':
               upsertClaim(msg);
               renderClaims();
               log(`${msg.displayName || msg.username} requested ${msg.pawnName}`);
+              markFresh();
+              renderExceptions();
+              break;
+
+            case 'claim_resolved':
+              claimRequests = claimRequests.filter(claim => claim.username !== msg.username);
+              renderClaims();
+              log(`Claim ${msg.resolution || 'resolved'}: ${msg.username}`);
+              markFresh();
+              renderExceptions();
               break;
 
             case 'vote_update':
               activeVote = msg.active ? msg : null;
               renderVote(msg);
+              markFresh();
+              renderExceptions();
               break;
 
             case 'game_info':
+              hostConnected = true;
+              markFresh();
+              renderExceptions();
               $('host-status').innerHTML = `<span class="dot on"></span>Connected — ${msg.season || ''} Day ${msg.day || '?'}, ${msg.hour ?? '?'}h, ${msg.temperature ?? '?'}°C`;
               break;
 
@@ -296,7 +355,12 @@
 
             case 'action_result':
             case 'command_result': {
-              const who = msg.username ? `${msg.username}: ` : '';
+              const resultUser = msg.username || msg.target || '';
+              const who = resultUser ? `${resultUser}: ` : '';
+              if (msg.ok === false) {
+                recentCommandFailures.push({ at: Date.now(), username: msg.username || msg.target || '', action: msg.action || '', message: msg.message || '', commandId: msg.commandId || '' });
+                renderExceptions();
+              }
               if (msg.ok === false) log(`FAILED ${who}${msg.action ? msg.action + ' — ' : ''}${msg.message || ''}`, 'err');
               else log(`OK ${who}${msg.message || ''}`);
               break;
@@ -306,13 +370,17 @@
               renderOpsEntry(msg.entry);
               break;
           }
-        } catch {}
+        } catch (error) {
+          log(`Bad admin message: ${error.message}`, 'err');
+        }
       };
 
       adminWs.onclose = () => {
         if (seq !== adminConnectSeq) return;
+        adminLinkUp = false;
         $('host-status').innerHTML = '<span class="dot off"></span>Admin link down — showing stale data, reconnecting…';
         log('WebSocket disconnected - reconnecting...');
+        renderExceptions();
         adminReconnectTimer = setTimeout(connectAdminWS, 3000);
       };
       adminWs.onerror = () => { if (seq === adminConnectSeq) adminWs.close(); };
@@ -321,12 +389,19 @@
     async function pollStatus() {
       try {
         const data = await api('/admin/status');
-        liveViewers = data.viewers;
-        $('viewer-count').textContent = data.viewers.length;
+        liveViewers = data.viewers || [];
+        hostConnected = data.host === true;
+        claimRequests = Array.isArray(data.pendingClaims) ? data.pendingClaims : claimRequests;
+        recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
+        activeVote = data.activeVote || null;
+        $('host-status').innerHTML = hostConnected ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
+        $('viewer-count').textContent = liveViewers.length;
         $('uptime').textContent = formatUptime(data.uptime);
-        renderViewers(data.viewers);
-        const note = document.querySelector('.refresh-note');
-        if (note) note.textContent = 'Status updated ' + new Date().toLocaleTimeString();
+        renderViewers(liveViewers);
+        renderClaims();
+        renderVote(activeVote);
+        markFresh();
+        renderExceptions();
       } catch (e) {
         const note = document.querySelector('.refresh-note');
         if (note) note.textContent = 'Status poll failing (' + (e?.message || 'auth?') + ') — data is stale';
@@ -337,7 +412,9 @@
       try {
         const data = await api('/admin/logs?limit=80');
         if (data.logs) { $('event-log').innerHTML = ''; data.logs.forEach(renderOpsEntry); }
-      } catch {}
+      } catch (error) {
+        log(`Could not load relay log: ${error.message}`, 'err');
+      }
     }
 
     function renderOpsEntry(entry) {
@@ -353,11 +430,19 @@
     }
 
     function renderStatus(data) {
+      hostConnected = data.host === true;
       $('host-status').innerHTML = data.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
-      liveViewers = data.viewers;
-      $('viewer-count').textContent = data.viewers.length;
+      liveViewers = data.viewers || [];
+      claimRequests = Array.isArray(data.pendingClaims) ? data.pendingClaims : claimRequests;
+      recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
+      activeVote = data.activeVote || null;
+      $('viewer-count').textContent = liveViewers.length;
       $('uptime').textContent = formatUptime(data.uptime);
-      renderViewers(data.viewers);
+      renderViewers(liveViewers);
+      renderClaims();
+      renderVote(activeVote);
+      markFresh();
+      renderExceptions();
     }
 
     function renderViewers(viewers) {
@@ -408,15 +493,16 @@
 
     function upsertClaim(msg) {
       claimRequests = claimRequests.filter(c => c.username !== msg.username);
-      claimRequests.push({ username: msg.username, displayName: msg.displayName || msg.username, pawnId: msg.pawnId, pawnName: msg.pawnName || `#${msg.pawnId}` });
+      claimRequests.push({ username: msg.username, displayName: msg.displayName || msg.username, pawnId: msg.pawnId, pawnName: msg.pawnName || `#${msg.pawnId}`, connected: msg.connected !== false, requestedAt: msg.requestedAt || Date.now() });
     }
 
     function renderClaims() {
       const el = $('claim-list');
       if (!claimRequests.length) { el.innerHTML = '<span class="none">No pending claims</span>'; return; }
-      el.innerHTML = claimRequests.map(c => `<div class="claim-card">
+      const orderedClaims = [...claimRequests].sort((a, b) => Number(a.requestedAt || 0) - Number(b.requestedAt || 0));
+      el.innerHTML = orderedClaims.map(c => `<div class="claim-card">
         <span>${esc(c.displayName)} → ${esc(c.pawnName)}</span>
-        <span class="claim-actions">
+        <span class="claim-actions" title="${c.connected === false ? 'Viewer is offline' : 'Viewer is connected'}">
           <button onclick="approveClaim('${esc(c.username)}', ${c.pawnId})">Approve</button>
           <button onclick="rejectClaim('${esc(c.username)}', ${c.pawnId})">Reject</button>
         </span>
@@ -497,16 +583,12 @@
 
     window.approveClaim = async function(username, pawnId) {
       await api('/admin/host-command', { command: { type: 'assign', username, pawnId } });
-      claimRequests = claimRequests.filter(c => c.username !== username);
-      renderClaims();
-      log(`Approved ${username} → colonist #${pawnId}`);
+      log(`Approval sent for ${username} → colonist #${pawnId}`);
     };
 
     window.rejectClaim = async function(username, pawnId) {
       await api('/admin/host-command', { command: { type: 'claim_response', username, pawnId, approved: false } });
-      claimRequests = claimRequests.filter(c => c.username !== username);
-      renderClaims();
-      log(`Rejected ${username}'s claim`);
+      log(`Rejection sent for ${username}'s claim`);
     };
 
     $('btn-broadcast').addEventListener('click', async () => {
@@ -532,6 +614,29 @@
     });
 
     // ── Helpers ──
+    function markFresh() {
+      const note = document.querySelector('.refresh-note');
+      if (note) note.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }
+
+    function setChip(id, value, tone = '') {
+      const chip = $(id);
+      if (!chip) return;
+      chip.className = `exception-chip${tone ? ' ' + tone : ''}`;
+      const valueEl = chip.querySelector('.chip-value');
+      if (valueEl) valueEl.textContent = value;
+    }
+
+    function renderExceptions() {
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      recentCommandFailures = recentCommandFailures.filter(failure => Number(failure.at) >= cutoff);
+      setChip('chip-admin', adminLinkUp ? 'Connected' : 'Disconnected', adminLinkUp ? 'good' : 'bad');
+      setChip('chip-host', hostConnected ? 'Connected' : 'Disconnected', hostConnected ? 'good' : 'bad');
+      setChip('chip-claims', claimRequests.length ? `${claimRequests.length} pending` : 'None', claimRequests.length ? 'warn' : '');
+      setChip('chip-failures', recentCommandFailures.length ? `${recentCommandFailures.length} failed` : 'None', recentCommandFailures.length ? 'bad' : '');
+      setChip('chip-vote', activeVote?.active ? 'Active' : 'Inactive', activeVote?.active ? 'warn' : '');
+    }
+
     function formatUptime(s) {
       const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60);
       return h > 0 ? `${h}h ${m}m` : `${m}m`;

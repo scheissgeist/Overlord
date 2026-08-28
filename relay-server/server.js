@@ -131,6 +131,8 @@ function makeRoom(roomId, opts) {
     roomReplayCache: new Map(),
     viewerBatchQueues: new Map(),
     contextMenuRequests: new Map(),
+    pendingClaims: new Map(),
+    commandFailures: [],
   };
   rooms.set(roomId, room);
   return room;
@@ -325,6 +327,7 @@ const REPLAYABLE_TARGETED_TYPES = new Set([
 ]);
 const REPLAYABLE_ROOM_TYPES = new Set([
   'game_info',
+  'vote_update',
 ]);
 const REPLAY_ORDER = [
   'host_capabilities',
@@ -588,6 +591,71 @@ function getViewerCache(room, login) {
     room.viewerReplayCache.set(login, cache);
   }
   return cache;
+}
+
+function recentCommandFailures(room, now = Date.now(), windowMs = 10 * 60 * 1000) {
+  if (!room) return [];
+  room.commandFailures = room.commandFailures.filter(entry => now - entry.at <= windowMs);
+  return room.commandFailures.slice();
+}
+
+function cachedActiveVote(room) {
+  const cached = room?.roomReplayCache?.get('vote_update');
+  if (!cached) return null;
+  try {
+    const vote = JSON.parse(cached.text);
+    return vote?.active ? vote : null;
+  } catch {
+    return null;
+  }
+}
+
+function adminRoomState(room) {
+  return {
+    pendingClaims: room ? Array.from(room.pendingClaims.values()).map(claim => ({
+      ...claim,
+      connected: room.viewers.has(claim.username),
+    })) : [],
+    recentCommandFailures: recentCommandFailures(room),
+    activeVote: cachedActiveVote(room),
+  };
+}
+
+function trackHostAdminState(room, msg) {
+  if (!room || !msg) return;
+  if (msg.type === 'claim_request' && msg.username) {
+    const username = String(msg.username);
+    const existing = room.pendingClaims.get(username);
+    room.pendingClaims.set(username, {
+      username,
+      displayName: String(msg.displayName || username),
+      pawnId: Number(msg.pawnId),
+      pawnName: String(msg.pawnName || `#${msg.pawnId}`),
+      requestedAt: existing?.requestedAt || Date.now(),
+    });
+    return;
+  }
+  if (msg.type === 'claim_resolved' && msg.username) {
+    room.pendingClaims.delete(String(msg.username));
+    return;
+  }
+  if (msg.type === 'colonist_list' && Array.isArray(msg.colonists)) {
+    for (const [username, claim] of room.pendingClaims) {
+      const pawn = msg.colonists.find(colonist => Number(colonist?.id) === Number(claim.pawnId));
+      if (!pawn || pawn.assignedTo) room.pendingClaims.delete(username);
+    }
+    return;
+  }
+  if ((msg.type === 'action_result' || msg.type === 'command_result') && msg.ok === false) {
+    room.commandFailures.push({
+      at: Date.now(),
+      username: String(msg.username || msg.target || ''),
+      action: String(msg.action || ''),
+      message: String(msg.message || ''),
+      commandId: String(msg.commandId || ''),
+    });
+    recentCommandFailures(room);
+  }
 }
 
 function cacheHostTextMessage(room, msg, text) {
@@ -1175,7 +1243,7 @@ wss.on('connection', (ws, req) => {
     clearRoomReplayCache(room, 'host_connected');
     console.log(`[relay] Host connected: room ${room.roomId}`);
     recordOps('host_connected', { room: room.roomId });
-    broadcastToAdmins({ type: 'host_status', connected: true, room: room.roomId });
+    broadcastToAdmins({ type: 'host_status', connected: true, room: room.roomId }, room);
     const hostConnectedNotice = JSON.stringify({ type: 'host_connected', instance: INSTANCE_ID });
     for (const [, vws] of room.viewers) {
       sendWs(vws, hostConnectedNotice, { type: 'host_connected' });
@@ -1204,6 +1272,7 @@ wss.on('connection', (ws, req) => {
         const summary = summarizeMessage(msg, Buffer.byteLength(text));
         if (msg.type === 'map_frame') recordFrame(msg, summary.bytes);
         else recordOps('host_message', summary);
+        trackHostAdminState(room, msg);
         cacheHostTextMessage(room, msg, text);
 
         if (msg.target) {
@@ -1223,13 +1292,16 @@ wss.on('connection', (ws, req) => {
             recordOps('host_moderation', { room: room.roomId, type: msg.type, target: login });
             return;
           }
+          if (msg.type === 'action_result' || msg.type === 'command_result') {
+            broadcastToAdmins({ ...msg, room: room.roomId }, room);
+          }
           // All other targeted messages are batched into a 16ms flush window
           queueForViewer(room, login, text);
           return;
         }
 
         if (msg.adminOnly) {
-          broadcastToAdmins(msg);
+          broadcastToAdmins({ ...msg, room: room.roomId }, room);
           return;
         }
 
@@ -1237,7 +1309,7 @@ wss.on('connection', (ws, req) => {
           sendWs(vws, text, { type: msg.type });
         }
         if (msg.type === 'map_frame') return;
-        broadcastToAdmins(msg);
+        broadcastToAdmins({ ...msg, room: room.roomId }, room);
       } catch (e) {
         console.error('[relay] Bad host message:', e.message);
       }
@@ -1255,7 +1327,7 @@ wss.on('connection', (ws, req) => {
         for (const [, vws] of room.viewers) {
           sendWs(vws, notice, { type: 'host_disconnected' });
         }
-        broadcastToAdmins({ type: 'host_status', connected: false, room: room.roomId });
+        broadcastToAdmins({ type: 'host_status', connected: false, room: room.roomId }, room);
       }
     });
 
@@ -1322,7 +1394,7 @@ wss.on('connection', (ws, req) => {
     console.log(`[relay] Viewer joined: ${displayName} (${login}) -> room ${room.roomId}`);
     recordOps('viewer_joined', { room: room.roomId, username: login, displayName, clientBuild });
     sendToHost(room, { type: 'viewer_joined', username: login, displayName, mapTransport });
-    broadcastToAdmins({ type: 'viewer_update', action: 'joined', login, displayName, room: room.roomId });
+    broadcastToAdmins({ type: 'viewer_update', action: 'joined', login, displayName, room: room.roomId }, room);
     suggestClientReload(ws, login, clientBuild);
     sendWs(ws, JSON.stringify(Object.assign({}, RELAY_CAPABILITIES, {
       room: room.roomId,
@@ -1444,7 +1516,7 @@ wss.on('connection', (ws, req) => {
         console.log(`[relay] Viewer left: ${login} (room ${room.roomId})`);
         recordOps('viewer_left', { room: room.roomId, username: login });
         sendToHost(room, { type: 'viewer_left', username: login });
-        broadcastToAdmins({ type: 'viewer_update', action: 'left', login, room: room.roomId });
+        broadcastToAdmins({ type: 'viewer_update', action: 'left', login, room: room.roomId }, room);
       }
     });
 
@@ -1469,6 +1541,7 @@ wss.on('connection', (ws, req) => {
     // The admin console is the RELAY OPERATOR's view, so it defaults to the owner
     // room (what it always showed) and can be pointed at any room with ?room=.
     const adminRoom = resolveAdminRoom(roomParam);
+    ws._adminRoomId = adminRoom ? adminRoom.roomId : '';
     sendWs(ws, JSON.stringify({
       type: 'admin_sync',
       room: adminRoom ? adminRoom.roomId : '',
@@ -1480,6 +1553,7 @@ wss.on('connection', (ws, req) => {
       instance: INSTANCE_ID,
       clientBuild: CLIENT_BUILD,
       replayCacheViewers: adminRoom ? adminRoom.viewerReplayCache.size : 0,
+      ...adminRoomState(adminRoom),
     }), { type: 'admin_sync', target: 'admin' });
     if (adminRoom) sendToHost(adminRoom, { type: 'request_colonist_list', source: 'admin', adminCommand: true });
 
@@ -1928,6 +2002,7 @@ app.get('/admin/status', adminAuth, (req, res) => {
     replayCacheViewers: room ? room.viewerReplayCache.size : 0,
     sessions: sessions.size,
     uptime:   Math.round(process.uptime()),
+    ...adminRoomState(room),
   });
 });
 
@@ -2055,9 +2130,10 @@ app.get('/obs', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'obs.html'));
 });
 
-function broadcastToAdmins(msg) {
+function broadcastToAdmins(msg, room = null) {
   const text = JSON.stringify(msg);
   for (const [, ws] of admins) {
+    if (room && ws._adminRoomId && ws._adminRoomId !== room.roomId) continue;
     sendWs(ws, text, { type: msg && msg.type, target: 'admin' });
   }
 }

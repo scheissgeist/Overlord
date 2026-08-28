@@ -15,7 +15,8 @@
     "smoke:tilemap": "node scripts/smoke-tilemap.js",
     "smoke:relay-cache": "node scripts/smoke-relay-cache.js",
     "smoke:restart": "node scripts/smoke-relay-restart.js",
-    "smoke:host": "node scripts/smoke-host-transport.js"
+    "smoke:host": "node scripts/smoke-host-transport.js",
+    "smoke:admin": "node scripts/smoke-admin-console.js"
   },
   "dependencies": {
     "express": "^4.18.2",
