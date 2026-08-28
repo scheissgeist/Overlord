@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\..\Source\Core\JsonHelper.cs" Link="Production\JsonHelper.cs" />
+    <Compile Include="..\..\..\Source\Networking\BinaryFrameProtocol.cs" Link="Production\BinaryFrameProtocol.cs" />
+    <Compile Include="..\..\..\Source\Networking\RelayClient.cs" Link="Production\RelayClient.cs" />
+    <Compile Include="..\..\..\Source\Networking\StateProtocol.cs" Link="Production\StateProtocol.cs" />
+    <Compile Include="..\..\..\Source\Networking\ThreadSafeQueue.cs" Link="Production\ThreadSafeQueue.cs" />
+  </ItemGroup>
+</Project>
