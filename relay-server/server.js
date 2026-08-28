@@ -313,6 +313,7 @@ restoreSessions();
 const REPLAYABLE_TARGETED_TYPES = new Set([
   'host_capabilities',
   'permissions',
+  'viewer_summary',
   'pawn_state',
   'toolkit_state',
   'colonist_list',
@@ -332,6 +333,7 @@ const REPLAYABLE_ROOM_TYPES = new Set([
 const REPLAY_ORDER = [
   'host_capabilities',
   'permissions',
+  'viewer_summary',
   'pawn_state',
   'toolkit_state',
   'colonist_list',

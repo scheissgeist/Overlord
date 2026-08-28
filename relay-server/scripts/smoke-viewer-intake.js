@@ -238,6 +238,11 @@ async function main() {
     }
 
     hostWs.send(JSON.stringify({ ...FULL_HOST_CAPABILITIES, target: VIEWER_LOGIN }));
+    hostWs.send(JSON.stringify({
+      type: 'viewer_summary', target: VIEWER_LOGIN, context: 'joined',
+      commands: 7, purchases: 2, assignments: 1, deaths: 0, reconnects: 0,
+      tickets: 3, lastPawnName: VIEWER_DISPLAY,
+    }));
 
     hostWs.send(JSON.stringify({
       type: 'colonist_list',
@@ -1156,8 +1161,21 @@ async function main() {
       type: 'action_result', target: VIEWER_LOGIN,
       commandId: lifecycleCommand.commandId, action: 'draft', phase: 'applied',
       ok: true, message: 'Drafted',
+      viewerSummary: {
+        type: 'viewer_summary', context: 'command', commands: 8, purchases: 2,
+        assignments: 1, deaths: 0, reconnects: 0, tickets: 3,
+        lastPawnName: VIEWER_DISPLAY,
+      },
     }));
     await page.waitForSelector('#btn-draft-toggle.cmd-applied', { timeout: 10000 });
+    await page.waitForFunction(() => document.getElementById('lobby-summary')?.textContent.includes('8 orders'), null, { timeout: 10000 });
+    // Persist the new summary in the relay cache exactly as the production host's
+    // next explicit summary does, so the reconnect below exercises replay too.
+    hostWs.send(JSON.stringify({
+      type: 'viewer_summary', target: VIEWER_LOGIN, context: 'command',
+      commands: 8, purchases: 2, assignments: 1, deaths: 0, reconnects: 0,
+      tickets: 3, lastPawnName: VIEWER_DISPLAY,
+    }));
 
     // A full browser reload is the deterministic reconnect transition. The relay
     // must replay the assigned pawn exactly once and remain stable long enough to
@@ -1186,6 +1204,9 @@ async function main() {
     const reconnectCommandStatus = await page.locator('#command-window-status .status-summary').innerText();
     if (!reconnectCommandStatus.includes(`Assigned to ${VIEWER_DISPLAY}`)) {
       throw new Error(`Reconnect command state regression: ${reconnectCommandStatus}`);
+    }
+    if (!reconnectCommandStatus.includes('10 completed')) {
+      throw new Error(`Reconnect viewer history regression: ${reconnectCommandStatus}`);
     }
 
     // A new browser against an older/limited host must remove opt-in controls
@@ -1244,6 +1265,35 @@ async function main() {
       viewport: { width: innerWidth, height: innerHeight },
     }), reconnectJoins);
     result.degradedCapabilities = degradedCapabilities;
+
+    hostWs.send(JSON.stringify({
+      type: 'pawn_died', target: VIEWER_LOGIN, pawnName: VIEWER_DISPLAY,
+      ticketsRemaining: 2,
+      summary: {
+        type: 'viewer_summary', context: 'death', commands: 8, purchases: 2,
+        assignments: 1, deaths: 1, reconnects: 1, tickets: 2,
+        lastPawnName: VIEWER_DISPLAY,
+      },
+    }));
+    await page.waitForFunction(() =>
+      document.body.dataset.viewerPhase === 'dead' &&
+      document.getElementById('lobby-death-name')?.textContent.includes('has died') &&
+      document.getElementById('lobby-summary')?.textContent.includes('1 death') &&
+      document.getElementById('lobby-summary')?.textContent.includes('8 orders'),
+      null,
+      { timeout: 10000 });
+    result.deathSummary = await page.evaluate(() => ({
+      phase: document.body.dataset.viewerPhase,
+      deathName: document.getElementById('lobby-death-name')?.textContent.trim(),
+      history: document.getElementById('lobby-summary')?.textContent.trim(),
+      copy: document.getElementById('lobby-death-copy')?.textContent.trim(),
+    }));
+    if (!result.deathSummary.copy.includes('2 remaining tickets')) {
+      throw new Error(`Death/rejoin summary regression: ${JSON.stringify(result.deathSummary)}`);
+    }
+    if (SCREENSHOT_DIR) {
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-death-summary.png') });
+    }
 
     const summarizedHostMessages = SUMMARY_OUTPUT
       ? {

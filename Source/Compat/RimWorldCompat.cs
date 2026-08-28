@@ -204,6 +204,7 @@ namespace Overlord
                 ["appearancePreview"] = true,
                 ["socialInteractions"] = true,
                 ["commandResults"] = true,
+                ["viewerHistory"] = true,
                 // Fixed dye swatch palette for the viewer gear panel.
                 ["dyePalette"] = PawnCommandRouter.BuildDyePaletteMessage(),
                 // Free colour picking via a wheel. The gamut bounds let the

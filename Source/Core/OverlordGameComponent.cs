@@ -373,7 +373,10 @@ namespace Overlord
             string displayName = JsonHelper.ExtractString(json, "displayName") ?? username;
             if (username == null) return;
 
+            bool returning = viewerManager.GetSession(username) != null;
             var session = viewerManager.GetOrCreateSession(username, displayName);
+            if (returning && session != null)
+                session.reconnects++;
             session?.SetMapTransportPreference(JsonHelper.ExtractString(json, "mapTransport"));
             LogUtil.Log($"Viewer joined: {displayName} ({username})");
 
@@ -388,12 +391,14 @@ namespace Overlord
             // anything new, so it does not need a fresh approval prompt — and it
             // must run BEFORE the "waiting for a colonist" alert below, or the
             // streamer gets pinged about a viewer who was just reconnected.
+            bool restoredPreviousPawn = false;
             if (session != null && !session.OwnsPawn
                 && OverlordMod.Settings?.autoReconnectPreviousPawn != false)
             {
                 var restored = viewerManager.TryReconnectPreviousPawn(username);
                 if (restored != null)
                 {
+                    restoredPreviousPawn = true;
                     Messages.Message(
                         $"[Overlord] {displayName} reconnected to {restored.LabelShort}.",
                         restored, MessageTypeDefOf.NeutralEvent, historical: false
@@ -405,6 +410,8 @@ namespace Overlord
             SendHostCapabilities(username);
             SendMapTransportSelection(username, session);
             viewerManager.SendPermissions(username);
+            viewerManager.SendViewerSummary(username,
+                restoredPreviousPawn ? "restored" : returning ? "rejoined" : "joined");
             // Force game_info so late joiners don't stay stuck on "Host waiting".
             viewerManager.SendGameInfoNow(username);
 
@@ -483,6 +490,14 @@ namespace Overlord
                 result["action"] = action;
                 if (!string.IsNullOrEmpty(commandId)) result["commandId"] = commandId;
                 result["phase"] = ok ? "applied" : "failed";
+            }
+            if (ok && !silent && !isAdminCommand && !string.IsNullOrEmpty(username))
+            {
+                var session = viewerManager?.GetSession(username);
+                session?.RecordSuccessfulAction(action);
+                var summary = viewerManager?.BuildViewerSummary(username, "command");
+                if (result != null && summary != null)
+                    result["viewerSummary"] = summary;
             }
             if (!silent)
             {

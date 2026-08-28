@@ -239,6 +239,16 @@ async function main() {
         entities: [{ id: PAWN_ID, kind: 'pawn', x: 1, z: 1, label: VIEWER_DISPLAY }],
         removedEntities: [],
       },
+      {
+        type: 'viewer_summary',
+        target: VIEWER_LOGIN,
+        commands: 12,
+        purchases: 2,
+        assignments: 1,
+        deaths: 0,
+        reconnects: 1,
+        tickets: 3,
+      },
     ];
 
     const initialViewerCursor = viewerMessages.length;
@@ -262,9 +272,10 @@ async function main() {
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_full', 'viewer map_full delivery', msg => msg.mapEpoch === 7 && msg.seq === 10);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_delta', 'viewer map_delta delivery', msg => msg.mapEpoch === 7 && msg.seq === 11);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'entity_keyframe', 'viewer entity_keyframe delivery', msg => msg.mapEpoch === 7 && msg.entityCount === 1);
+    await waitForMessageAfter(viewerMessages, initialViewerCursor, 'viewer_summary', 'viewer summary delivery', msg => msg.commands === 12);
 
     const diagnostics = await readReplayCacheDiagnostics();
-    const expectedCachedTypes = ['permissions', 'pawn_state', 'map_manifest', 'map_full', 'map_delta', 'entity_keyframe'];
+    const expectedCachedTypes = ['permissions', 'viewer_summary', 'pawn_state', 'map_manifest', 'map_full', 'map_delta', 'entity_keyframe'];
     if (!cacheDiagnosticsIncludeTypes(diagnostics.body, VIEWER_LOGIN, expectedCachedTypes)) {
       throw new Error(
         `Replay cache diagnostics at ${diagnostics.path} did not include viewer ${VIEWER_LOGIN} and cached types ${expectedCachedTypes.join(', ')}: ${JSON.stringify(diagnostics.body)}`
@@ -341,6 +352,7 @@ async function main() {
     await waitForMessageAfter(reconnectMessages, 0, 'map_full', 'cached map_full replay on reconnect', msg => msg.mapEpoch === 7 && msg.seq === 10 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'map_delta', 'cached map_delta replay on reconnect', msg => msg.mapEpoch === 7 && msg.seq === 11 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'entity_keyframe', 'cached entity_keyframe replay on reconnect', msg => msg.mapEpoch === 7 && msg.entityCount === 1 && msg.relayCached === true);
+    await waitForMessageAfter(reconnectMessages, 0, 'viewer_summary', 'cached viewer summary replay on reconnect', msg => msg.commands === 12 && msg.relayCached === true);
 
     const replacementSession = await requestJson('POST', '/admin/viewer-session', {
       login: VIEWER_LOGIN,

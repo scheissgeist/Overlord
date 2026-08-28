@@ -121,6 +121,15 @@ namespace Overlord
         // Ticket earn tracking: game tick when this viewer last earned a ticket
         public int lastTicketEarnTick = -1;
 
+        // Saved viewer history. These belong to the authenticated viewer session,
+        // not the browser, so they survive refreshes, relay deploys, and save loads.
+        public int completedCommands;
+        public int completedPurchases;
+        public int assignments;
+        public int deaths;
+        public int reconnects;
+        public string lastPawnName;
+
         // Pending log entries to send next tick
         public readonly List<string> pendingLogEntries = new List<string>();
 
@@ -205,6 +214,25 @@ namespace Overlord
             ResetTacticalMapStream();
         }
 
+        public void RecordSuccessfulAction(string action)
+        {
+            if (action == StateProtocol.CmdToolkitPurchase)
+            {
+                completedPurchases++;
+                return;
+            }
+
+            // Transport, discovery, and claim operations are not pawn orders.
+            if (action == StateProtocol.CmdCameraZoom ||
+                action == StateProtocol.CmdToolkitRefresh ||
+                action == StateProtocol.CmdContextMenu ||
+                action == StateProtocol.CmdClaimColonist ||
+                action == StateProtocol.CmdPreviewAppearance)
+                return;
+
+            completedCommands++;
+        }
+
         public void ResetTacticalMapStream()
         {
             tacticalMapEpoch = 0;
@@ -243,6 +271,12 @@ namespace Overlord
             Scribe_Values.Look(ref cameraCenterZ, "cameraCenterZ", 0f);
             Scribe_Values.Look(ref freeAppearanceUsed, "freeAppearanceUsed", false);
             Scribe_Values.Look(ref preferredWeaponDef, "preferredWeaponDef");
+            Scribe_Values.Look(ref completedCommands, "completedCommands", 0);
+            Scribe_Values.Look(ref completedPurchases, "completedPurchases", 0);
+            Scribe_Values.Look(ref assignments, "assignments", 0);
+            Scribe_Values.Look(ref deaths, "deaths", 0);
+            Scribe_Values.Look(ref reconnects, "reconnects", 0);
+            Scribe_Values.Look(ref lastPawnName, "lastPawnName");
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit)
             {
@@ -255,6 +289,12 @@ namespace Overlord
                     cameraCenterX = 0f;
                     cameraCenterZ = 0f;
                 }
+                // Existing saves predate the counters but may already have an
+                // assigned pawn. Seed that known history without inventing more.
+                if (assignedPawn != null && assignments == 0)
+                    assignments = 1;
+                if (string.IsNullOrEmpty(lastPawnName) && assignedPawn != null)
+                    lastPawnName = assignedPawn.LabelShort;
             }
         }
     }

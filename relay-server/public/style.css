@@ -495,6 +495,7 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   .lobby-spectate,
   .lobby-note,
   .lobby-death,
+  .lobby-summary,
   .colonist-list
 ) { display: none !important; }
 
@@ -721,6 +722,24 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
   color: var(--text-secondary);
 }
 
+.lobby-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 32px 0;
+  padding: 9px 0;
+  max-width: 480px;
+  border-top: 1px solid rgba(232, 212, 168, 0.14);
+  border-bottom: 1px solid rgba(232, 212, 168, 0.14);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.lobby-summary strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 .colonist-list {
   flex: 1;
   display: flex;
@@ -910,7 +929,8 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
 
   .lobby-msg,
   .lobby-note,
-  .lobby-death {
+  .lobby-death,
+  .lobby-summary {
     margin-left: 16px;
     margin-right: 16px;
   }

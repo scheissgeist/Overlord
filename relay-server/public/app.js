@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260828-capability-contract-v1';
+const UI_BUILD = '20260828-viewer-history-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -58,6 +58,7 @@ let hostCapabilities = null;
 let relayCapabilities = null;
 let negotiatedMapTransport = null;
 let viewerPermissions = null;
+let viewerSummary = null;
 let toolkitState = null;
 let toolkitStateAt = 0; // when the current toolkitState arrived (staleness check)
 let colonyResources = null;
@@ -200,6 +201,7 @@ const lobbyClaimNote = $('lobby-claim-note');
 const lobbyDeathCard = $('lobby-death-card');
 const lobbyDeathName = $('lobby-death-name');
 const lobbyDeathCopy = $('lobby-death-copy');
+const lobbySummary = $('lobby-summary');
 const lobbyTickets = $('lobby-tickets');
 const lobbyCapabilities = $('lobby-capabilities');
 const colonistList = $('colonist-list');
@@ -1316,7 +1318,57 @@ function showLobbyState(options = {}) {
   if (lobbyDeathName) lobbyDeathName.textContent = deathName;
   if (lobbyDeathCopy) lobbyDeathCopy.textContent = deathCopy;
 
+  renderViewerSummary();
   syncCapabilityNotice();
+}
+
+function renderViewerSummary() {
+  if (!lobbySummary) return;
+  const s = viewerSummary;
+  const assignments = Math.max(0, Number(s?.assignments) || 0);
+  const deaths = Math.max(0, Number(s?.deaths) || 0);
+  const commands = Math.max(0, Number(s?.commands) || 0);
+  const purchases = Math.max(0, Number(s?.purchases) || 0);
+  const reconnects = Math.max(0, Number(s?.reconnects) || 0);
+  const visible = assignments + deaths + commands + purchases + reconnects > 0;
+  lobbySummary.classList.toggle('hidden', !visible);
+  if (!visible) {
+    lobbySummary.innerHTML = '';
+    return;
+  }
+  const items = [
+    [assignments, assignments === 1 ? 'assignment' : 'assignments'],
+    [commands, commands === 1 ? 'order' : 'orders'],
+    [purchases, purchases === 1 ? 'purchase' : 'purchases'],
+    [deaths, deaths === 1 ? 'death' : 'deaths'],
+    [reconnects, reconnects === 1 ? 'return' : 'returns'],
+  ].filter(([value]) => value > 0);
+  lobbySummary.innerHTML = items.map(([value, label]) =>
+    `<span><strong>${value}</strong> ${escapeHtml(label)}</span>`
+  ).join('');
+}
+
+function handleViewerSummary(message) {
+  const next = message?.viewerSummary || message?.summary || message;
+  if (!next || typeof next !== 'object') return;
+  viewerSummary = {
+    commands: Math.max(0, Number(next.commands) || 0),
+    purchases: Math.max(0, Number(next.purchases) || 0),
+    assignments: Math.max(0, Number(next.assignments) || 0),
+    deaths: Math.max(0, Number(next.deaths) || 0),
+    reconnects: Math.max(0, Number(next.reconnects) || 0),
+    tickets: Math.max(0, Number(next.tickets) || 0),
+    lastPawnName: String(next.lastPawnName || ''),
+    context: String(next.context || ''),
+  };
+  viewerTickets = viewerSummary.tickets;
+  renderViewerSummary();
+  renderCommandCenterFromState();
+  if (viewerSummary.context === 'restored') {
+    appendLog(`Welcome back — reconnected to ${viewerSummary.lastPawnName || 'your colonist'}.`);
+  } else if (viewerSummary.context === 'rejoined' && viewerSummary.assignments > 0) {
+    appendLog(`Welcome back — ${viewerSummary.commands} completed order${viewerSummary.commands === 1 ? '' : 's'} so far.`);
+  }
 }
 
 function normalizeViewer(value) {
@@ -1492,6 +1544,8 @@ function saveRelaySession(session) {
 function clearRelaySession() {
   try { localStorage.removeItem(RELAY_SESSION_KEY); } catch (_) {}
   try { sessionStorage.removeItem(RELAY_SESSION_KEY); } catch (_) {}
+  viewerSummary = null;
+  renderViewerSummary();
 }
 
 function saveTwitchAccessToken(token) {
@@ -2193,6 +2247,7 @@ function handleMessage(msg) {
     case 'command_status':    handleCommandStatus(msg);   break;
     case 'pawn_died':        handlePawnDied(msg);        break;
     case 'action_log':       handleActionLog(msg);       break;
+    case 'viewer_summary':   handleViewerSummary(msg);   break;
     case 'portal_available': handlePortalAvailable(msg); break;
     case 'ticket_update':    handleTicketUpdate(msg);    break;
     case 'game_info':        handleGameInfo(msg);        break;
@@ -4370,6 +4425,7 @@ function handleLiveMapClick(e) {
 
 // ─── Command result ───────────────────────────────────────────────────────────
 function handleCommandResult(msg) {
+  if (msg.viewerSummary) handleViewerSummary(msg.viewerSummary);
   if (msg.silent) return;
   const text = msg.message || (msg.ok ? 'Applied' : 'Failed');
   markCommandResult(msg.commandId, msg.action, msg.ok !== false, text);
@@ -4495,6 +4551,7 @@ function handlePermissions(msg) {
 // ─── Pawn died ────────────────────────────────────────────────────────────────
 function handlePawnDied(msg) {
   const name = msg.pawnName || 'Your colonist';
+  if (msg.summary) handleViewerSummary(msg.summary);
   playSound('death');
   appendLog(`${name} died.`);
   updateDrawerPreview(`${name} died`, 'Activity');
@@ -5491,7 +5548,8 @@ function renderConnectionPanel() {
     cls = 'wait';
   } else {
     const name = pawnState.name || 'your pawn';
-    summary = `Assigned to ${name} — orders ready`;
+    const completed = (Number(viewerSummary?.commands) || 0) + (Number(viewerSummary?.purchases) || 0);
+    summary = `Assigned to ${name} — orders ready${completed > 0 ? ` · ${completed} completed` : ''}`;
     cls = 'ok';
   }
 

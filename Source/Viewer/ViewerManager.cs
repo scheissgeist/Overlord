@@ -107,6 +107,32 @@ namespace Overlord
             return session;
         }
 
+        public Dictionary<string, object> BuildViewerSummary(string username, string context = null)
+        {
+            var session = GetSession(username);
+            if (session == null) return null;
+            var summary = new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.ViewerSummary,
+                ["commands"] = session.completedCommands,
+                ["purchases"] = session.completedPurchases,
+                ["assignments"] = session.assignments,
+                ["deaths"] = session.deaths,
+                ["reconnects"] = session.reconnects,
+                ["tickets"] = session.tickets,
+                ["lastPawnName"] = session.lastPawnName ?? ""
+            };
+            if (!string.IsNullOrEmpty(context)) summary["context"] = context;
+            return summary;
+        }
+
+        public void SendViewerSummary(string username, string context = null)
+        {
+            var summary = BuildViewerSummary(username, context);
+            if (summary != null)
+                OverlordGameComponent.Instance?.SendToViewerPublic(username, summary);
+        }
+
         public ViewerSession GetSessionForPawn(Pawn pawn)
         {
             if (pawn == null) return null;
@@ -338,6 +364,7 @@ namespace Overlord
             }
 
             session.assignedPawn = pawn;
+            session.assignments++;
             session.lastStateHash = 0; // Force full state send
             session.ResetTacticalMapStream();
             // A viewer is about to control this pawn — clear any equipment-tracker
@@ -360,6 +387,7 @@ namespace Overlord
                 session.originalPawnNickname = nameTriple.Nick;
                 pawn.Name = new NameTriple(nameTriple.First, session.displayName ?? username, nameTriple.Last);
             }
+            session.lastPawnName = pawn.LabelShort ?? session.lastPawnName;
 
             LogUtil.Log($"Assigned {pawn.LabelShort} to viewer {username}");
             ActionLog.Append(ActionLogKind.Assignment, username, "assign", $"Assigned to {pawn.LabelShort}", pawn.thingIDNumber);
@@ -368,6 +396,7 @@ namespace Overlord
 
             SendTacticalMapSnapshot(username);
             SendResourceReadout(username, force: true);
+            SendViewerSummary(username, "assigned");
 
             return true;
         }
@@ -748,6 +777,8 @@ namespace Overlord
             if (session == null) return;
 
             lastOwnerByPawnId[pawn.thingIDNumber] = session.username;
+            session.deaths++;
+            session.lastPawnName = pawn.LabelShort ?? session.lastPawnName;
             pawnToViewer.Remove(pawn.thingIDNumber);
             session.assignedPawn = null;
             session.lastStateHash = 0;
@@ -761,7 +792,8 @@ namespace Overlord
                 ["username"] = session.username,
                 ["displayName"] = session.displayName ?? session.username,
                 ["pawnName"] = pawn.LabelShort ?? "unknown",
-                ["ticketsRemaining"] = session.tickets
+                ["ticketsRemaining"] = session.tickets,
+                ["summary"] = BuildViewerSummary(session.username, "death")
             };
 
             var comp = OverlordGameComponent.Instance;

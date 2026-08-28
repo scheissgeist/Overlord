@@ -53,6 +53,7 @@ namespace Overlord
         public const string ArmoryState = "armory_state";
         public const string ItemIcons = "item_icons";
         public const string RosterState = "roster_state";
+        public const string ViewerSummary = "viewer_summary";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";
