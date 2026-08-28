@@ -69,6 +69,8 @@ Environment variables (set in your shell, Docker, or host platform — never com
 | `TWITCH_CLIENT_ID` | Yes for Twitch login | From your Twitch app |
 | `PORT` | No | Default `8080` |
 | `MAX_VIEWERS` | No | Default `50` |
+| `ROOMS_FILE` | Recommended for hosted relays | Persistent private path for room IDs and host keys |
+| `SESSIONS_FILE` | Recommended for hosted relays | Persistent private path for viewer identity sessions; Twitch tokens are never stored |
 
 ### Local
 
@@ -101,7 +103,12 @@ Use the `relay-server/Dockerfile`. Pass the same env vars at runtime. Map the co
    flyctl secrets set HOST_SECRET=YOUR-LONG-RANDOM-SECRET TWITCH_CLIENT_ID=YOUR-TWITCH-CLIENT-ID -a YOUR-APP-NAME
    ```
 
-4. Copy `fly.toml.example` → `fly.toml`, set `app = 'YOUR-APP-NAME'`, then deploy from `relay-server/`:
+4. Create and mount a small private volume so room links and viewer sessions survive deploys. Set
+   `ROOMS_FILE` and `SESSIONS_FILE` to paths inside that mount. For example, mount a volume at
+   `/data`, then use `/data/rooms.json` and `/data/sessions.json`. Do not put either file on a
+   public filesystem.
+
+5. Copy `fly.toml.example` → `fly.toml`, set `app = 'YOUR-APP-NAME'`, then deploy from `relay-server/`:
 
    ```bash
    flyctl deploy --app YOUR-APP-NAME
@@ -109,9 +116,10 @@ Use the `relay-server/Dockerfile`. Pass the same env vars at runtime. Map the co
 
    Keep your real `fly.toml` and secrets out of git.
 
-5. Check `https://YOUR-APP-NAME.fly.dev/health`.
+6. Check `https://YOUR-APP-NAME.fly.dev/health`. With session persistence configured, it reports
+   `"sessionPersistence": true`.
 
-One relay instance accepts **one** RimWorld host at a time. A second host with the same secret replaces the first.
+One relay instance can host multiple isolated rooms. A second connection using the same room credential replaces only that room's previous host connection.
 
 ---
 

@@ -55,6 +55,13 @@ const MAX_TOTAL_VIEWERS = Math.max(
   parseInt(process.env.MAX_TOTAL_VIEWERS || String(MAX_VIEWERS * 2), 10)
 );
 const ROOMS_FILE = process.env.ROOMS_FILE || path.join(LOG_DIR_FALLBACK(), 'rooms.json');
+// Viewer session tokens are bearer credentials. Keep only identity + expiry on the
+// relay's private data volume; never persist replay payloads, commands, frames, or
+// one-shot events. Those remain host-authored, in-memory transport repair state.
+// Opt in with SESSIONS_FILE. The official deployment points this at its private
+// persistent volume; ordinary local runs keep the previous memory-only behavior.
+const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
+const MAX_PERSISTED_SESSIONS = Math.max(100, parseInt(process.env.MAX_PERSISTED_SESSIONS || '10000', 10));
 const LOG_TRAFFIC      = process.env.LOG_TRAFFIC !== '0';
 function LOG_DIR_FALLBACK() {
   return process.env.LOG_DIR || path.join(__dirname, 'logs');
@@ -293,6 +300,8 @@ let backpressureStats = newBackpressureStats();
 
 /** @type {Map<string, {login: string, displayName: string, exp: number}>} sessionToken → identity */
 const sessions = new Map();
+let sessionPersistTimer = null;
+restoreSessions();
 
 const REPLAYABLE_TARGETED_TYPES = new Set([
   'host_capabilities',
@@ -841,6 +850,7 @@ app.get('/health', (_req, res) => {
     clientBuild: CLIENT_BUILD,
     viewers: totalViewers(),
     sessions: sessions.size,
+    sessionPersistence: !!SESSIONS_FILE,
     sessionTtlSeconds: Math.round(SESSION_TTL_MS / 1000),
     sessionSlideSeconds: Math.round(SESSION_SLIDE_MS / 1000),
     replayCacheViewers: totalReplayCacheViewers(),
@@ -1011,6 +1021,7 @@ function touchSession(token, s, now = Date.now()) {
   const nextExp = now + SESSION_SLIDE_MS;
   if (!s.exp || nextExp > s.exp) {
     s.exp = Math.min(nextExp, now + SESSION_TTL_MS);
+    schedulePersistSessions();
   }
   return s;
 }
@@ -1022,6 +1033,7 @@ function resolveSession(token) {
   const now = Date.now();
   if (now > s.exp) {
     sessions.delete(token);
+    schedulePersistSessions();
     if (!hasActiveSessionForLogin(s.login, now)) {
       clearViewerReplayCache(s.login, 'session_expired');
     }
@@ -1047,6 +1059,9 @@ function createViewerSession(login, displayName, ttlMs) {
     exp,
   };
   sessions.set(sessionToken, identity);
+  // A successful login must survive an immediate relay restart. Write now rather
+  // than waiting for the debounce used by sliding-expiry touches.
+  persistSessions();
   return {
     sessionToken,
     login: identity.login,
@@ -1120,6 +1135,10 @@ wss.on('connection', (ws, req) => {
     room.hostSocket = ws;
     room.hostConnectedAt = Date.now();
     room.lastActiveAt = Date.now();
+    // Registration itself deliberately does not persist abandoned rooms. The first
+    // real host connection is the point where this room and its shared URL become
+    // durable across restarts.
+    persistRooms();
     clearRoomReplayCache(room, 'host_connected');
     console.log(`[relay] Host connected: room ${room.roomId}`);
     recordOps('host_connected', { room: room.roomId });
@@ -1195,6 +1214,7 @@ wss.on('connection', (ws, req) => {
       if (room.hostSocket === ws) {
         room.hostSocket = null;
         room.lastActiveAt = Date.now();
+        persistRooms();
         for (const login of Array.from(room.contextMenuRequests.keys())) clearContextMenuRequest(room, login);
         console.log(`[relay] Host disconnected: room ${room.roomId}`);
         recordOps('host_disconnected', { room: room.roomId });
@@ -1351,7 +1371,7 @@ wss.on('connection', (ws, req) => {
         msg.source = 'viewer';
         msg.adminCommand = false;
         recordOps('viewer_message', summarizeMessage(msg, Buffer.byteLength(JSON.stringify(msg))));
-        if (msg.type === 'state_resync_request' && replayCachedState(login, msg)) {
+        if (msg.type === 'state_resync_request' && replayCachedState(room, login, msg)) {
           return;
         }
         if (msg.type === 'map_transport') {
@@ -1580,9 +1600,11 @@ function reapIdleRooms() {
 setInterval(reapIdleRooms, 60 * 1000);
 
 // -- Room registry persistence --------------------------------------------
-// Best effort only. A relay restart on a machine with no volume loses this, and
-// that is survivable: the mod re-registers automatically when its key is refused,
-// so a streamer sees a reconnect rather than a dead end.
+// Best effort on arbitrary self-hosts. The official Fly deployment mounts the data
+// directory, so a room that has hosted keeps both its key and public /g/<id> link.
+// Without persistent storage the relay fails visibly: the stored key is rejected.
+// Do not claim the mod auto-registers here; reconnect currently preserves identity
+// only when this registry survives.
 function persistRooms() {
   try {
     const out = [];
@@ -1633,6 +1655,71 @@ function restoreRooms() {
   }
 }
 restoreRooms();
+
+// -- Viewer identity persistence -----------------------------------------
+// Store no Twitch access token: /auth/twitch validates it and then discards it.
+// This file contains only Overlord's random session token, normalized identity,
+// display name, and expiry. Replay caches intentionally stay in memory.
+function persistSessions() {
+  if (!SESSIONS_FILE) return;
+  try {
+    const now = Date.now();
+    const out = [];
+    for (const [token, identity] of sessions) {
+      if (!identity || now > Number(identity.exp)) continue;
+      out.push({
+        token,
+        login: identity.login,
+        displayName: identity.displayName,
+        exp: Number(identity.exp),
+      });
+      if (out.length >= MAX_PERSISTED_SESSIONS) break;
+    }
+    fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true });
+    const tempFile = `${SESSIONS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(out), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tempFile, SESSIONS_FILE);
+    try { fs.chmodSync(SESSIONS_FILE, 0o600); } catch (_) {}
+  } catch (e) {
+    console.warn('[relay] Could not persist viewer sessions:', e.message);
+  }
+}
+
+function schedulePersistSessions() {
+  if (!SESSIONS_FILE) return;
+  if (sessionPersistTimer) return;
+  sessionPersistTimer = setTimeout(() => {
+    sessionPersistTimer = null;
+    persistSessions();
+  }, 250);
+  if (sessionPersistTimer.unref) sessionPersistTimer.unref();
+}
+
+function restoreSessions() {
+  if (!SESSIONS_FILE) return;
+  try {
+    if (!fs.existsSync(SESSIONS_FILE)) return;
+    const saved = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+    if (!Array.isArray(saved)) return;
+    const now = Date.now();
+    let restored = 0;
+    for (const entry of saved) {
+      if (restored >= MAX_PERSISTED_SESSIONS) break;
+      const token = String(entry?.token || '');
+      const login = String(entry?.login || '').toLowerCase();
+      const displayName = String(entry?.displayName || login).slice(0, 32) || login;
+      const exp = Number(entry?.exp);
+      if (!/^[a-f0-9]{48}$/.test(token)) continue;
+      if (!/^[a-z0-9_][a-z0-9_-]{0,31}$/.test(login)) continue;
+      if (!Number.isFinite(exp) || exp <= now || exp > now + SESSION_TTL_MS) continue;
+      sessions.set(token, { login, displayName, exp });
+      restored++;
+    }
+    if (restored) console.log(`[relay] Restored ${restored} viewer session(s) from ${SESSIONS_FILE}`);
+  } catch (e) {
+    console.warn('[relay] Could not restore viewer sessions:', e.message);
+  }
+}
 
 // -- Public room directory -------------------------------------------------
 app.get('/api/rooms', (_req, res) => {
@@ -1915,14 +2002,17 @@ function broadcastToAdmins(msg) {
 // Prune expired sessions every 30 minutes
 setInterval(() => {
   const now = Date.now();
+  let changed = false;
   for (const [k, s] of sessions) {
     if (now > s.exp) {
       sessions.delete(k);
+      changed = true;
       if (!hasActiveSessionForLogin(s.login, now)) {
         clearViewerReplayCacheEverywhere(s.login, 'session_expired');
       }
     }
   }
+  if (changed) persistSessions();
 }, 30 * 60 * 1000);
 
 // ─── Start ────────────────────────────────────────────────────────────────────

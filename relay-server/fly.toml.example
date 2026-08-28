@@ -6,6 +6,15 @@ primary_region = 'sjc'
 
 [build]
 
+[env]
+  LOG_DIR = '/data/logs'
+  ROOMS_FILE = '/data/rooms.json'
+  SESSIONS_FILE = '/data/sessions.json'
+
+[[mounts]]
+  source = 'overlord_data'
+  destination = '/data'
+
 [http_service]
   internal_port = 8080
   force_https = true

@@ -13,7 +13,8 @@
     "release:fly": "node scripts/release-gate.js --deploy",
     "smoke:intake": "node scripts/smoke-viewer-intake.js",
     "smoke:tilemap": "node scripts/smoke-tilemap.js",
-    "smoke:relay-cache": "node scripts/smoke-relay-cache.js"
+    "smoke:relay-cache": "node scripts/smoke-relay-cache.js",
+    "smoke:restart": "node scripts/smoke-relay-restart.js"
   },
   "dependencies": {
     "express": "^4.18.2",
