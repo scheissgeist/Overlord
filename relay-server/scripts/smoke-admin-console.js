@@ -131,7 +131,10 @@ async function main() {
 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(`${BASE_URL}/admin`, { waitUntil: 'domcontentloaded' });
+    const adminResponse = await page.goto(`${BASE_URL}/admin`, { waitUntil: 'domcontentloaded' });
+    if (!/(?:^|,)\s*no-store(?:,|$)/i.test(adminResponse?.headers()['cache-control'] || '')) {
+      throw new Error(`Admin console cache policy is not no-store: ${adminResponse?.headers()['cache-control'] || 'missing'}`);
+    }
     await page.fill('#secret-input', HOST_SECRET);
     await page.click('#btn-auth');
     await page.waitForSelector('#dashboard:not([style*="display:none"])');
@@ -201,6 +204,7 @@ async function main() {
         crossRoomAdminEventsIsolated: true,
         hostDisconnectVisible: true,
         narrowCriticalControlsVisible: true,
+        adminConsoleNoStore: true,
       },
       layout,
       screenshot,

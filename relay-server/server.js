@@ -2122,6 +2122,7 @@ app.post('/admin/host-command', adminAuth, (req, res) => {
 
 // Serve admin page
 app.get('/admin', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
