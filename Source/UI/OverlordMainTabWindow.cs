@@ -890,7 +890,10 @@ namespace Overlord
                 if (BrassButton(new Rect(0f,        y, advW, 28f), "Grant Ticket"))
                     vm.GrantTicket(session.username);
                 if (BrassButton(new Rect(advW + 8f, y, advW, 28f), "Reset Permissions"))
+                {
                     session.permissions.ApplyDefaults();
+                    vm.SendPermissions(session.username);
+                }
                 y += 34f;
             }
         }
@@ -976,10 +979,20 @@ namespace Overlord
             GUI.color = Color.white;
 
             float y = 72f;
-            Widgets.Label(new Rect(0f, y, rect.width, 22f), "Default permissions");
+            Widgets.Label(new Rect(0f, y, rect.width, 22f), "Defaults for new viewers");
             y += 26f;
 
-            DrawPermissionGrid(rect.width, y, new ViewerPermissions(), out _);
+            var defaults = new ViewerPermissions();
+            y = DrawPermissionGrid(rect.width, y, defaults, out bool defaultsChanged);
+            if (defaultsChanged)
+            {
+                defaults.SaveAsDefaults();
+                OverlordMod.Settings.Write();
+            }
+
+            GUI.color = MutedColor;
+            Widgets.Label(new Rect(0f, y + 6f, rect.width, 44f), "Used when a viewer first joins and when you reset a viewer's permissions. Current viewer overrides stay unchanged.");
+            GUI.color = Color.white;
         }
 
         private float DrawPermissionGrid(float width, float y, ViewerPermissions permissions, out bool changed)

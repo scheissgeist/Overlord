@@ -42,6 +42,28 @@ namespace Overlord
             appearance = s.allowAppearance;
         }
 
+        /// <summary>
+        /// Persist this permission set as the template for future viewer sessions.
+        /// Existing sessions keep their explicit overrides until the host chooses
+        /// Reset Permissions for that viewer.
+        /// </summary>
+        public void SaveAsDefaults()
+        {
+            var s = OverlordMod.Settings;
+            if (s == null) return;
+            s.allowDraft = draft;
+            s.allowMove = move;
+            s.allowAttack = attack;
+            s.allowWork = work;
+            s.allowSchedule = schedule;
+            s.allowOutfit = outfit;
+            s.allowDrugPolicy = drugPolicy;
+            s.allowFoodPolicy = foodPolicy;
+            s.allowArea = area;
+            s.allowEquip = equip;
+            s.allowAppearance = appearance;
+        }
+
         public bool IsAllowed(string action)
         {
             switch (action)
