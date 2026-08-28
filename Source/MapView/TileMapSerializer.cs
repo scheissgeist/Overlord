@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using Verse;
 using RimWorld;
+using UnityEngine;
 
 namespace Overlord
 {
@@ -122,6 +123,192 @@ namespace Overlord
                 ["fog"] = Convert.ToBase64String(fog),
                 ["visibilityFilteredMap"] = true,
             };
+        }
+
+        /// <summary>
+        /// Def-driven visual dictionary for the browser data renderer. The manifest
+        /// carries no positions and is built only from the already fog-filtered entity
+        /// payload. Unknown/modded defs remain present with neutral fallbacks.
+        /// </summary>
+        public static Dictionary<string, object> SerializeVisualManifest(
+            Map map,
+            Dictionary<string, object> delta,
+            ISet<string> knownThingDefs,
+            bool replace)
+        {
+            if (map == null) return null;
+
+            var terrainVisuals = new Dictionary<string, object>();
+            if (replace)
+            {
+                var representatives = BuildTerrainRepresentatives(map);
+                foreach (var pair in representatives.OrderBy(p => p.Key))
+                {
+                    TerrainDef def = pair.Value;
+                    if (def == null) continue;
+                    var aliases = DefDatabase<TerrainDef>.AllDefsListForReading
+                        .Where(candidate => candidate != null && GetTerrainByte(candidate) == pair.Key)
+                        .OrderBy(candidate => candidate.defName)
+                        .Take(24)
+                        .Select(candidate => (object)(candidate.defName ?? ""))
+                        .ToList();
+                    terrainVisuals[pair.Key.ToString(CultureInfo.InvariantCulture)] = new Dictionary<string, object>
+                    {
+                        ["defName"] = def.defName ?? "",
+                        ["label"] = def.label ?? def.defName ?? "terrain",
+                        ["color"] = ColorHex(def.color),
+                        ["texturePath"] = def.texturePath ?? "",
+                        ["defs"] = aliases,
+                        ["source"] = "rimworld_def"
+                    };
+                }
+            }
+
+            var thingVisuals = new Dictionary<string, object>();
+            if (delta != null && delta.TryGetValue("entities", out object entityValue) && entityValue is IEnumerable entities)
+            {
+                foreach (object value in entities)
+                {
+                    if (!(value is Dictionary<string, object> entity)) continue;
+                    string defName = ReadString(entity, "defName");
+                    if (string.IsNullOrEmpty(defName)) continue;
+                    if (knownThingDefs != null && knownThingDefs.Contains(defName)) continue;
+                    knownThingDefs?.Add(defName);
+
+                    string kind = ReadString(entity, "kind") ?? "thing";
+                    string role = ReadString(entity, "role") ?? "";
+                    int faction = ReadInt(entity, "faction");
+                    ThingDef def = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+                    string glyph = VisualGlyph(def, kind, role, faction);
+                    int priority = VisualIconPriority(def, kind, role);
+                    var visual = new Dictionary<string, object>
+                    {
+                        ["defName"] = defName,
+                        ["label"] = def?.label ?? ReadString(entity, "label") ?? defName,
+                        ["kind"] = kind,
+                        ["role"] = role,
+                        ["glyph"] = glyph,
+                        ["iconKey"] = def != null ? defName : "",
+                        ["iconPriority"] = priority,
+                        ["source"] = def != null ? "rimworld_def" : "entity_fallback"
+                    };
+                    if (def != null)
+                    {
+                        Color color = def.graphicData != null ? def.graphicData.color : def.uiIconColor;
+                        visual["color"] = ColorHex(color);
+                        visual["texturePath"] = !string.IsNullOrEmpty(def.uiIconPath)
+                            ? def.uiIconPath
+                            : def.graphicData?.texPath ?? "";
+                        visual["isWeapon"] = def.IsWeapon;
+                        visual["isApparel"] = def.IsApparel;
+                        visual["isMedicine"] = def.IsMedicine;
+                        visual["isIngestible"] = def.IsNutritionGivingIngestible;
+                    }
+                    thingVisuals[defName] = visual;
+                }
+            }
+
+            if (!replace && thingVisuals.Count == 0) return null;
+            return new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.MapManifest,
+                ["visualVersion"] = 2,
+                ["replace"] = replace,
+                ["width"] = map.Size.x,
+                ["height"] = map.Size.z,
+                ["chunkSize"] = DefaultChunkSize,
+                ["terrainPalette"] = terrainVisuals,
+                ["thingPalette"] = thingVisuals,
+                ["source"] = "rimworld_defs"
+            };
+        }
+
+        private static Dictionary<byte, TerrainDef> BuildTerrainRepresentatives(Map map)
+        {
+            var representatives = new Dictionary<byte, TerrainDef>();
+            var counts = new Dictionary<byte, Dictionary<TerrainDef, int>>();
+            if (map?.terrainGrid != null)
+            {
+                for (int z = 0; z < map.Size.z; z++)
+                {
+                    for (int x = 0; x < map.Size.x; x++)
+                    {
+                        var cell = new IntVec3(x, 0, z);
+                        if (!RimWorldCompat.IsTacticalMapCellVisible(map, cell, null)) continue;
+                        TerrainDef def = map.terrainGrid.TerrainAt(cell);
+                        byte key = GetTerrainByte(def);
+                        if (key == 0 || def == null) continue;
+                        if (!counts.TryGetValue(key, out var defs))
+                        {
+                            defs = new Dictionary<TerrainDef, int>();
+                            counts[key] = defs;
+                        }
+                        defs.TryGetValue(def, out int count);
+                        defs[def] = count + 1;
+                    }
+                }
+            }
+
+            foreach (TerrainDef def in DefDatabase<TerrainDef>.AllDefsListForReading.OrderBy(d => d.defName))
+            {
+                if (def == null) continue;
+                byte key = GetTerrainByte(def);
+                if (key != 0 && !representatives.ContainsKey(key)) representatives[key] = def;
+            }
+            foreach (var pair in counts)
+            {
+                TerrainDef mostCommon = pair.Value.OrderByDescending(entry => entry.Value).Select(entry => entry.Key).FirstOrDefault();
+                if (mostCommon != null) representatives[pair.Key] = mostCommon;
+            }
+            return representatives;
+        }
+
+        private static string VisualGlyph(ThingDef def, string kind, string role, int faction)
+        {
+            if (faction == 2) return "!";
+            if (role == "door") return "D";
+            if (role == "bed") return "B";
+            if (role == "workbench") return "W";
+            if (kind == "fire") return "*";
+            if (kind == "plant") return "P";
+            if (kind == "construction") return "C";
+            if (kind == "animal") return "A";
+            if (def != null)
+            {
+                if (def.IsWeapon) return "W";
+                if (def.IsApparel) return "A";
+                if (def.IsMedicine) return "+";
+                if (def.IsNutritionGivingIngestible) return "F";
+            }
+            return kind == "item" ? "I" : "";
+        }
+
+        private static int VisualIconPriority(ThingDef def, string kind, string role)
+        {
+            if (role == "door" || role == "bed" || role == "workbench") return 3;
+            if (def != null && (def.IsWeapon || def.IsApparel || def.IsMedicine)) return 3;
+            if (kind == "building" || kind == "item" || kind == "plant" || kind == "construction") return 2;
+            return 0;
+        }
+
+        private static string ReadString(Dictionary<string, object> values, string key)
+        {
+            return values != null && values.TryGetValue(key, out object value) ? value?.ToString() : null;
+        }
+
+        private static int ReadInt(Dictionary<string, object> values, string key)
+        {
+            if (values == null || !values.TryGetValue(key, out object value) || value == null) return 0;
+            try { return Convert.ToInt32(value, CultureInfo.InvariantCulture); }
+            catch { return 0; }
+        }
+
+        private static string ColorHex(Color color)
+        {
+            int r = (int)Math.Round(Mathf.Clamp01(color.r) * 255f);
+            int g = (int)Math.Round(Mathf.Clamp01(color.g) * 255f);
+            int b = (int)Math.Round(Mathf.Clamp01(color.b) * 255f);
+            return string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", r, g, b);
         }
 
         public static Dictionary<string, int> BuildChunkHashSnapshot(Map map, int chunkSize = DefaultChunkSize)

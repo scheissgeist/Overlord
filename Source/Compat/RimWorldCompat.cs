@@ -187,6 +187,7 @@ namespace Overlord
                 ["tacticalMapEntityVisibility"] = "fog",
                 ["visibilityFilteredEntities"] = true,
                 ["visibilityFilteredMap"] = true,
+                ["visualManifest"] = 2,
                 ["resourceReadout"] = OverlordMod.Settings?.allowViewerResourceReadout == true,
                 ["toolkitBridge"] = TwitchToolkitBridge.IsBridgeAvailable,
                 ["storyPurchaseArguments"] = true,

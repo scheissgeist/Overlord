@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260827-command-lifecycle-v1';
+const UI_BUILD = '20260827-map-manifest-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -2012,7 +2012,7 @@ function requestMapResync(reason, msg = {}) {
     reason,
     mapEpoch: mapStreamEpoch,
     lastSeq: mapStreamSeq || 0,
-    wanted: ['map_full', 'map_chunk', 'map_chunks', 'map_delta', 'entity_keyframe', 'entity_delta', 'pawn_state']
+    wanted: ['map_manifest', 'map_full', 'map_chunk', 'map_chunks', 'map_delta', 'entity_keyframe', 'entity_delta', 'pawn_state']
   });
 
   if (!relaySupportsCacheResync()) {
@@ -2146,6 +2146,7 @@ function handleMessage(msg) {
       beginHostResync('The colony is live. Finding your colonist…', forceHostResync);
       break;
     case 'context_menu':     handleContextMenu(msg);     break;
+    case 'map_manifest':     handleMapManifest(msg);     break;
     case 'map_full':         handleMapFull(msg);         break;
     case 'map_delta':        handleMapDelta(msg);        break;
     case 'map_chunk':        handleMapChunk(msg);        break;
@@ -2623,6 +2624,7 @@ function handleItemIcons(msg) {
     any = true;
   }
   if (any) {
+    if (tileMap && typeof tileMap.setIcons === 'function') tileMap.setIcons(icons);
     // Icons arrived — force affected panels to repaint with real thumbnails.
     invalidatePanel('gear');
     if (activeCommandMenu === 'buy') renderCommandCenter();
@@ -4496,6 +4498,18 @@ function appendLog(text) {
 }
 
 // ─── Tile map handlers ────────────────────────────────────────────────────────
+function handleMapManifest(msg) {
+  if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') return;
+  if (!tileMap) initTileMap();
+  if (!tileMap || typeof tileMap.setManifest !== 'function' || !tileMap.setManifest(msg)) return;
+
+  const entries = Object.values(msg.thingPalette || {})
+    .filter(visual => visual && visual.iconKey && Number(visual.iconPriority) > 0)
+    .sort((a, b) => Number(b.iconPriority) - Number(a.iconPriority))
+    .slice(0, 48);
+  for (const visual of entries) ensureItemIcon(String(visual.iconKey));
+}
+
 function handleMapFull(msg) {
   if (FORCE_JPEG_RENDERER || negotiatedMapTransport === 'jpeg') {
     hasTileData = false;

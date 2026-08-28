@@ -192,6 +192,18 @@ async function main() {
         },
       },
       {
+        type: 'map_manifest',
+        target: VIEWER_LOGIN,
+        protocol: 'vdr/0',
+        mapEpoch: 7,
+        manifestSeq: 1,
+        visualVersion: 2,
+        replace: true,
+        source: 'rimworld_defs',
+        terrainPalette: { 1: { defName: 'Soil', color: '#715a39', source: 'rimworld_def' } },
+        thingPalette: { Door: { defName: 'Door', glyph: 'D', color: '#8a6f35', source: 'rimworld_def' } },
+      },
+      {
         type: 'map_full',
         target: VIEWER_LOGIN,
         protocol: 'vdr/0',
@@ -231,15 +243,28 @@ async function main() {
 
     const initialViewerCursor = viewerMessages.length;
     for (const msg of targetedMessages) send(hostWs, msg);
+    send(hostWs, {
+      type: 'map_manifest',
+      target: VIEWER_LOGIN,
+      protocol: 'vdr/0',
+      mapEpoch: 7,
+      manifestSeq: 2,
+      visualVersion: 2,
+      replace: false,
+      source: 'rimworld_defs',
+      terrainPalette: {},
+      thingPalette: { Gun_Rifle: { defName: 'Gun_Rifle', glyph: 'W', color: '#e8edf5', source: 'rimworld_def' } },
+    });
 
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'permissions', 'viewer permissions delivery', msg => msg.move === true);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'pawn_state', 'viewer pawn_state delivery', msg => msg.state?.id === PAWN_ID);
+    await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_manifest', 'viewer map_manifest delivery', msg => msg.mapEpoch === 7 && msg.visualVersion === 2);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_full', 'viewer map_full delivery', msg => msg.mapEpoch === 7 && msg.seq === 10);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_delta', 'viewer map_delta delivery', msg => msg.mapEpoch === 7 && msg.seq === 11);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'entity_keyframe', 'viewer entity_keyframe delivery', msg => msg.mapEpoch === 7 && msg.entityCount === 1);
 
     const diagnostics = await readReplayCacheDiagnostics();
-    const expectedCachedTypes = ['permissions', 'pawn_state', 'map_full', 'map_delta', 'entity_keyframe'];
+    const expectedCachedTypes = ['permissions', 'pawn_state', 'map_manifest', 'map_full', 'map_delta', 'entity_keyframe'];
     if (!cacheDiagnosticsIncludeTypes(diagnostics.body, VIEWER_LOGIN, expectedCachedTypes)) {
       throw new Error(
         `Replay cache diagnostics at ${diagnostics.path} did not include viewer ${VIEWER_LOGIN} and cached types ${expectedCachedTypes.join(', ')}: ${JSON.stringify(diagnostics.body)}`
@@ -254,7 +279,7 @@ async function main() {
     });
     await waitForMessageAfter(viewerMessages, disableCursor, 'host_capabilities', 'viewer host_capabilities tacticalMap false delivery', msg => msg.tacticalMap === false);
     const disabledDiagnostics = await readReplayCacheDiagnostics();
-    if (cacheDiagnosticsIncludeAnyType(disabledDiagnostics.body, VIEWER_LOGIN, ['map_full', 'map_delta', 'entity_keyframe', 'entity_delta'])) {
+    if (cacheDiagnosticsIncludeAnyType(disabledDiagnostics.body, VIEWER_LOGIN, ['map_manifest', 'map_full', 'map_delta', 'entity_keyframe', 'entity_delta'])) {
       throw new Error(`Replay cache still included map state after tacticalMap=false: ${JSON.stringify(disabledDiagnostics.body)}`);
     }
 
@@ -262,11 +287,19 @@ async function main() {
     send(hostWs, targetedMessages[2]);
     send(hostWs, targetedMessages[3]);
     send(hostWs, targetedMessages[4]);
+    send(hostWs, targetedMessages[5]);
+    send(hostWs, {
+      type: 'map_manifest', target: VIEWER_LOGIN, protocol: 'vdr/0', mapEpoch: 7,
+      manifestSeq: 2, visualVersion: 2, replace: false, source: 'rimworld_defs',
+      terrainPalette: {},
+      thingPalette: { Gun_Rifle: { defName: 'Gun_Rifle', glyph: 'W', color: '#e8edf5', source: 'rimworld_def' } },
+    });
+    await waitForMessageAfter(viewerMessages, recacheViewerCursor, 'map_manifest', 'viewer map_manifest recache delivery', msg => msg.mapEpoch === 7);
     await waitForMessageAfter(viewerMessages, recacheViewerCursor, 'map_full', 'viewer map_full recache delivery', msg => msg.mapEpoch === 7 && msg.seq === 10);
     await waitForMessageAfter(viewerMessages, recacheViewerCursor, 'map_delta', 'viewer map_delta recache delivery', msg => msg.mapEpoch === 7 && msg.seq === 11);
     await waitForMessageAfter(viewerMessages, recacheViewerCursor, 'entity_keyframe', 'viewer entity_keyframe recache delivery', msg => msg.mapEpoch === 7 && msg.entityCount === 1);
     const recachedDiagnostics = await readReplayCacheDiagnostics();
-    if (!cacheDiagnosticsIncludeTypes(recachedDiagnostics.body, VIEWER_LOGIN, ['map_full', 'map_delta', 'entity_keyframe'])) {
+    if (!cacheDiagnosticsIncludeTypes(recachedDiagnostics.body, VIEWER_LOGIN, ['map_manifest', 'map_full', 'map_delta', 'entity_keyframe'])) {
       throw new Error(`Replay cache did not restore map/entity state after fresh state: ${JSON.stringify(recachedDiagnostics.body)}`);
     }
 
@@ -275,12 +308,20 @@ async function main() {
     send(viewerWs, {
       type: 'state_resync_request',
       reason: 'smoke_replay_cache',
-      wanted: ['map_full', 'map_delta', 'entity_keyframe'],
+      wanted: ['map_manifest', 'map_full', 'map_delta', 'entity_keyframe'],
     });
 
+    const replayedManifest = await waitForMessageAfter(viewerMessages, replayCursor, 'map_manifest', 'cached map_manifest replay', msg => msg.mapEpoch === 7 && msg.relayCached === true);
+    if (replayedManifest.replace !== true || !replayedManifest.thingPalette?.Door || !replayedManifest.thingPalette?.Gun_Rifle) {
+      throw new Error(`Cached map_manifest did not merge incremental visual defs: ${JSON.stringify(replayedManifest)}`);
+    }
     await waitForMessageAfter(viewerMessages, replayCursor, 'map_full', 'cached map_full replay', msg => msg.mapEpoch === 7 && msg.seq === 10 && msg.relayCached === true);
     await waitForMessageAfter(viewerMessages, replayCursor, 'map_delta', 'cached map_delta replay', msg => msg.mapEpoch === 7 && msg.seq === 11 && msg.relayCached === true);
     await waitForMessageAfter(viewerMessages, replayCursor, 'entity_keyframe', 'cached entity_keyframe replay', msg => msg.mapEpoch === 7 && msg.entityCount === 1 && msg.relayCached === true);
+    const replayTypes = viewerMessages.slice(replayCursor).map(msg => msg.type);
+    if (replayTypes.indexOf('map_manifest') > replayTypes.indexOf('map_full')) {
+      throw new Error(`Cached map_manifest replayed after map_full: ${JSON.stringify(replayTypes)}`);
+    }
     await wait(300);
     const forwarded = findMessageAfter(hostMessages, hostCursor, 'state_resync_request');
     if (forwarded) {
@@ -296,6 +337,7 @@ async function main() {
     viewerWs = reconnectWs;
     await waitForWsOpen(reconnectWs, 'viewer reconnect');
     await waitForMessageAfter(hostMessages, reconnectHostCursor, 'viewer_joined', 'viewer_joined forwarded to host after reconnect', msg => msg.username === VIEWER_LOGIN);
+    await waitForMessageAfter(reconnectMessages, 0, 'map_manifest', 'cached map_manifest replay on reconnect', msg => msg.mapEpoch === 7 && msg.relayCached === true && msg.thingPalette?.Gun_Rifle);
     await waitForMessageAfter(reconnectMessages, 0, 'map_full', 'cached map_full replay on reconnect', msg => msg.mapEpoch === 7 && msg.seq === 10 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'map_delta', 'cached map_delta replay on reconnect', msg => msg.mapEpoch === 7 && msg.seq === 11 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'entity_keyframe', 'cached entity_keyframe replay on reconnect', msg => msg.mapEpoch === 7 && msg.entityCount === 1 && msg.relayCached === true);

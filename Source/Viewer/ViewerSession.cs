@@ -55,6 +55,10 @@ namespace Overlord
         public int tacticalMapUniqueId = -1;
         [System.NonSerialized]
         public Dictionary<string, int> tacticalMapChunkHashes;
+        [System.NonSerialized]
+        public HashSet<string> tacticalVisualDefs;
+        [System.NonSerialized]
+        public int tacticalManifestSeq;
 
         // Action log tracking
         public string lastJobLabel;
@@ -208,7 +212,9 @@ namespace Overlord
             tacticalEntityEpoch = 0;
             tacticalEntitySeq = 0;
             tacticalMapChunkSeq = 0;
+            tacticalManifestSeq = 0;
             tacticalMapUniqueId = -1;
+            tacticalVisualDefs = null;
             ResetTacticalMapEntities();
             ResetTacticalMapChunks();
         }

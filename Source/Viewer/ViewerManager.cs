@@ -426,6 +426,22 @@ namespace Overlord
             msg["mapId"] = map != null && Find.Maps != null ? Find.Maps.IndexOf(map) : -1;
         }
 
+        private static void AnnotateVisualManifestMessage(ViewerSession session, Map map, Dictionary<string, object> msg)
+        {
+            if (session == null || msg == null)
+                return;
+
+            if (session.tacticalMapEpoch <= 0)
+                session.tacticalMapEpoch = 1;
+
+            session.tacticalManifestSeq++;
+            msg["protocol"] = "vdr/0";
+            msg["mapEpoch"] = session.tacticalMapEpoch;
+            msg["manifestSeq"] = session.tacticalManifestSeq;
+            msg["tick"] = Find.TickManager?.TicksGame ?? 0;
+            msg["mapId"] = map != null && Find.Maps != null ? Find.Maps.IndexOf(map) : -1;
+        }
+
         public bool SendTacticalMapSnapshot(string username)
         {
             username = NormalizeUsername(username);
@@ -448,16 +464,24 @@ namespace Overlord
             session.ResetTacticalMapEntities();
             AnnotateTacticalMapMessage(session, map, fullMap, snapshot: true);
             session.tacticalMapChunkSeq = 0;
+            session.tacticalManifestSeq = 0;
+            session.tacticalVisualDefs = new HashSet<string>();
             // Record which map this baseline belongs to so SendTacticalMapDelta
             // can detect a map change. Without this the change guard would never
             // clear and every cycle would re-send a full map.
             session.tacticalMapUniqueId = map.uniqueID;
             session.tacticalMapChunkHashes = TileMapSerializer.BuildChunkHashSnapshot(map);
-            comp.SendToViewerPublic(username, fullMap);
 
             HashSet<int> entityIds;
             Dictionary<int, int> entityHashes;
             var delta = TileMapSerializer.SerializeDelta(map, pawn, session.tacticalMapEntityIds, session.tacticalEntityHashes, out entityIds, out entityHashes);
+            var manifest = TileMapSerializer.SerializeVisualManifest(map, delta, session.tacticalVisualDefs, replace: true);
+            if (manifest != null)
+            {
+                AnnotateVisualManifestMessage(session, map, manifest);
+                comp.SendToViewerPublic(username, manifest);
+            }
+            comp.SendToViewerPublic(username, fullMap);
             if (delta != null)
             {
                 AnnotateTacticalMapMessage(session, map, delta, snapshot: false);
@@ -493,6 +517,14 @@ namespace Overlord
             if (delta == null)
                 return false;
 
+            if (session.tacticalVisualDefs == null)
+                session.tacticalVisualDefs = new HashSet<string>();
+            var manifest = TileMapSerializer.SerializeVisualManifest(pawn.Map, delta, session.tacticalVisualDefs, replace: false);
+            if (manifest != null)
+            {
+                AnnotateVisualManifestMessage(session, pawn.Map, manifest);
+                comp.SendToViewerPublic(session.username, manifest);
+            }
             AnnotateTacticalMapMessage(session, pawn.Map, delta, snapshot: false);
             comp.SendToViewerPublic(session.username, delta);
             SendEntityStateFromDelta(session.username, session, delta, comp);

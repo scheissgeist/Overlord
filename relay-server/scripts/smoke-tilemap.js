@@ -349,7 +349,31 @@ function sendAssignedSnapshot(hostWs) {
   });
 }
 
+function sendMapManifest(hostWs, mapEpoch = 1) {
+  sendHost(hostWs, {
+    type: 'map_manifest',
+    target: VIEWER_LOGIN,
+    protocol: 'vdr/0',
+    mapEpoch,
+    manifestSeq: 1,
+    visualVersion: 2,
+    replace: true,
+    source: 'rimworld_defs',
+    terrainPalette: {
+      1: { defName: 'Soil', label: 'soil', color: '#715a39', texturePath: 'Terrain/Surfaces/Soil', source: 'rimworld_def' },
+      6: { defName: 'Ice', label: 'ice', color: '#b8d4e3', texturePath: 'Terrain/Surfaces/Ice', source: 'rimworld_def' },
+    },
+    thingPalette: {
+      Door: { defName: 'Door', label: 'door', kind: 'building', role: 'door', glyph: 'D', color: '#8a6f35', iconKey: 'Door', iconPriority: 3, source: 'rimworld_def' },
+      FueledStove: { defName: 'FueledStove', label: 'fueled stove', kind: 'building', role: 'workbench', glyph: 'W', color: '#af8743', iconKey: 'FueledStove', iconPriority: 3, source: 'rimworld_def' },
+      Gun_BoltActionRifle: { defName: 'Gun_BoltActionRifle', label: 'bolt-action rifle', kind: 'item', glyph: 'W', color: '#e8edf5', iconKey: 'Gun_BoltActionRifle', iconPriority: 3, source: 'rimworld_def' },
+      Plant_Healroot: { defName: 'Plant_Healroot', label: 'healroot', kind: 'plant', glyph: 'P', color: '#4a9639', iconKey: 'Plant_Healroot', iconPriority: 2, source: 'rimworld_def' },
+    },
+  });
+}
+
 function sendMapSnapshot(hostWs, mapEpoch = 1) {
+  sendMapManifest(hostWs, mapEpoch);
   sendHost(hostWs, {
     type: 'map_full',
     target: VIEWER_LOGIN,
@@ -628,7 +652,15 @@ async function main() {
     hostWs = new WebSocket(`${WS_URL}?role=host&secret=${encodeURIComponent(HOST_SECRET)}`);
     const hostMessages = [];
     hostWs.on('message', raw => {
-      try { hostMessages.push(JSON.parse(raw.toString('utf8'))); } catch (_) {}
+      try {
+        const msg = JSON.parse(raw.toString('utf8'));
+        hostMessages.push(msg);
+        if (msg.type === 'request_icons') {
+          const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Ieb5WQAAAABJRU5ErkJggg==';
+          const icons = Object.fromEntries(String(msg.defs || '').split(',').filter(Boolean).map(key => [key, png]));
+          sendHost(hostWs, { type: 'item_icons', target: msg.username || VIEWER_LOGIN, icons });
+        }
+      } catch (_) {}
     });
     await waitForWsOpen(hostWs, 'host');
 
@@ -722,6 +754,7 @@ async function main() {
       removedEntities: [],
     });
     sendHost(hostWs, makeEntityStateMessage('entity_keyframe'));
+    sendMapManifest(hostWs, 1);
     sendHost(hostWs, {
       type: 'map_full',
       target: VIEWER_LOGIN,
@@ -766,7 +799,15 @@ async function main() {
     sendHost(hostWs, makeEntityStateMessage('entity_keyframe'));
 
     const tileDebug = await waitForTileMapActive(page);
-    const rendererState = tileDebug.rendererState || tileDebug.state?.tileMap || {};
+    const manifestDebug = await waitFor(async () => {
+      const debug = await readTileDebug(page);
+      const state = debug.rendererState || debug.state?.tileMap || {};
+      return Number(state.manifestVersion) === 2 &&
+        Number(state.manifestTerrainCount) >= 2 &&
+        Number(state.manifestThingCount) >= 4 &&
+        Number(state.manifestIconCount) >= 1 ? debug : null;
+    }, 'source-backed visual manifest and requested icons');
+    const rendererState = manifestDebug.rendererState || manifestDebug.state?.tileMap || {};
     if (rendererState.itemCount !== MAP_ITEMS.length || rendererState.itemTotal !== MAP_ITEMS.length) {
       throw new Error(`Tilemap did not expose structured item data: ${JSON.stringify(rendererState)}`);
     }
@@ -776,8 +817,13 @@ async function main() {
     if (!Number.isFinite(Number(rendererState.chunkApplyCount)) || Number(rendererState.chunkApplyCount) < 1) {
       throw new Error(`Tilemap did not apply map_chunk data: ${JSON.stringify(rendererState)}`);
     }
-    if (Number(rendererState.visualIdentityVersion) < 1) {
+    if (Number(rendererState.visualIdentityVersion) < 2 || rendererState.manifestSource !== 'rimworld_defs') {
       throw new Error(`Tilemap did not expose visual identity glyph layer: ${JSON.stringify(rendererState)}`);
+    }
+    const iconRequest = await waitFor(() => hostMessages.find(m => m.type === 'request_icons'), 'bounded visual manifest icon request');
+    const requestedIconKeys = String(iconRequest.defs || '').split(',').filter(Boolean);
+    if (!requestedIconKeys.includes('Door') || requestedIconKeys.length > 48) {
+      throw new Error(`Tilemap icon request was missing source defs or exceeded cap: ${JSON.stringify(iconRequest)}`);
     }
     const firstBuilding = Array.isArray(rendererState.buildingSample) ? rendererState.buildingSample[0] : null;
     if (!Array.isArray(firstBuilding) || firstBuilding[5] !== MAP_BUILDINGS[0][5] || firstBuilding[6] !== MAP_BUILDINGS[0][6]) {
@@ -945,6 +991,10 @@ async function main() {
       const logs = window.OverlordDebug?.logs || [];
       return logs.slice(cursor).find(entry => entry.event === 'map_resync_request' && entry.reason === 'seq_gap') || null;
     }, clientLogCursor), 'client map_resync_request log after sequence gap');
+    const relayReplayedManifest = await waitFor(() => page.evaluate(cursor => {
+      const logs = window.OverlordDebug?.logs || [];
+      return logs.slice(cursor).find(entry => entry.event === 'recv' && entry.type === 'map_manifest') || null;
+    }, clientLogCursor), 'relay-cached map_manifest replay after sequence gap');
     const relayReplayedFull = await waitFor(() => page.evaluate(cursor => {
       const logs = window.OverlordDebug?.logs || [];
       return logs.slice(cursor).find(entry => entry.event === 'recv' && entry.type === 'map_full') || null;
@@ -967,6 +1017,13 @@ async function main() {
       const logs = window.OverlordDebug?.logs || [];
       return logs.slice(cursor).find(entry => entry.event === 'recv' && entry.type === 'entity_keyframe') || null;
     }, clientLogCursor), 'relay-cached entity_keyframe replay after sequence gap');
+    const replayOrder = await page.evaluate(cursor => (window.OverlordDebug?.logs || [])
+      .slice(cursor)
+      .filter(entry => entry.event === 'recv')
+      .map(entry => entry.type), clientLogCursor);
+    if (replayOrder.indexOf('map_manifest') < 0 || replayOrder.indexOf('map_manifest') > replayOrder.indexOf('map_full')) {
+      throw new Error(`Relay replay did not deliver map_manifest before map_full: ${JSON.stringify(replayOrder)}`);
+    }
     await wait(300);
     assertNoMessageAfter(hostMessages, gapCursor, 'state_resync_request', 'relay cache handled state_resync_request');
     assertNoMessageAfter(hostMessages, gapCursor, 'request_state', 'relay capabilities skipped compat request_state after sequence gap');
@@ -1168,6 +1225,9 @@ async function main() {
         foggedBaselineRendered: true,
         mapChunkApplied: true,
         relayCachedMapChunk: true,
+        sourceBackedVisualManifest: true,
+        boundedManifestIconRequests: true,
+        relayCachedManifestBeforeMap: true,
         visualIdentityGlyphs: true,
         richerBuildingMetadata: true,
         buildingSemanticFlags: true,
@@ -1205,13 +1265,14 @@ async function main() {
         requests: {
           colonistList: resyncColonistRequest,
           state: resyncStateRequest,
-        compatibilityState: null,
+          compatibilityState: null,
         },
         relayCache: {
           clientResyncLog,
-        replayedFull: relayReplayedFull,
-        replayedChunk: relayReplayedChunk,
-        replayedDelta: relayReplayedDelta,
+          replayedManifest: relayReplayedManifest,
+          replayedFull: relayReplayedFull,
+          replayedChunk: relayReplayedChunk,
+          replayedDelta: relayReplayedDelta,
           replayedEntityKeyframe: relayReplayedEntityKeyframe,
           hostStateResyncForwarded: false,
         },

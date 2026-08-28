@@ -2,7 +2,7 @@
 
 // ─── Tile Map Renderer ─────────────────────────────────────────────────────
 // Renders RimWorld map data as a colored tile grid with WASD pan + scroll zoom.
-// Receives: map_full (terrain grid), map_delta (entity positions)
+// Receives: map_manifest (source visuals), map_full (terrain grid), map_delta (entities)
 
 const TILE_COLORS = {
   0:  '#1a1a1a', // unknown
@@ -72,7 +72,7 @@ const WORLD_ENTITY_COLORS = {
   construction: '#b69a56',
 };
 
-const VISUAL_IDENTITY_VERSION = 1;
+const VISUAL_IDENTITY_VERSION = 2;
 
 class TileMapRenderer {
   constructor(canvas) {
@@ -100,6 +100,12 @@ class TileMapRenderer {
     this.itemCount = 0;
     this.itemsTruncated = false;
     this.viewerPawnId = -1;
+    this.terrainVisuals = new Map();
+    this.thingVisuals = new Map();
+    this.iconImages = new Map();
+    this.manifestVersion = 0;
+    this.manifestSeq = 0;
+    this.manifestSource = '';
 
     // Camera
     this.camX = 0;
@@ -139,6 +145,42 @@ class TileMapRenderer {
     this.animFrame = null;
 
     this._bindEvents();
+  }
+
+  setManifest(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (msg.replace === true) {
+      this.terrainVisuals.clear();
+      this.thingVisuals.clear();
+    }
+    const terrainPalette = msg.terrainPalette && typeof msg.terrainPalette === 'object'
+      ? msg.terrainPalette : {};
+    const thingPalette = msg.thingPalette && typeof msg.thingPalette === 'object'
+      ? msg.thingPalette : {};
+    for (const [key, visual] of Object.entries(terrainPalette)) {
+      if (visual && typeof visual === 'object') this.terrainVisuals.set(String(key), { ...visual });
+    }
+    for (const [key, visual] of Object.entries(thingPalette)) {
+      if (visual && typeof visual === 'object') this.thingVisuals.set(String(key), { ...visual });
+    }
+    this.manifestVersion = Number(msg.visualVersion) || this.manifestVersion;
+    this.manifestSeq = Number(msg.manifestSeq) || this.manifestSeq;
+    this.manifestSource = String(msg.source || this.manifestSource || '');
+    if (this.terrainCanvas) this._renderTerrainCanvas();
+    return true;
+  }
+
+  setIcons(icons) {
+    if (!icons || typeof icons !== 'object' || typeof Image === 'undefined') return 0;
+    let queued = 0;
+    for (const [key, encoded] of Object.entries(icons)) {
+      if (!encoded || this.iconImages.has(key)) continue;
+      const img = new Image();
+      img.onload = () => { this.iconImages.set(String(key), img); };
+      img.src = `data:image/png;base64,${encoded}`;
+      queued++;
+    }
+    return queued;
   }
 
   setFullMap(msg) {
@@ -449,7 +491,8 @@ class TileMapRenderer {
     const total = this.width * this.height;
     for (let i = 0; i < total; i++) {
       const terrainByte = this.terrain && this.terrain[i] !== undefined ? this.terrain[i] : 0;
-      const color = this._isFoggedIndex(i) ? '#040505' : (TILE_COLORS[terrainByte] || TILE_COLORS[0]);
+      const manifestColor = this._visualColor(this.terrainVisuals.get(String(terrainByte)));
+      const color = this._isFoggedIndex(i) ? '#040505' : (manifestColor || TILE_COLORS[terrainByte] || TILE_COLORS[0]);
       const r = parseInt(color.slice(1, 3), 16);
       const g = parseInt(color.slice(3, 5), 16);
       const b = parseInt(color.slice(5, 7), 16);
@@ -663,6 +706,12 @@ class TileMapRenderer {
       fogCount: this.fogCount,
       chunkApplyCount: this.chunkApplyCount || 0,
       visualIdentityVersion: VISUAL_IDENTITY_VERSION,
+      manifestVersion: this.manifestVersion,
+      manifestSeq: this.manifestSeq,
+      manifestSource: this.manifestSource,
+      manifestTerrainCount: this.terrainVisuals.size,
+      manifestThingCount: this.thingVisuals.size,
+      manifestIconCount: this.iconImages.size,
       camX: this.camX,
       camY: this.camY,
       zoom: this.zoom,
@@ -841,7 +890,8 @@ class TileMapRenderer {
       const billDetailText = b[23] || '';
       const activeJobText = b[24] || '';
       const activeJobProgress = Number(b[25]);
-      ctx.fillStyle = BUILDING_COLORS[btype] || BUILDING_COLORS[0];
+      const buildingVisual = this._thingVisual(b[6]);
+      ctx.fillStyle = this._visualColor(buildingVisual) || BUILDING_COLORS[btype] || BUILDING_COLORS[0];
       ctx.globalAlpha = 0.7;
       ctx.fillRect(bx, bz, sx, sz);
       ctx.globalAlpha = 1;
@@ -929,8 +979,11 @@ class TileMapRenderer {
         }
       }
 
-      const buildingGlyph = this._buildingGlyph(role, btype, b[6]);
-      if (buildingGlyph && z >= 10) {
+      const buildingIcon = this._iconForVisual(buildingVisual);
+      const buildingGlyph = buildingVisual?.glyph || this._buildingGlyph(role, btype, b[6]);
+      if (buildingIcon && z >= 10) {
+        ctx.drawImage(buildingIcon, bx + sx * 0.16, bz + sz * 0.16, Math.max(0.2, sx * 0.68), Math.max(0.2, sz * 0.68));
+      } else if (buildingGlyph && z >= 10) {
         ctx.fillStyle = '#090a0a';
         ctx.globalAlpha = 0.55;
         ctx.fillRect(bx + sx * 0.5 - 0.34, bz + sz * 0.5 - 0.34, 0.68, 0.68);
@@ -953,7 +1006,8 @@ class TileMapRenderer {
     for (const item of this.items) {
       if (!Array.isArray(item)) continue;
       const [ix, iz, kind, stack] = item;
-      const itemColor = ITEM_COLORS[kind] || ITEM_COLORS[0];
+      const itemVisual = this._thingVisual(item[5]);
+      const itemColor = this._visualColor(itemVisual) || ITEM_COLORS[kind] || ITEM_COLORS[0];
       const flags = Number(item[7]) || 0;
       const forbidden = (flags & 1) === 1;
       const reserved = (flags & 2) === 2;
@@ -972,8 +1026,11 @@ class TileMapRenderer {
       ctx.fill();
       ctx.stroke();
 
-      const itemGlyph = this._itemGlyph(kind, item[5], item[6]);
-      if (itemGlyph && z >= 10) {
+      const itemIcon = this._iconForVisual(itemVisual);
+      const itemGlyph = itemVisual?.glyph || this._itemGlyph(kind, item[5], item[6]);
+      if (itemIcon && z >= 10) {
+        ctx.drawImage(itemIcon, ix + 0.18, iz + 0.18, 0.64, 0.64);
+      } else if (itemGlyph && z >= 10) {
         ctx.fillStyle = '#111313';
         ctx.globalAlpha = 0.65;
         ctx.fillRect(ix + 0.22, iz + 0.22, 0.56, 0.56);
@@ -1014,7 +1071,7 @@ class TileMapRenderer {
       const ez = Number(entity.z) || 0;
       if (entity.kind === 'fire') {
         const pulse = 0.08 * Math.sin(this._now() / 90 + ex + ez);
-        ctx.fillStyle = WORLD_ENTITY_COLORS.fire;
+        ctx.fillStyle = this._visualColor(this._thingVisual(entity.defName)) || WORLD_ENTITY_COLORS.fire;
         ctx.globalAlpha = 0.85;
         ctx.beginPath();
         ctx.arc(ex + 0.5, ez + 0.5, 0.28 + pulse, 0, Math.PI * 2);
@@ -1022,7 +1079,7 @@ class TileMapRenderer {
         ctx.globalAlpha = 1;
       } else if (entity.kind === 'plant') {
         const growth = Math.max(0.15, Math.min(1, Number(entity.growth) || 0.55));
-        ctx.fillStyle = WORLD_ENTITY_COLORS.plant;
+        ctx.fillStyle = this._visualColor(this._thingVisual(entity.defName)) || WORLD_ENTITY_COLORS.plant;
         ctx.beginPath();
         ctx.arc(ex + 0.5, ez + 0.5, 0.16 + growth * 0.18, 0, Math.PI * 2);
         ctx.fill();
@@ -1030,7 +1087,7 @@ class TileMapRenderer {
         const sx = Math.max(1, Number(entity.sizeX) || 1);
         const sz = Math.max(1, Number(entity.sizeZ) || 1);
         const progress = Math.max(0, Math.min(1, Number(entity.progress) || 0));
-        ctx.strokeStyle = WORLD_ENTITY_COLORS.construction;
+        ctx.strokeStyle = this._visualColor(this._thingVisual(entity.defName)) || WORLD_ENTITY_COLORS.construction;
         ctx.lineWidth = Math.max(0.04, 1 / z);
         ctx.globalAlpha = 0.85;
         ctx.strokeRect(ex + 0.08, ez + 0.08, sx - 0.16, sz - 0.16);
@@ -1335,6 +1392,20 @@ class TileMapRenderer {
     }
 
     return null;
+  }
+
+  _thingVisual(defName) {
+    return defName ? this.thingVisuals.get(String(defName)) || null : null;
+  }
+
+  _visualColor(visual) {
+    const color = visual && typeof visual.color === 'string' ? visual.color : '';
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : '';
+  }
+
+  _iconForVisual(visual) {
+    const key = visual && visual.iconKey ? String(visual.iconKey) : '';
+    return key ? this.iconImages.get(key) || null : null;
   }
 
   _buildingGlyph(role, btype, defName) {

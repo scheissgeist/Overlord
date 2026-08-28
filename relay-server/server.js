@@ -314,6 +314,7 @@ const REPLAYABLE_TARGETED_TYPES = new Set([
   'pawn_state',
   'toolkit_state',
   'colonist_list',
+  'map_manifest',
   'map_full',
   'map_chunk',
   'map_delta',
@@ -331,6 +332,7 @@ const REPLAY_ORDER = [
   'pawn_state',
   'toolkit_state',
   'colonist_list',
+  'map_manifest',
   'map_full',
   'map_chunk',
   'map_delta',
@@ -560,13 +562,14 @@ function clearViewerMapReplayCache(room, login, reason) {
   if (!key) return false;
   const cache = room.viewerReplayCache.get(key);
   if (!cache) return false;
+  const hadManifest = cache.messages.delete('map_manifest');
   const hadFull = cache.messages.delete('map_full');
   const hadDelta = cache.messages.delete('map_delta');
   const hadEntityKeyframe = cache.messages.delete('entity_keyframe');
   const hadEntityDelta = cache.messages.delete('entity_delta');
   const hadChunks = cache.mapChunks ? cache.mapChunks.size > 0 : false;
   if (cache.mapChunks) cache.mapChunks.clear();
-  const hadMap = hadFull || hadDelta || hadEntityKeyframe || hadEntityDelta || hadChunks;
+  const hadMap = hadManifest || hadFull || hadDelta || hadEntityKeyframe || hadEntityDelta || hadChunks;
   if (hadMap) {
     cache.updatedAt = Date.now();
     recordOps('replay_cache_map_clear', { room: room.roomId, username: key, reason });
@@ -624,7 +627,30 @@ function cacheHostTextMessage(room, msg, text) {
 
   const cache = getViewerCache(room, target);
   if (!cache.mapChunks) cache.mapChunks = new Map();
+  if (msg.type === 'map_manifest' && msg.replace === false) {
+    const previous = cache.messages.get('map_manifest');
+    if (previous) {
+      try {
+        const previousMsg = JSON.parse(previous.text);
+        if (Number(previousMsg.mapEpoch) === Number(msg.mapEpoch)) {
+          const merged = {
+            ...previousMsg,
+            ...msg,
+            replace: true,
+            terrainPalette: { ...(previousMsg.terrainPalette || {}), ...(msg.terrainPalette || {}) },
+            thingPalette: { ...(previousMsg.thingPalette || {}), ...(msg.thingPalette || {}) },
+          };
+          text = JSON.stringify(merged);
+          msg = merged;
+        }
+      } catch {}
+    }
+  }
   if (msg.type === 'map_full') {
+    const manifest = cache.messages.get('map_manifest');
+    if (manifest && Number(manifest.mapEpoch) !== Number(msg.mapEpoch)) {
+      cache.messages.delete('map_manifest');
+    }
     cache.messages.delete('map_delta');
     cache.messages.delete('entity_keyframe');
     cache.messages.delete('entity_delta');

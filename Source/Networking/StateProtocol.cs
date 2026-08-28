@@ -35,6 +35,7 @@ namespace Overlord
         public const string MapFrame = "map_frame";
         public const string MapTransport = "map_transport";
         public const string MapFull = "map_full";
+        public const string MapManifest = "map_manifest";
         public const string MapDelta = "map_delta";
         public const string MapChunk = "map_chunk";
         public const string EntityKeyframe = "entity_keyframe";
