@@ -1035,12 +1035,12 @@ namespace Overlord
             float innerW = rect.width - 24f;
 
             // Broadcast row
-            var msgRect = new Rect(innerX, y, innerW - 70f, 28f);
+            var msgRect = new Rect(innerX, y, innerW - 160f, 28f);
             broadcastText = Widgets.TextField(msgRect, broadcastText);
             if (string.IsNullOrEmpty(broadcastText))
             {
                 GUI.color = MutedColor;
-                Widgets.Label(new Rect(msgRect.x + 4f, msgRect.y + 6f, msgRect.width - 8f, 18f), "Message to all viewers…");
+                Widgets.Label(new Rect(msgRect.x + 4f, msgRect.y + 6f, msgRect.width - 8f, 18f), "Viewer message or VOD marker label…");
                 GUI.color = Color.white;
             }
             if (BrassButton(new Rect(msgRect.xMax + 6f, y, 64f, 28f), "Send") && !string.IsNullOrEmpty(broadcastText))
@@ -1053,6 +1053,11 @@ namespace Overlord
                 comp.Relay?.Broadcast(msg);
                 comp.EmbeddedServer?.Broadcast(JsonHelper.ToJson(msg));
                 Messages.Message($"[Overlord] Broadcast: {broadcastText}", MessageTypeDefOf.NeutralEvent, historical: false);
+                broadcastText = "";
+            }
+            if (BrassButton(new Rect(msgRect.xMax + 76f, y, 84f, 28f), "Mark VOD"))
+            {
+                comp.CreateStreamMarker(broadcastText);
                 broadcastText = "";
             }
 

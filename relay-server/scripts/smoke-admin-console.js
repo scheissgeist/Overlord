@@ -128,6 +128,10 @@ async function main() {
       type: 'vote_update', active: true, question: 'Build a hospital?',
       options: [{ label: 'Yes', votes: 2 }, { label: 'No', votes: 1 }],
     }));
+    hostWs.send(JSON.stringify({
+      type: 'stream_marker', label: 'Raid survived', gameTick: 123456,
+      day: 18, hour: 22, year: 5501, season: 'Jugust', mapName: 'Smoke Colony', adminOnly: true,
+    }));
 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -151,6 +155,11 @@ async function main() {
     if (!claimText.includes('Admin Smoke Viewer') || !claimText.includes('Mira')) {
       throw new Error(`Pending claim did not replay into admin UI: ${claimText}`);
     }
+    await waitFor(async () => (await page.locator('#marker-list').textContent()).includes('Raid survived'), 'replayed VOD marker');
+
+    await page.fill('#marker-input', 'Trade ship arrived');
+    await page.click('#btn-marker');
+    await waitFor(() => hostMessages.find(msg => msg.type === 'command' && msg.action === 'mark_stream' && msg.label === 'Trade ship arrived'), 'host VOD marker command');
 
     await page.locator('#claim-list button', { hasText: 'Reject' }).click();
     await waitFor(() => hostMessages.find(msg => msg.type === 'claim_response' && msg.username === VIEWER_LOGIN), 'host claim_response');
@@ -199,6 +208,8 @@ async function main() {
         pendingClaimReplayedAfterAdminOpen: true,
         recentFailureReplayed: true,
         activeVoteReplayed: true,
+        streamMarkerReplayed: true,
+        streamMarkerCommandReachedHost: true,
         claimActionNotOptimistic: true,
         hostResolutionClearedClaim: true,
         crossRoomAdminEventsIsolated: true,

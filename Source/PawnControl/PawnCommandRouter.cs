@@ -118,6 +118,11 @@ namespace Overlord
                 if (!isAdminCommand) return ErrorResult("Only the streamer can end votes");
                 return ExecuteEndVote();
             }
+            if (action == "mark_stream")
+            {
+                if (!isAdminCommand) return ErrorResult("Only the streamer can create stream markers");
+                return ExecuteStreamMarker(json);
+            }
             if (action == "ban")
             {
                 if (!isAdminCommand) return ErrorResult("Admin only");
@@ -1623,6 +1628,16 @@ namespace Overlord
             if (vote == null || !vote.active) return ErrorResult("No active vote");
             vote.EndVote();
             return SuccessResult("Vote ended");
+        }
+
+        private static Dictionary<string, object> ExecuteStreamMarker(string json)
+        {
+            string label = JsonHelper.ExtractString(json, "label");
+            var comp = OverlordGameComponent.Instance;
+            if (comp == null) return ErrorResult("Overlord is not ready");
+            comp.CreateStreamMarker(label);
+            label = string.IsNullOrWhiteSpace(label) ? "Marker" : label.Trim();
+            return SuccessResult($"VOD marker saved: {label}");
         }
 
         private static Dictionary<string, object> ExecuteBan(string username, string json, ViewerManager vm)

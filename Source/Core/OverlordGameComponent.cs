@@ -1055,6 +1055,32 @@ namespace Overlord
             ClaimAlertOverlay.NotifyClaimRequest(claim);
         }
 
+        public void CreateStreamMarker(string label)
+        {
+            label = (label ?? "").Trim();
+            if (label.Length == 0) label = "Marker";
+            if (label.Length > 120) label = label.Substring(0, 120);
+
+            var map = Find.CurrentMap;
+            var msg = new Dictionary<string, object>
+            {
+                ["type"] = StateProtocol.StreamMarker,
+                ["label"] = label,
+                ["gameTick"] = Find.TickManager?.TicksGame ?? 0,
+                ["day"] = map != null ? GenLocalDate.DayOfYear(map) : 0,
+                ["hour"] = map != null ? GenLocalDate.HourInteger(map) : 0,
+                ["year"] = map != null ? GenLocalDate.Year(map) : 0,
+                ["season"] = map != null ? GenLocalDate.Season(map).Label() : "",
+                ["mapName"] = map?.info?.parent?.LabelCap ?? "Colony",
+                ["adminOnly"] = true
+            };
+
+            relayClient?.Broadcast(msg);
+            ActionLog.Append(ActionLogKind.System, "host", "stream_marker", label);
+            Messages.Message($"[Overlord] VOD marker saved: {label}", MessageTypeDefOf.NeutralEvent, historical: false);
+            LogUtil.Log($"VOD marker saved: {label}");
+        }
+
         public RelayClient Relay => relayClient;
         public ViewerManager Viewers => viewerManager;
         public EmbeddedWebServer EmbeddedServer => embeddedServer;

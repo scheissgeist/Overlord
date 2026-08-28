@@ -67,6 +67,7 @@ function LOG_DIR_FALLBACK() {
   return process.env.LOG_DIR || path.join(__dirname, 'logs');
 }
 const LOG_DIR          = LOG_DIR_FALLBACK();
+const STREAM_MARKERS_FILE = process.env.STREAM_MARKERS_FILE || path.join(LOG_DIR, 'stream-markers.jsonl');
 const INSTANCE_ID      = process.env.FLY_MACHINE_ID || `${process.pid}`;
 const MAX_WS_BUFFERED_BYTES = parseInt(process.env.MAX_WS_BUFFERED_BYTES || String(1024 * 1024), 10);
 const MAX_FRAME_BUFFERED_BYTES = parseInt(process.env.MAX_FRAME_BUFFERED_BYTES || String(768 * 1024), 10);
@@ -133,6 +134,7 @@ function makeRoom(roomId, opts) {
     contextMenuRequests: new Map(),
     pendingClaims: new Map(),
     commandFailures: [],
+    streamMarkers: [],
   };
   rooms.set(roomId, room);
   return room;
@@ -620,11 +622,41 @@ function adminRoomState(room) {
     })) : [],
     recentCommandFailures: recentCommandFailures(room),
     activeVote: cachedActiveVote(room),
+    streamMarkers: room ? room.streamMarkers.slice(-20).reverse() : [],
   };
+}
+
+function recordStreamMarker(room, msg) {
+  if (!room || !msg) return;
+  const at = Date.now();
+  const marker = {
+    id: `${at}-${crypto.randomBytes(3).toString('hex')}`,
+    room: room.roomId,
+    at,
+    utc: new Date(at).toISOString(),
+    label: String(msg.label || 'Marker').trim().slice(0, 120) || 'Marker',
+    gameTick: Number(msg.gameTick) || 0,
+    day: Number(msg.day) || 0,
+    hour: Number(msg.hour) || 0,
+    year: Number(msg.year) || 0,
+    season: String(msg.season || '').slice(0, 40),
+    mapName: String(msg.mapName || '').slice(0, 80),
+  };
+  room.streamMarkers.push(marker);
+  if (room.streamMarkers.length > 500) room.streamMarkers.splice(0, room.streamMarkers.length - 500);
+  try {
+    fs.mkdirSync(path.dirname(STREAM_MARKERS_FILE), { recursive: true });
+    fs.appendFile(STREAM_MARKERS_FILE, JSON.stringify(marker) + '\n', () => {});
+  } catch (_) {}
+  recordOps('stream_marker', { room: room.roomId, markerId: marker.id, label: marker.label });
 }
 
 function trackHostAdminState(room, msg) {
   if (!room || !msg) return;
+  if (msg.type === 'stream_marker') {
+    recordStreamMarker(room, msg);
+    return;
+  }
   if (msg.type === 'claim_request' && msg.username) {
     const username = String(msg.username);
     const existing = room.pendingClaims.get(username);
@@ -1794,6 +1826,24 @@ function restoreRooms() {
   }
 }
 restoreRooms();
+
+function restoreStreamMarkers() {
+  try {
+    if (!fs.existsSync(STREAM_MARKERS_FILE)) return;
+    const lines = fs.readFileSync(STREAM_MARKERS_FILE, 'utf8').split(/\r?\n/).filter(Boolean).slice(-5000);
+    for (const line of lines) {
+      let marker;
+      try { marker = JSON.parse(line); } catch { continue; }
+      const room = marker && rooms.get(String(marker.room || ''));
+      if (!room) continue;
+      room.streamMarkers.push(marker);
+      if (room.streamMarkers.length > 500) room.streamMarkers.shift();
+    }
+  } catch (e) {
+    console.warn('[relay] Could not restore stream markers:', e.message);
+  }
+}
+restoreStreamMarkers();
 
 // -- Viewer identity persistence -----------------------------------------
 // Store no Twitch access token: /auth/twitch validates it and then discards it.

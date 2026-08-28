@@ -158,6 +158,13 @@
         <button id="btn-broadcast">Send</button>
       </div>
 
+      <h2>VOD markers</h2>
+      <div class="msg-bar">
+        <input id="marker-input" type="text" placeholder="What just happened?" maxlength="120">
+        <button id="btn-marker">Mark now</button>
+      </div>
+      <div class="card" id="marker-list"><span class="none">No markers this stream</span></div>
+
       <h2>Vote</h2>
       <div id="vote-idle">
         <div class="vote-bar">
@@ -187,6 +194,7 @@
     let claimRequests = [];
     let activeVote = null;
     let recentCommandFailures = [];
+    let streamMarkers = [];
     let adminLinkUp = false;
     let hostConnected = false;
     const requestedRoom = new URLSearchParams(location.search).get('room') || '';
@@ -266,12 +274,14 @@
               claimRequests = Array.isArray(msg.pendingClaims) ? msg.pendingClaims : [];
               recentCommandFailures = Array.isArray(msg.recentCommandFailures) ? msg.recentCommandFailures : [];
               activeVote = msg.activeVote || null;
+              streamMarkers = Array.isArray(msg.streamMarkers) ? msg.streamMarkers : [];
               $('host-status').innerHTML = msg.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
               $('viewer-count').textContent = liveViewers.length;
               $('uptime').textContent = formatUptime(msg.uptime);
               renderViewers(liveViewers);
               renderClaims();
               renderVote(activeVote);
+              renderMarkers();
               markFresh();
               renderExceptions();
               break;
@@ -331,6 +341,13 @@
               renderVote(msg);
               markFresh();
               renderExceptions();
+              break;
+
+            case 'stream_marker':
+              streamMarkers.unshift(msg);
+              streamMarkers = streamMarkers.slice(0, 20);
+              renderMarkers();
+              log(`VOD marker: ${msg.label || 'Marker'}`);
               break;
 
             case 'game_info':
@@ -394,12 +411,14 @@
         claimRequests = Array.isArray(data.pendingClaims) ? data.pendingClaims : claimRequests;
         recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
         activeVote = data.activeVote || null;
+        streamMarkers = Array.isArray(data.streamMarkers) ? data.streamMarkers : streamMarkers;
         $('host-status').innerHTML = hostConnected ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
         $('viewer-count').textContent = liveViewers.length;
         $('uptime').textContent = formatUptime(data.uptime);
         renderViewers(liveViewers);
         renderClaims();
         renderVote(activeVote);
+        renderMarkers();
         markFresh();
         renderExceptions();
       } catch (e) {
@@ -436,11 +455,13 @@
       claimRequests = Array.isArray(data.pendingClaims) ? data.pendingClaims : claimRequests;
       recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
       activeVote = data.activeVote || null;
+      streamMarkers = Array.isArray(data.streamMarkers) ? data.streamMarkers : streamMarkers;
       $('viewer-count').textContent = liveViewers.length;
       $('uptime').textContent = formatUptime(data.uptime);
       renderViewers(liveViewers);
       renderClaims();
       renderVote(activeVote);
+      renderMarkers();
       markFresh();
       renderExceptions();
     }
@@ -598,6 +619,25 @@
       log(`Broadcast: ${msg}`);
       $('msg-input').value = '';
     });
+
+    $('btn-marker').addEventListener('click', async () => {
+      const label = $('marker-input').value.trim() || 'Marker';
+      await api('/admin/host-command', { command: { type: 'command', action: 'mark_stream', adminCommand: true, source: 'admin', label } });
+      log(`Marker requested: ${label}`);
+      $('marker-input').value = '';
+    });
+
+    function renderMarkers() {
+      const el = $('marker-list');
+      if (!streamMarkers.length) { el.innerHTML = '<span class="none">No markers this stream</span>'; return; }
+      el.innerHTML = streamMarkers.map(marker => {
+        const when = (marker.utc || marker.at) ? new Date(marker.utc || marker.at).toLocaleTimeString() : 'now';
+        const game = marker.year
+          ? `Year ${marker.year}, ${marker.season || 'season'} day ${marker.day}, ${marker.hour}:00`
+          : `tick ${marker.gameTick || '?'}`;
+        return `<div class="status-row"><span>${esc(when)} · ${esc(marker.label || 'Marker')}</span><span class="label">${esc(game)}</span></div>`;
+      }).join('');
+    }
 
     $('btn-start-vote').addEventListener('click', async () => {
       const q = $('vote-q').value.trim();

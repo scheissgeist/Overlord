@@ -54,6 +54,7 @@ namespace Overlord
         public const string ItemIcons = "item_icons";
         public const string RosterState = "roster_state";
         public const string ViewerSummary = "viewer_summary";
+        public const string StreamMarker = "stream_marker";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";

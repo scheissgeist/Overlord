@@ -27,6 +27,7 @@ const ROOT = path.join(__dirname, '..');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'overlord-restart-smoke-'));
 const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const STREAM_MARKERS_FILE = path.join(DATA_DIR, 'stream-markers.jsonl');
 const HOST_SECRET = crypto.randomBytes(24).toString('hex');
 const VIEWER_NAME = `viewer_${crypto.randomBytes(4).toString('hex')}`;
 
@@ -159,6 +160,7 @@ async function main() {
   let firstViewer;
   let secondHost;
   let secondViewer;
+  let secondAdmin;
   try {
     await startRelay();
 
@@ -184,6 +186,11 @@ async function main() {
       state: { name: 'must-not-survive-restart' },
     }));
     await waitFor(() => firstViewer.messages.find(message => message.type === 'pawn_state'), 'initial pawn_state');
+    firstHost.ws.send(JSON.stringify({
+      type: 'stream_marker', label: 'Survives relay restart', gameTick: 456789,
+      day: 22, hour: 3, year: 5502, season: 'Decembary', mapName: 'Restart Colony', adminOnly: true,
+    }));
+    await waitFor(() => fs.existsSync(STREAM_MARKERS_FILE) && fs.readFileSync(STREAM_MARKERS_FILE, 'utf8').includes('Survives relay restart'), 'marker persistence');
 
     firstViewer.ws.close();
     firstHost.ws.close();
@@ -196,6 +203,7 @@ async function main() {
     await startRelay();
     secondHost = await openSocket(`${WS_BASE}?role=host&key=${encodeURIComponent(hostKey || '')}`);
     secondViewer = await openSocket(`${WS_BASE}?role=viewer&session=${encodeURIComponent(sessionToken || '')}&room=${encodeURIComponent(roomId || '')}`);
+    secondAdmin = await openSocket(`${WS_BASE}?role=admin&secret=${encodeURIComponent(HOST_SECRET)}&room=${encodeURIComponent(roomId || '')}`);
     await waitFor(() => secondHost.messages.find(message => message.type === 'viewer_joined' && message.username === VIEWER_NAME), 'restored viewer_joined');
     await wait(150);
     const health = await request('GET', '/health');
@@ -208,13 +216,17 @@ async function main() {
     record('same viewer session token reconnects after restart',
       secondViewer.opened && health.json?.sessions === 1,
       `viewer=${secondViewer.opened}, sessions=${health.json?.sessions}`);
+    const adminSync = await waitFor(() => secondAdmin.messages.find(message => message.type === 'admin_sync'), 'restored admin sync');
+    const restoredMarker = adminSync.streamMarkers?.find(marker => marker.label === 'Survives relay restart' && marker.gameTick === 456789);
+    record('VOD markers survive relay restart', !!restoredMarker,
+      restoredMarker ? `${restoredMarker.utc} tick=${restoredMarker.gameTick}` : 'marker missing from admin sync');
 
     await wait(300);
     const staleReplay = secondViewer.messages.some(message => message.type === 'pawn_state');
     record('restart does not replay stale game payloads', !staleReplay,
       staleReplay ? 'stale pawn_state was replayed' : 'identity survived; replay cache started empty');
   } finally {
-    for (const state of [firstHost, firstViewer, secondHost, secondViewer]) {
+    for (const state of [firstHost, firstViewer, secondHost, secondViewer, secondAdmin]) {
       try { state?.ws?.close(); } catch (_) {}
     }
     await stopRelay();
