@@ -155,10 +155,29 @@ async function main() {
     if (pawnState.state?.id !== 4242 || pawnState.state?.name !== 'Clean Profile') throw new Error('Wrong pawn state payload');
     if (pawnState.preferredWeapon !== 'Gun_SmokeRifle') throw new Error('Production pawn_state omitted preferredWeapon');
 
-    viewer.send(JSON.stringify({ type: 'command', action: 'draft', username: 'forged', source: 'admin', adminCommand: true }));
+    const commandId = `smoke_${crypto.randomBytes(8).toString('hex')}`;
+    viewer.send(JSON.stringify({ type: 'command', commandId, action: 'draft', username: 'forged', source: 'admin', adminCommand: true }));
+    const accepted = await waitFor(
+      () => viewerState.messages.find(message => message.type === 'command_status' && message.commandId === commandId),
+      'correlated relay command acceptance'
+    );
+    if (accepted.phase !== 'accepted') throw new Error(`Relay did not accept command: ${JSON.stringify(accepted)}`);
     await waitFor(() => hostState.output.includes('HOST_COMMAND_RECEIVED'), 'viewer command at production C# host');
+    const applied = await waitFor(
+      () => viewerState.messages.find(message => message.type === 'action_result' && message.commandId === commandId),
+      'correlated host command result'
+    );
+    if (applied.phase !== 'applied' || applied.ok !== true) throw new Error(`Host did not apply command: ${JSON.stringify(applied)}`);
     await waitFor(() => hostState.exitCode !== null, 'C# host smoke exit');
     if (hostState.exitCode !== 0) throw new Error(`C# host failed (${hostState.exitCode}):\n${hostState.output}\n${hostState.error}`);
+
+    const disconnectedCommandId = `smoke_${crypto.randomBytes(8).toString('hex')}`;
+    viewer.send(JSON.stringify({ type: 'command', commandId: disconnectedCommandId, action: 'draft' }));
+    const rejected = await waitFor(
+      () => viewerState.messages.find(message => message.type === 'command_status' && message.commandId === disconnectedCommandId),
+      'correlated disconnected-host failure'
+    );
+    if (rejected.phase !== 'failed') throw new Error(`Disconnected command did not fail: ${JSON.stringify(rejected)}`);
 
     console.log(JSON.stringify({
       ok: true,
@@ -172,6 +191,9 @@ async function main() {
         viewerReceivedPawnState: true,
         requiredPawnStateFieldsPresent: true,
         hostReceivedPinnedViewerCommand: true,
+        relayAcceptedCorrelatedCommand: true,
+        hostAppliedCorrelatedCommand: true,
+        disconnectedHostFailedCorrelatedCommand: true,
       },
     }, null, 2));
   } finally {

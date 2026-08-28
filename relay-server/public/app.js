@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260826-relay-standby-v2';
+const UI_BUILD = '20260827-command-lifecycle-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -113,6 +113,10 @@ let lastLogLine = 'Waiting for colony updates';
 let audioMode = loadAudioMode();
 let lastCommandAction = null;
 let commandFeedbackTimer = null;
+let stagedCommandFeedback = null;
+let commandSequence = 0;
+const pendingCommands = new Map();
+const commandResponseTimers = new Map();
 let lastToolkitRequestAt = 0;
 let appearanceDraftPawnId = null;
 let appearanceDraftHairDef = '';
@@ -918,7 +922,7 @@ function clearCommandFeedback(action = null) {
   const buttons = action ? [getCommandButton(action)] : Array.from(document.querySelectorAll('.cmd-btn'));
   buttons.forEach(btn => {
     if (!btn) return;
-    btn.classList.remove('cmd-armed', 'cmd-sent', 'cmd-accepted', 'cmd-failed');
+    btn.classList.remove('cmd-armed', 'cmd-sent', 'cmd-accepted', 'cmd-applied', 'cmd-failed');
   });
 }
 
@@ -937,7 +941,7 @@ function setCommandFeedback(action, state, message) {
     updateDrawerPreview(message, 'Activity');
   }
 
-  if (state === 'accepted' || state === 'failed') {
+  if (state === 'applied' || state === 'failed') {
     commandFeedbackTimer = setTimeout(() => {
       clearCommandFeedback(action);
       clearSubtitleFeedback();
@@ -950,28 +954,59 @@ function markCommandArmed(action, message) {
   setCommandFeedback(action, 'armed', message);
 }
 
-const commandResponseTimers = new Map();
-
 function markCommandSent(action, message) {
   lastCommandAction = action;
+  stagedCommandFeedback = { action, message, at: Date.now() };
   setCommandFeedback(action, 'sent', message);
-  // Honest lifecycle: a command that never gets a host result must not sit in
-  // 'sent' forever — that silence is why viewers double-tap. One timer PER
-  // action so a result for command A can't disarm command B's timeout.
-  clearTimeout(commandResponseTimers.get(action));
-  commandResponseTimers.set(action, setTimeout(() => {
-    commandResponseTimers.delete(action);
-    setCommandFeedback(action, 'failed', 'No response from host — try again');
-    if (lastCommandAction === action) {
-      lastCommandAction = null;
-      clearSubtitleFeedback();
-    }
-  }, 5000));
   if (pawnSubtitle && message) {
     const prev = pawnSubtitle.dataset.prevText ?? pawnSubtitle.textContent;
     pawnSubtitle.dataset.prevText = prev;
     pawnSubtitle.textContent = message;
   }
+}
+
+function nextCommandId() {
+  commandSequence = (commandSequence + 1) % 0x7fffffff;
+  return `c_${Date.now().toString(36)}_${commandSequence.toString(36)}`;
+}
+
+function beginCommandLifecycle(command) {
+  const commandId = command.commandId;
+  const action = command.action || 'unknown';
+  const staged = stagedCommandFeedback?.action === action && Date.now() - stagedCommandFeedback.at < 1000
+    ? stagedCommandFeedback
+    : null;
+  if (staged) stagedCommandFeedback = null;
+  const entry = { commandId, action, visible: !!staged, sentAt: Date.now() };
+  pendingCommands.set(commandId, entry);
+  clearTimeout(commandResponseTimers.get(commandId));
+  commandResponseTimers.set(commandId, setTimeout(() => {
+    commandResponseTimers.delete(commandId);
+    pendingCommands.delete(commandId);
+    if (entry.visible) setCommandFeedback(action, 'failed', "Didn't take — the game may be paused");
+    if (lastCommandAction === action) {
+      lastCommandAction = null;
+      clearSubtitleFeedback();
+    }
+  }, 5000));
+}
+
+function findPendingCommand(commandId, action) {
+  if (commandId && pendingCommands.has(commandId)) return pendingCommands.get(commandId);
+  const matches = Array.from(pendingCommands.values()).filter(entry => entry.action === action);
+  return matches.length ? matches[matches.length - 1] : null;
+}
+
+function markCommandAccepted(commandId, action, message) {
+  const entry = findPendingCommand(commandId, action);
+  if (!entry) return;
+  clearTimeout(commandResponseTimers.get(entry.commandId));
+  commandResponseTimers.set(entry.commandId, setTimeout(() => {
+    commandResponseTimers.delete(entry.commandId);
+    pendingCommands.delete(entry.commandId);
+    if (entry.visible) setCommandFeedback(entry.action, 'failed', "Didn't take — the game may be paused");
+  }, 5000));
+  if (entry.visible) setCommandFeedback(entry.action, 'accepted', message || 'Accepted by relay');
 }
 
 function clearSubtitleFeedback() {
@@ -980,12 +1015,16 @@ function clearSubtitleFeedback() {
   delete pawnSubtitle.dataset.prevText;
 }
 
-function markCommandResult(action, ok, message) {
-  const resolvedAction = action || lastCommandAction;
+function markCommandResult(commandId, action, ok, message) {
+  const entry = findPendingCommand(commandId, action);
+  const resolvedAction = entry?.action || action || lastCommandAction;
   if (!resolvedAction) return;
-  clearTimeout(commandResponseTimers.get(resolvedAction));
-  commandResponseTimers.delete(resolvedAction);
-  setCommandFeedback(resolvedAction, ok === false ? 'failed' : 'accepted', message);
+  if (entry) {
+    clearTimeout(commandResponseTimers.get(entry.commandId));
+    commandResponseTimers.delete(entry.commandId);
+    pendingCommands.delete(entry.commandId);
+  }
+  if (!entry || entry.visible) setCommandFeedback(resolvedAction, ok === false ? 'failed' : 'applied', message);
   if (resolvedAction === lastCommandAction) lastCommandAction = null;
 }
 
@@ -1360,6 +1399,10 @@ function resetAssignedState() {
   pawnJob.textContent = '';
   resetPortrait();
   clearCommandFeedback();
+  for (const timer of commandResponseTimers.values()) clearTimeout(timer);
+  commandResponseTimers.clear();
+  pendingCommands.clear();
+  stagedCommandFeedback = null;
   lastCommandAction = null;
   applyCommandAvailability();
   clearResourceReadout();
@@ -1937,10 +1980,15 @@ function connect() {
 }
 
 function send(obj) {
+  if (obj?.type === 'command') {
+    if (!obj.commandId) obj.commandId = nextCommandId();
+    beginCommandLifecycle(obj);
+  }
   const text = JSON.stringify(obj);
   logClient('send', summarizeClientMessage(obj, text.length));
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(text);
   else logClient('send_dropped', summarizeClientMessage(obj, text.length));
+  return obj?.commandId || null;
 }
 
 function requestMapResync(reason, msg = {}) {
@@ -2076,6 +2124,7 @@ function handleMessage(msg) {
     case 'map_transport':    handleMapTransport(msg);    break;
     case 'command_result':
     case 'action_result':    handleCommandResult(msg);   break;
+    case 'command_status':    handleCommandStatus(msg);   break;
     case 'pawn_died':        handlePawnDied(msg);        break;
     case 'action_log':       handleActionLog(msg);       break;
     case 'portal_available': handlePortalAvailable(msg); break;
@@ -4250,22 +4299,34 @@ function handleLiveMapClick(e) {
 // ─── Command result ───────────────────────────────────────────────────────────
 function handleCommandResult(msg) {
   if (msg.silent) return;
+  const text = msg.message || (msg.ok ? 'Applied' : 'Failed');
+  markCommandResult(msg.commandId, msg.action, msg.ok !== false, text);
   if (msg.action === 'preview_appearance' && msg.appearancePreview) {
     appearancePreviewData = msg.appearancePreview;
     appearancePreviewLabel = msg.previewLabel || 'Preview';
     renderCommandCenter();
     return;
   }
-  const text = msg.message || (msg.ok ? 'OK' : 'Failed');
   statusText.textContent = text;
   appendLog(`${msg.ok === false ? 'Failed: ' : ''}${text}`);
-  markCommandResult(msg.action, msg.ok !== false, text);
   if (msg.action === 'context_menu') completeContextMenuRequest();
   if (msg.action === 'toolkit_purchase' || /purchase|toolkit|maxed|cooldown|coins/i.test(text)) {
     lastBuyFeedback = { ok: msg.ok !== false, message: text };
     if (activeCommandMenu === 'buy') renderCommandCenter();
   }
   setTimeout(() => { statusText.textContent = 'Connected'; }, 3000);
+}
+
+function handleCommandStatus(msg) {
+  if (msg.phase === 'accepted') {
+    markCommandAccepted(msg.commandId, msg.action, msg.message);
+    return;
+  }
+  if (msg.phase === 'failed') {
+    const text = msg.message || 'Command could not reach the game';
+    appendLog(`Failed: ${text}`);
+    markCommandResult(msg.commandId, msg.action, false, text);
+  }
 }
 
 function handleHostCapabilities(msg) {

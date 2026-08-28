@@ -237,17 +237,22 @@ function dispatchContextMenuRequest(room, login, msg, state) {
 }
 
 function queueContextMenuRequest(room, login, msg) {
+  if (!room?.hostSocket || room.hostSocket.readyState !== WebSocket.OPEN) return false;
   let state = room.contextMenuRequests.get(login);
   if (!state) {
     state = { inFlight: false, queued: null, lastSentAt: 0, sendTimer: null, responseTimer: null };
     room.contextMenuRequests.set(login, state);
   }
   if (state.inFlight || state.sendTimer) {
+    if (state.queued?.commandId) {
+      sendCommandStatus(room, login, state.queued, 'failed', 'Superseded by a newer target');
+    }
     state.queued = msg;
     recordOps('context_menu_coalesced', { room: room.roomId, username: login });
-    return;
+    return true;
   }
   dispatchContextMenuRequest(room, login, msg, state);
+  return true;
 }
 
 function flushQueuedContextMenuRequest(room, login, state) {
@@ -402,6 +407,8 @@ function summarizeMessage(msg, bytes) {
   const out = {
     type: msg && msg.type,
     action: msg && msg.action,
+    commandId: msg && msg.commandId,
+    phase: msg && msg.phase,
     username: msg && msg.username,
     target: msg && msg.target,
     ok: msg && typeof msg.ok === 'boolean' ? msg.ok : undefined,
@@ -1370,6 +1377,12 @@ wss.on('connection', (ws, req) => {
         msg.username = login;
         msg.source = 'viewer';
         msg.adminCommand = false;
+        if (msg.type === 'command') {
+          const suppliedId = String(msg.commandId || '');
+          msg.commandId = /^[a-zA-Z0-9_-]{8,64}$/.test(suppliedId)
+            ? suppliedId
+            : crypto.randomBytes(12).toString('hex');
+        }
         recordOps('viewer_message', summarizeMessage(msg, Buffer.byteLength(JSON.stringify(msg))));
         if (msg.type === 'state_resync_request' && replayCachedState(room, login, msg)) {
           return;
@@ -1381,10 +1394,16 @@ wss.on('connection', (ws, req) => {
           if (msg.transport === 'jpeg') clearViewerMapReplayCache(login, 'viewer_selected_jpeg');
         }
         if (msg.type === 'command' && msg.action === 'context_menu') {
-          queueContextMenuRequest(room, login, msg);
+          const accepted = queueContextMenuRequest(room, login, msg);
+          sendCommandStatus(room, login, msg, accepted ? 'accepted' : 'failed',
+            accepted ? 'Accepted by relay' : 'No game is connected');
           return;
         }
-        sendToHost(room, msg);
+        const routed = sendToHost(room, msg);
+        if (msg.type === 'command') {
+          sendCommandStatus(room, login, msg, routed ? 'accepted' : 'failed',
+            routed ? 'Accepted by relay' : 'No game is connected');
+        }
       } catch (e) {
         console.error(`[relay] Bad viewer message from ${login}:`, e.message);
       }
@@ -1459,14 +1478,32 @@ function sendToHost(room, msg) {
       : summarizeMessage(msg, Buffer.byteLength(JSON.stringify(msg || {})));
     summary.room = room ? room.roomId : '(none)';
     recordOps('host_message_dropped', summary);
-    return;
+    return false;
   }
   try {
     const type = typeof msg === 'string' ? '' : msg && msg.type;
-    sendWs(room.hostSocket, typeof msg === 'string' ? msg : JSON.stringify(msg), { type, target: 'host' });
+    return sendWs(room.hostSocket, typeof msg === 'string' ? msg : JSON.stringify(msg), { type, target: 'host' });
   } catch (e) {
     console.error('[relay] Failed to send to host:', e.message);
+    return false;
   }
+}
+
+function sendCommandStatus(room, login, command, phase, message) {
+  if (!command?.commandId) return false;
+  const status = {
+    type: 'command_status',
+    commandId: command.commandId,
+    action: String(command.action || 'unknown'),
+    phase,
+    message,
+  };
+  queueForViewer(room, login, JSON.stringify(status));
+  recordOps('command_status', {
+    room: room?.roomId || '', username: login, commandId: command.commandId,
+    action: status.action, phase,
+  });
+  return true;
 }
 
 function findViewerSocketAnywhere(login) {

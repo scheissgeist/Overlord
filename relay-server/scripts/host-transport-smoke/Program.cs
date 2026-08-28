@@ -47,15 +47,26 @@ namespace Overlord
                 }
                 else if (type == StateProtocol.Command)
                 {
+                    string commandId = JsonHelper.ExtractLastString(json, "commandId");
                     string username = JsonHelper.ExtractLastString(json, "username");
                     string source = JsonHelper.ExtractLastString(json, "source");
                     bool admin = JsonHelper.ExtractLastBool(json, "adminCommand", true);
                     string action = JsonHelper.ExtractString(json, "action");
-                    if (username != viewerLogin || source != "viewer" || admin || action != StateProtocol.CmdDraft)
+                    if (username != viewerLogin || source != "viewer" || admin || action != StateProtocol.CmdDraft
+                        || string.IsNullOrEmpty(commandId))
                     {
                         failure = "relay did not pin viewer command identity";
                         return;
                     }
+                    relay.SendToViewer(viewerLogin, new Dictionary<string, object>
+                    {
+                        ["type"] = StateProtocol.ActionResult,
+                        ["commandId"] = commandId,
+                        ["action"] = action,
+                        ["phase"] = "applied",
+                        ["ok"] = true,
+                        ["message"] = "Drafted"
+                    });
                     commandReceived = true;
                     Console.WriteLine("HOST_COMMAND_RECEIVED");
                 }
@@ -68,6 +79,7 @@ namespace Overlord
                 relay.ProcessQueue();
                 Thread.Sleep(10);
             }
+            if (commandReceived) Thread.Sleep(250);
             relay.ProcessQueue();
             relay.Disconnect();
 

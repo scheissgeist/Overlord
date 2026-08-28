@@ -463,6 +463,7 @@ namespace Overlord
             bool isAdminCommand = IsAdminMessage(json);
             string action = JsonHelper.ExtractLastString(json, "action") ?? "unknown";
             string username = JsonHelper.ExtractLastString(json, "username");
+            string commandId = ValidCommandId(JsonHelper.ExtractLastString(json, "commandId"));
             var result = PawnCommandRouter.Execute(json, viewerManager);
             bool silent = result != null &&
                 result.TryGetValue("silent", out object silentValue) &&
@@ -478,7 +479,11 @@ namespace Overlord
                 ? messageValue?.ToString()
                 : "";
             if (result != null)
+            {
                 result["action"] = action;
+                if (!string.IsNullOrEmpty(commandId)) result["commandId"] = commandId;
+                result["phase"] = ok ? "applied" : "failed";
+            }
             if (!silent)
             {
                 LogUtil.Log($"Command source={(isAdminCommand ? "admin" : "viewer")} user={username ?? ""} action={action} ok={ok} message={resultMessage}");
@@ -504,6 +509,18 @@ namespace Overlord
             if (silent || string.IsNullOrEmpty(username)) return;
 
             SendToViewer(username, result);
+        }
+
+        private static string ValidCommandId(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length < 8 || value.Length > 64)
+                return null;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (!(char.IsLetterOrDigit(c) || c == '_' || c == '-')) return null;
+            }
+            return value;
         }
 
         private void HandleRequestState(string json)

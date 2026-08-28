@@ -40,6 +40,7 @@ namespace Overlord
         public const string EntityKeyframe = "entity_keyframe";
         public const string EntityDelta = "entity_delta";
         public const string ActionResult = "action_result";
+        public const string CommandStatus = "command_status";
         public const string Permissions = "permissions";
         public const string ColonistList = "colonist_list";
         public const string GameInfo = "game_info";

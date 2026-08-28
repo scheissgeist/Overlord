@@ -1140,6 +1140,22 @@ async function main() {
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-gear-narrow.png') });
     }
 
+    const lifecycleCursor = hostMessages.length;
+    await page.click('#btn-draft-toggle');
+    const lifecycleCommand = await waitFor(() => hostMessages.slice(lifecycleCursor).find(m =>
+      m.type === 'command' && m.action === 'draft' && m.username === VIEWER_LOGIN
+    ), 'correlated draft command');
+    if (!/^[a-zA-Z0-9_-]{8,64}$/.test(lifecycleCommand.commandId || '')) {
+      throw new Error(`Command lifecycle missing client id: ${JSON.stringify(lifecycleCommand)}`);
+    }
+    await page.waitForSelector('#btn-draft-toggle.cmd-accepted', { timeout: 10000 });
+    hostWs.send(JSON.stringify({
+      type: 'action_result', target: VIEWER_LOGIN,
+      commandId: lifecycleCommand.commandId, action: 'draft', phase: 'applied',
+      ok: true, message: 'Drafted',
+    }));
+    await page.waitForSelector('#btn-draft-toggle.cmd-applied', { timeout: 10000 });
+
     // A full browser reload is the deterministic reconnect transition. The relay
     // must replay the assigned pawn exactly once and remain stable long enough to
     // prove build negotiation did not start another reload loop.

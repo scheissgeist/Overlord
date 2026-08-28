@@ -1574,7 +1574,15 @@ body[data-viewer-phase="assigned"] .phase-dot { background: var(--green); color:
     var(--wood-mid);
 }
 
+.cmd-btn.cmd-sent {
+  opacity: 0.82;
+}
+
 .cmd-btn.cmd-accepted {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cmd-btn.cmd-applied {
   background:
     linear-gradient(180deg, rgba(102, 160, 90, 0.4), rgba(40, 80, 50, 0.5)),
     var(--tex-wood-dark) 0 0 / 256px 256px repeat,
