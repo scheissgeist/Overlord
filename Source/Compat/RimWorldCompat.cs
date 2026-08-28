@@ -167,6 +167,10 @@ namespace Overlord
             return new Dictionary<string, object>
             {
                 ["type"] = StateProtocol.HostCapabilities,
+                // Versioned browser feature contract. Missing opt-in flags mean
+                // unsupported, so a newer viewer can run against an older mod
+                // without presenting controls that will only time out.
+                ["viewerProtocol"] = 2,
                 ["rimworldVersion"] = RimWorldVersion,
                 ["work"] = SupportsWorkPriorities,
                 ["schedule"] = SupportsScheduleAssignments,
@@ -194,6 +198,12 @@ namespace Overlord
                 ["toolkitLoaded"] = TwitchToolkitBridge.IsToolkitLoaded,
                 ["toolkitUtilsLoaded"] = TwitchToolkitBridge.IsToolkitUtilsLoaded,
                 ["toolkitChatConnected"] = TwitchToolkitBridge.IsChatConnected,
+                ["roster"] = true,
+                ["armory"] = true,
+                ["preferredWeapon"] = true,
+                ["appearancePreview"] = true,
+                ["socialInteractions"] = true,
+                ["commandResults"] = true,
                 // Fixed dye swatch palette for the viewer gear panel.
                 ["dyePalette"] = PawnCommandRouter.BuildDyePaletteMessage(),
                 // Free colour picking via a wheel. The gamut bounds let the

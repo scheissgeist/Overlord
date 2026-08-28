@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260827-map-manifest-v1';
+const UI_BUILD = '20260828-capability-contract-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -355,6 +355,14 @@ const COMMAND_MENU_SECTIONS = [
   { id: 'help', label: 'Help' }
 ];
 
+// Capabilities introduced after the original browser contract are opt-in: an
+// older mod omits them, which must behave like "unsupported" instead of leaving
+// a live-looking control that sends a request the host cannot understand.
+const OPT_IN_HOST_CAPABILITIES = new Set([
+  'roster', 'armory', 'preferredWeapon', 'appearancePreview',
+  'socialInteractions', 'commandResults', 'toolkitBridge'
+]);
+
 const COMMAND_ALIAS_GROUPS = [
   { label: 'Overlord tabs (use the UI — not Twitch chat)', commands: ['Health', 'Skills', 'Gear', 'Social', 'Work', 'Schedule'] },
   { label: 'Overlord Buy / Story (Toolkit store — uses your assigned colonist)', commands: ['Buy tab', 'Story traits/skills', 'healme / trait / etc.'] },
@@ -602,7 +610,7 @@ function setActiveTab(tab, options = {}) {
 
   // The Toolkit catalog is very large. Fetch it only for surfaces that use it,
   // rather than making every viewer download it during connection and resync.
-  if (tab === 'gear' && !toolkitState) {
+  if (tab === 'gear' && !toolkitState && supportsOptInHostFeature('toolkitBridge')) {
     requestToolkitState();
   }
   if (tab === 'gear' && gearSourceMode === 'armory' && !armoryLoading) {
@@ -665,6 +673,44 @@ function renderDrawerPreview() {
   }
 }
 
+function hostSupports(capability, legacyDefault = true) {
+  if (!hostCapabilities) return true;
+  if (Object.prototype.hasOwnProperty.call(hostCapabilities, capability)) {
+    return hostCapabilities[capability] === true;
+  }
+  return legacyDefault;
+}
+
+function supportsOptInHostFeature(capability) {
+  return hostSupports(capability, false);
+}
+
+function commandSectionAvailable(section) {
+  switch (section) {
+    case 'buy': return supportsOptInHostFeature('toolkitBridge');
+    case 'roster': return supportsOptInHostFeature('roster');
+    case 'work': return hostSupports('work');
+    case 'schedule': return hostSupports('schedule');
+    case 'policies': return ['outfit', 'drug', 'food', 'area'].some(key => hostSupports(key));
+    default: return true;
+  }
+}
+
+function syncCapabilityDrivenUi() {
+  const buyAvailable = commandSectionAvailable('buy');
+  document.querySelector('[data-command-menu-open="buy"]')?.classList.toggle('hidden', !buyAvailable);
+
+  if (!supportsOptInHostFeature('armory') && gearSourceMode === 'armory') {
+    gearSourceMode = 'nearby';
+    armoryState = null;
+    armoryLoading = false;
+  }
+  if (!commandSectionAvailable(activeCommandMenu)) activeCommandMenu = 'quick';
+
+  invalidatePanel('gear');
+  if (pawnState && !isSelectMenuOpen()) renderGear(pawnState);
+}
+
 function buildCapabilitySummary(msg) {
   if (!msg) return '';
   const missing = [];
@@ -676,6 +722,9 @@ function buildCapabilitySummary(msg) {
   if (msg.drug === false) missing.push('drug policy');
   if (msg.food === false) missing.push('food policy');
   if (msg.area === false) missing.push('areas');
+  if (!supportsOptInHostFeature('roster')) missing.push('colony roster');
+  if (!supportsOptInHostFeature('armory')) missing.push('armory');
+  if (!supportsOptInHostFeature('toolkitBridge')) missing.push('Toolkit store');
   if (!missing.length) return '';
   return `Host limits: ${missing.join(', ')}`;
 }
@@ -741,6 +790,16 @@ function capabilityKeyForAction(action) {
       return 'area';
     case 'trigger_event':
       return 'events';
+    case 'social_interact':
+      return 'socialInteractions';
+    case 'set_appearance':
+    case 'preview_appearance':
+      return 'appearancePreview';
+    case 'set_preferred_weapon':
+      return 'preferredWeapon';
+    case 'toolkit_refresh':
+    case 'toolkit_purchase':
+      return 'toolkitBridge';
     default:
       return null;
   }
@@ -748,7 +807,8 @@ function capabilityKeyForAction(action) {
 
 function getActionBlockedReason(action) {
   const capKey = capabilityKeyForAction(action);
-  if (capKey && hostCapabilities && hostCapabilities[capKey] === false) {
+  const legacyDefault = !OPT_IN_HOST_CAPABILITIES.has(capKey);
+  if (capKey && hostCapabilities && !hostSupports(capKey, legacyDefault)) {
     return 'Not supported by this host';
   }
 
@@ -2057,6 +2117,7 @@ function requestToolkitStateIfStale() {
 }
 
 function requestToolkitState(force = false) {
+  if (!supportsOptInHostFeature('toolkitBridge')) return;
   const now = Date.now();
   if (!force && now - lastToolkitRequestAt < 2500) return;
   lastToolkitRequestAt = now;
@@ -2065,6 +2126,11 @@ function requestToolkitState(force = false) {
 
 function requestArmory() {
   if (!pawnState) return;
+  if (!supportsOptInHostFeature('armory')) {
+    gearSourceMode = 'nearby';
+    armoryLoading = false;
+    return;
+  }
   const blocked = getActionBlockedReason('equip');
   if (blocked) {
     armoryState = { ok: false, message: blocked, items: [], total: 0, page: 0, pageCount: 1 };
@@ -2826,11 +2892,15 @@ function renderThoughts(thoughts) {
 function renderGear(s) {
   const el = $('gear-list');
   if (!el) return;
+  const armorySupported = supportsOptInHostFeature('armory');
+  if (!armorySupported && gearSourceMode === 'armory') gearSourceMode = 'nearby';
   const focusedSearch = document.activeElement?.matches?.('[data-armory-search]') === true;
   const searchStart = focusedSearch ? document.activeElement.selectionStart : null;
   const searchEnd = focusedSearch ? document.activeElement.selectionEnd : null;
-  const repairEntry = getArray(toolkitState?.entries)
-    .find(entry => String(entry?.sku || '').toLowerCase() === 'repairgear') || null;
+  const repairEntry = supportsOptInHostFeature('toolkitBridge')
+    ? (getArray(toolkitState?.entries)
+      .find(entry => String(entry?.sku || '').toLowerCase() === 'repairgear') || null)
+    : null;
   if (s && !panelChanged('gear', {
         weapon: s.weapon, apparel: s.apparel, inventory: s.inventory,
         nearby: s.nearbyEquipment, slot: activeGearSlot, sort: gearSortMode,
@@ -2930,7 +3000,7 @@ function renderGear(s) {
       <div class="gear-source-line">
         <span class="gear-source-toggle" role="group" aria-label="Equipment source">
           <button data-gear-source="nearby" class="${usingArmory ? '' : 'active'}">Nearby</button>
-          <button data-gear-source="armory" class="${usingArmory ? 'active' : ''}">Armory</button>
+          ${armorySupported ? `<button data-gear-source="armory" class="${usingArmory ? 'active' : ''}">Armory</button>` : ''}
         </span>
         ${usingArmory ? `<input data-armory-search type="search" value="${escapeAttr(armorySearch)}" placeholder="Search gear" aria-label="Search colony armory">` : ''}
       </div>
@@ -3243,7 +3313,7 @@ function renderGearRow(item) {
   // "should be able to set your preferred weapon even if it's equipped"
   // (viewer report 2026-08-04). Setting it on what you already hold is the
   // common case: keep re-equipping THIS weapon after a drop/downing.
-  const canPrefer = item.type === 'weapon' && item.defName;
+  const canPrefer = supportsOptInHostFeature('preferredWeapon') && item.type === 'weapon' && item.defName;
   const isPreferred = canPrefer && item.defName === preferredWeaponDef;
   const preferBtn = canPrefer
     ? `<button class="item-action gear-prefer${isPreferred ? ' active' : ''}" data-prefer-weapon="${escapeAttr(item.defName)}" title="${isPreferred ? 'Preferred — click to clear' : 'Auto-equip this weapon when available'}">${isPreferred ? '★' : '☆'}</button>`
@@ -3267,7 +3337,7 @@ function renderNearbyGearRow(item) {
     : '';
   // Weapons with a known defName get a "prefer" star — sets a standing order to
   // auto-equip this weapon type whenever one is available in the colony.
-  const canPrefer = item.type === 'weapon' && item.defName;
+  const canPrefer = supportsOptInHostFeature('preferredWeapon') && item.type === 'weapon' && item.defName;
   const isPreferred = canPrefer && item.defName === preferredWeaponDef;
   const preferBtn = canPrefer
     ? `<button class="item-action gear-prefer${isPreferred ? ' active' : ''}" data-prefer-weapon="${escapeAttr(item.defName)}" title="${isPreferred ? 'Preferred — click to clear' : 'Auto-equip this weapon when available'}">${isPreferred ? '★' : '☆'}</button>`
@@ -4336,6 +4406,7 @@ function handleHostCapabilities(msg) {
   markHostOnline('host_capabilities');
   const version = msg.rimworldVersion || 'unknown';
   appendLog(`Host capabilities loaded for RimWorld ${version}`);
+  syncCapabilityDrivenUi();
   syncCapabilityNotice();
   syncEventsTabAvailability();
   scheduleServerCameraZoom(true);
@@ -4596,6 +4667,7 @@ function markHostOffline() {
   hostOnline = false;
   hostCapabilities = null;
   activeVote = false;
+  syncCapabilityDrivenUi();
   syncEventsTabAvailability();
   const speedEl = $('host-speed');
   if (speedEl) {
@@ -5058,6 +5130,7 @@ let rosterState = null;      // last roster_state payload
 let rosterRequestedAt = 0;   // throttle re-requests to one per 5s
 
 function requestRoster() {
+  if (!supportsOptInHostFeature('roster')) return;
   const now = Date.now();
   if (now - rosterRequestedAt < 5000) return;
   rosterRequestedAt = now;
@@ -5379,7 +5452,7 @@ function openCommandWindow(section = activeCommandMenu || 'quick') {
   if (section !== activeCommandMenu && (section === 'buy' || section === 'story')) {
     lastBuyFeedback = null;
   }
-  activeCommandMenu = section;
+  activeCommandMenu = commandSectionAvailable(section) ? section : 'quick';
   commandWindow?.classList.remove('hidden');
   document.body.classList.add('command-window-open');
   renderCommandCenter();
@@ -5418,7 +5491,7 @@ function renderConnectionPanel() {
     cls = 'wait';
   } else {
     const name = pawnState.name || 'your pawn';
-    summary = `Assigned to ${name} — all commands available`;
+    summary = `Assigned to ${name} — orders ready`;
     cls = 'ok';
   }
 
@@ -5431,7 +5504,7 @@ function renderStatusPill(label, ok, value) {
 
 function renderCommandMenuNav() {
   if (!commandMenuNav) return;
-  commandMenuNav.innerHTML = COMMAND_MENU_SECTIONS.map(section =>
+  commandMenuNav.innerHTML = COMMAND_MENU_SECTIONS.filter(section => commandSectionAvailable(section.id)).map(section =>
     `<button class="command-nav-btn${activeCommandMenu === section.id ? ' active' : ''}" data-command-section="${escapeAttr(section.id)}">${escapeHtml(section.label)}</button>`
   ).join('');
 }
@@ -5750,6 +5823,7 @@ function renderStoryPurchaseRow(row) {
 }
 
 function renderFreeAppearanceControls(state) {
+  if (!supportsOptInHostFeature('appearancePreview')) return '';
   const appearance = state?.appearance || {};
   const hairOptions = getArray(appearance.hairOptions);
   const genderOptions = getArray(appearance.genderOptions);
@@ -6712,6 +6786,7 @@ function handleCommandCenterClick(event) {
   const section = event.target.closest('[data-command-section]');
   if (section) {
     const nextSection = section.dataset.commandSection || 'quick';
+    if (!commandSectionAvailable(nextSection)) return;
     // Same stale-feedback clear as openCommandWindow — this is the in-window tab
     // switch, which is the path the viewer actually reported.
     if (nextSection !== activeCommandMenu && (nextSection === 'buy' || nextSection === 'story')) {

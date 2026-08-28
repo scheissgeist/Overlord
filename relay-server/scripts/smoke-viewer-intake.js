@@ -15,6 +15,27 @@ const WS_URL = `ws://127.0.0.1:${PORT}/ws`;
 const VIEWER_LOGIN = 'broteam';
 const VIEWER_DISPLAY = 'BroTeam';
 const PAWN_ID = 10101;
+const FULL_HOST_CAPABILITIES = {
+  type: 'host_capabilities',
+  rimworldVersion: '1.6.4633',
+  viewerProtocol: 2,
+  work: true,
+  schedule: true,
+  outfit: true,
+  drug: true,
+  food: true,
+  area: true,
+  contextMenu: true,
+  serverCameraZoom: true,
+  toolkitBridge: true,
+  storyPurchaseArguments: true,
+  roster: true,
+  armory: true,
+  preferredWeapon: true,
+  appearancePreview: true,
+  socialInteractions: true,
+  commandResults: true,
+};
 const SCREENSHOT_DIR = process.env.OVERLORD_SMOKE_SCREENSHOTS
   ? path.resolve(ROOT, '..', 'output', 'playwright')
   : '';
@@ -216,17 +237,7 @@ async function main() {
       throw new Error(`Viewer intake request storm: state=${initialStateRequests.length}, toolkit=${initialToolkitRequests.length}`);
     }
 
-    hostWs.send(JSON.stringify({
-      type: 'host_capabilities',
-      target: VIEWER_LOGIN,
-      rimworldVersion: '1.6.4633',
-      work: true,
-      schedule: true,
-      contextMenu: true,
-      serverCameraZoom: true,
-      toolkitBridge: true,
-      storyPurchaseArguments: true,
-    }));
+    hostWs.send(JSON.stringify({ ...FULL_HOST_CAPABILITIES, target: VIEWER_LOGIN }));
 
     hostWs.send(JSON.stringify({
       type: 'colonist_list',
@@ -1061,11 +1072,7 @@ async function main() {
 
     const eventsTab = page.locator('[data-tab="events"]');
     if (await eventsTab.isVisible()) throw new Error('Events tab should be hidden when host event capability is disabled');
-    hostWs.send(JSON.stringify({
-      type: 'host_capabilities', target: VIEWER_LOGIN, rimworldVersion: '1.6.4633',
-      work: true, schedule: true, contextMenu: true, serverCameraZoom: true,
-      toolkitBridge: true, storyPurchaseArguments: true, events: true,
-    }));
+    hostWs.send(JSON.stringify({ ...FULL_HOST_CAPABILITIES, target: VIEWER_LOGIN, events: true }));
     hostWs.send(JSON.stringify({ type: 'ticket_update', target: VIEWER_LOGIN, tickets: 2 }));
     await eventsTab.waitFor({ state: 'visible', timeout: 10000 });
     await eventsTab.click();
@@ -1078,11 +1085,7 @@ async function main() {
     if (SCREENSHOT_DIR) {
       await page.locator('#bottom-panel').screenshot({ path: path.join(SCREENSHOT_DIR, 'overlord-events-compact.png') });
     }
-    hostWs.send(JSON.stringify({
-      type: 'host_capabilities', target: VIEWER_LOGIN, rimworldVersion: '1.6.4633',
-      work: true, schedule: true, contextMenu: true, serverCameraZoom: true,
-      toolkitBridge: true, storyPurchaseArguments: true, events: false,
-    }));
+    hostWs.send(JSON.stringify({ ...FULL_HOST_CAPABILITIES, target: VIEWER_LOGIN, events: false }));
     await eventsTab.waitFor({ state: 'hidden', timeout: 10000 });
 
     // Very narrow browsers use the stacked Gear layout. Vertical detail scrolling
@@ -1184,6 +1187,48 @@ async function main() {
     if (!reconnectCommandStatus.includes(`Assigned to ${VIEWER_DISPLAY}`)) {
       throw new Error(`Reconnect command state regression: ${reconnectCommandStatus}`);
     }
+
+    // A new browser against an older/limited host must remove opt-in controls
+    // instead of letting them send commands that host will never answer.
+    await page.click('[data-command-section="roster"]');
+    await page.waitForSelector('.command-nav-btn.active[data-command-section="roster"]', { timeout: 10000 });
+    hostWs.send(JSON.stringify({
+      type: 'host_capabilities',
+      target: VIEWER_LOGIN,
+      rimworldVersion: 'legacy-smoke',
+      work: true,
+      schedule: true,
+      outfit: true,
+      drug: true,
+      food: true,
+      area: true,
+      contextMenu: true,
+      events: false,
+    }));
+    await page.waitForFunction(() =>
+      document.querySelector('.command-nav-btn.active')?.dataset.commandSection === 'quick' &&
+      !document.querySelector('[data-command-section="buy"]') &&
+      !document.querySelector('[data-command-section="roster"]') &&
+      document.getElementById('btn-buy-menu')?.classList.contains('hidden'),
+      null,
+      { timeout: 10000 });
+    await page.click('[data-command-section="story"]');
+    const degradedCapabilities = await page.evaluate(() => ({
+      activeSection: document.querySelector('.command-nav-btn.active')?.dataset.commandSection,
+      buyNav: !!document.querySelector('[data-command-section="buy"]'),
+      rosterNav: !!document.querySelector('[data-command-section="roster"]'),
+      buyShortcutHidden: document.getElementById('btn-buy-menu')?.classList.contains('hidden'),
+      armoryControls: document.querySelectorAll('[data-gear-source="armory"]').length,
+      preferredWeaponControls: document.querySelectorAll('[data-prefer-weapon]').length,
+      appearanceControls: document.querySelectorAll('.appearance-once').length,
+    }));
+    if (degradedCapabilities.activeSection !== 'story' ||
+        degradedCapabilities.buyNav || degradedCapabilities.rosterNav ||
+        !degradedCapabilities.buyShortcutHidden || degradedCapabilities.armoryControls !== 0 ||
+        degradedCapabilities.preferredWeaponControls !== 0 || degradedCapabilities.appearanceControls !== 0) {
+      throw new Error(`Capability degradation regression: ${JSON.stringify(degradedCapabilities)}`);
+    }
+    await page.click('[data-command-section="quick"]');
     await page.click('#btn-command-close');
 
     const result = await page.evaluate(reconnectCount => ({
@@ -1198,6 +1243,7 @@ async function main() {
       reconnectJoins: reconnectCount,
       viewport: { width: innerWidth, height: innerHeight },
     }), reconnectJoins);
+    result.degradedCapabilities = degradedCapabilities;
 
     const summarizedHostMessages = SUMMARY_OUTPUT
       ? {
