@@ -123,6 +123,16 @@ namespace Overlord
                 if (!isAdminCommand) return ErrorResult("Only the streamer can create stream markers");
                 return ExecuteStreamMarker(json);
             }
+            if (action == "start_goal")
+            {
+                if (!isAdminCommand) return ErrorResult("Only the streamer can start community goals");
+                return ExecuteStartGoal(json);
+            }
+            if (action == "end_goal")
+            {
+                if (!isAdminCommand) return ErrorResult("Only the streamer can end community goals");
+                return ExecuteEndGoal();
+            }
             if (action == "ban")
             {
                 if (!isAdminCommand) return ErrorResult("Admin only");
@@ -1638,6 +1648,24 @@ namespace Overlord
             comp.CreateStreamMarker(label);
             label = string.IsNullOrWhiteSpace(label) ? "Marker" : label.Trim();
             return SuccessResult($"VOD marker saved: {label}");
+        }
+
+        private static Dictionary<string, object> ExecuteStartGoal(string json)
+        {
+            string title = JsonHelper.ExtractString(json, "title");
+            int target = JsonHelper.ExtractInt(json, "target", 25);
+            var goal = OverlordGameComponent.Instance?.CommunityGoalManager;
+            if (goal == null) return ErrorResult("Community goals are not available");
+            goal.StartGoal(title, target);
+            return SuccessResult($"Community goal started: {goal.title} (0/{goal.target})");
+        }
+
+        private static Dictionary<string, object> ExecuteEndGoal()
+        {
+            var goal = OverlordGameComponent.Instance?.CommunityGoalManager;
+            if (goal == null || (!goal.active && !goal.completed)) return ErrorResult("No community goal is running");
+            goal.ClearGoal();
+            return SuccessResult("Community goal ended");
         }
 
         private static Dictionary<string, object> ExecuteBan(string username, string json, ViewerManager vm)

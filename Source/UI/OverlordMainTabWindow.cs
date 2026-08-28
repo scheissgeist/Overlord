@@ -42,6 +42,8 @@ namespace Overlord
         private string broadcastText = "";
         private string voteQuestion  = "";
         private string voteOptions   = "";
+        private string goalTitle     = "";
+        private string goalTarget    = "25";
 
         private bool advancedInspectorExpanded = false;
 
@@ -77,7 +79,7 @@ namespace Overlord
             DrawFineBorder(inRect, BrassDimColor);
 
             float summaryHeight = inRect.width < 960f ? 128f : 108f;
-            float actionHeight  = inRect.width < 720f ? 126f : 102f;
+            float actionHeight  = inRect.width < 720f ? 164f : 140f;
 
             var summaryRect = new Rect(inRect.x, inRect.y, inRect.width, summaryHeight);
             DrawSummaryBar(summaryRect, comp, vm, colonists);
@@ -1028,7 +1030,7 @@ namespace Overlord
 
         private void DrawActionStrip(Rect rect, OverlordGameComponent comp, ViewerManager vm)
         {
-            DrawPanel(rect, "Broadcast and Vote");
+            DrawPanel(rect, "Broadcast, Vote and Goal");
 
             float y      = rect.y + 30f;
             float innerX = rect.x + 12f;
@@ -1105,6 +1107,38 @@ namespace Overlord
 
                 if (BrassButton(new Rect(innerX + questionW + optionsW + 16f, y, buttonW, 28f), "Start Vote"))
                     TryStartVote(vote);
+            }
+
+            y += 38f;
+
+            var goal = comp.CommunityGoalManager;
+            if (goal.active || goal.completed)
+            {
+                string status = goal.completed ? "Complete" : $"{goal.progress}/{goal.target}";
+                Widgets.Label(new Rect(innerX, y + 4f, innerW - 130f, 22f), $"{goal.title} — {status}");
+                if (BrassButton(new Rect(innerX + innerW - 120f, y, 120f, 28f), goal.completed ? "Clear Goal" : "End Goal"))
+                    goal.ClearGoal();
+            }
+            else
+            {
+                float targetW = 72f;
+                float buttonW = 120f;
+                var titleRect = new Rect(innerX, y, innerW - targetW - buttonW - 16f, 28f);
+                var targetRect = new Rect(titleRect.xMax + 8f, y, targetW, 28f);
+                goalTitle = Widgets.TextField(titleRect, goalTitle);
+                goalTarget = Widgets.TextField(targetRect, goalTarget);
+                if (string.IsNullOrEmpty(goalTitle))
+                {
+                    GUI.color = MutedColor;
+                    Widgets.Label(new Rect(titleRect.x + 4f, titleRect.y + 6f, titleRect.width - 8f, 18f), "Community goal…");
+                    GUI.color = Color.white;
+                }
+                if (BrassButton(new Rect(targetRect.xMax + 8f, y, buttonW, 28f), "Start Goal"))
+                {
+                    int.TryParse(goalTarget, out int requestedTarget);
+                    goal.StartGoal(goalTitle, requestedTarget <= 0 ? 25 : requestedTarget);
+                    goalTitle = "";
+                }
             }
         }
 

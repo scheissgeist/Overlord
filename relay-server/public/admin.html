@@ -165,6 +165,16 @@
       </div>
       <div class="card" id="marker-list"><span class="none">No markers this stream</span></div>
 
+      <h2>Community goal</h2>
+      <div id="goal-idle" class="msg-bar">
+        <input id="goal-title" type="text" placeholder="Goal name" maxlength="80">
+        <input id="goal-target" type="number" value="25" min="1" max="100000" style="max-width:100px">
+        <button id="btn-start-goal">Start</button>
+      </div>
+      <div id="goal-active" class="card" style="display:none">
+        <div class="status-row"><span id="goal-status"></span><button id="btn-end-goal">End goal</button></div>
+      </div>
+
       <h2>Vote</h2>
       <div id="vote-idle">
         <div class="vote-bar">
@@ -195,6 +205,7 @@
     let activeVote = null;
     let recentCommandFailures = [];
     let streamMarkers = [];
+    let communityGoal = null;
     let adminLinkUp = false;
     let hostConnected = false;
     const requestedRoom = new URLSearchParams(location.search).get('room') || '';
@@ -275,6 +286,7 @@
               recentCommandFailures = Array.isArray(msg.recentCommandFailures) ? msg.recentCommandFailures : [];
               activeVote = msg.activeVote || null;
               streamMarkers = Array.isArray(msg.streamMarkers) ? msg.streamMarkers : [];
+              communityGoal = msg.communityGoal || null;
               $('host-status').innerHTML = msg.host ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
               $('viewer-count').textContent = liveViewers.length;
               $('uptime').textContent = formatUptime(msg.uptime);
@@ -282,6 +294,7 @@
               renderClaims();
               renderVote(activeVote);
               renderMarkers();
+              renderGoal();
               markFresh();
               renderExceptions();
               break;
@@ -350,6 +363,12 @@
               log(`VOD marker: ${msg.label || 'Marker'}`);
               break;
 
+            case 'community_goal':
+              communityGoal = msg;
+              renderGoal();
+              markFresh();
+              break;
+
             case 'game_info':
               hostConnected = true;
               markFresh();
@@ -412,6 +431,7 @@
         recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
         activeVote = data.activeVote || null;
         streamMarkers = Array.isArray(data.streamMarkers) ? data.streamMarkers : streamMarkers;
+        communityGoal = data.communityGoal || communityGoal;
         $('host-status').innerHTML = hostConnected ? '<span class="dot on"></span>Connected' : '<span class="dot off"></span>Disconnected';
         $('viewer-count').textContent = liveViewers.length;
         $('uptime').textContent = formatUptime(data.uptime);
@@ -419,6 +439,7 @@
         renderClaims();
         renderVote(activeVote);
         renderMarkers();
+        renderGoal();
         markFresh();
         renderExceptions();
       } catch (e) {
@@ -456,12 +477,14 @@
       recentCommandFailures = Array.isArray(data.recentCommandFailures) ? data.recentCommandFailures : recentCommandFailures;
       activeVote = data.activeVote || null;
       streamMarkers = Array.isArray(data.streamMarkers) ? data.streamMarkers : streamMarkers;
+      communityGoal = data.communityGoal || communityGoal;
       $('viewer-count').textContent = liveViewers.length;
       $('uptime').textContent = formatUptime(data.uptime);
       renderViewers(liveViewers);
       renderClaims();
       renderVote(activeVote);
       renderMarkers();
+      renderGoal();
       markFresh();
       renderExceptions();
     }
@@ -638,6 +661,32 @@
         return `<div class="status-row"><span>${esc(when)} · ${esc(marker.label || 'Marker')}</span><span class="label">${esc(game)}</span></div>`;
       }).join('');
     }
+
+    function renderGoal() {
+      const visible = communityGoal && (communityGoal.active || communityGoal.completed);
+      $('goal-idle').style.display = visible ? 'none' : '';
+      $('goal-active').style.display = visible ? '' : 'none';
+      if (!visible) return;
+      const progress = Number(communityGoal.progress || 0);
+      const target = Math.max(1, Number(communityGoal.required || 1));
+      const state = communityGoal.completed ? 'Complete' : `${progress}/${target}`;
+      $('goal-status').textContent = `${communityGoal.title || 'Community goal'} — ${state}`;
+      $('btn-end-goal').textContent = communityGoal.completed ? 'Clear goal' : 'End goal';
+    }
+
+    $('btn-start-goal').addEventListener('click', async () => {
+      const title = $('goal-title').value.trim();
+      const target = Math.max(1, Math.min(100000, Number($('goal-target').value) || 25));
+      if (!title) { log('Goal needs a name'); return; }
+      await api('/admin/host-command', { command: { type: 'command', action: 'start_goal', adminCommand: true, source: 'admin', title, target } });
+      log(`Goal requested: ${title} (0/${target})`);
+      $('goal-title').value = '';
+    });
+
+    $('btn-end-goal').addEventListener('click', async () => {
+      await api('/admin/host-command', { command: { type: 'command', action: 'end_goal', adminCommand: true, source: 'admin' } });
+      log('Goal end requested');
+    });
 
     $('btn-start-vote').addEventListener('click', async () => {
       const q = $('vote-q').value.trim();

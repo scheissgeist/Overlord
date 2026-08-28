@@ -132,6 +132,10 @@ async function main() {
       type: 'stream_marker', label: 'Raid survived', gameTick: 123456,
       day: 18, hour: 22, year: 5501, season: 'Jugust', mapName: 'Smoke Colony', adminOnly: true,
     }));
+    hostWs.send(JSON.stringify({
+      type: 'community_goal', active: true, completed: false,
+      title: 'Issue ten orders', progress: 4, required: 10, startedTick: 123000,
+    }));
 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -156,10 +160,22 @@ async function main() {
       throw new Error(`Pending claim did not replay into admin UI: ${claimText}`);
     }
     await waitFor(async () => (await page.locator('#marker-list').textContent()).includes('Raid survived'), 'replayed VOD marker');
+    await waitFor(async () => (await page.locator('#goal-status').textContent()).includes('Issue ten orders — 4/10'), 'replayed community goal');
 
     await page.fill('#marker-input', 'Trade ship arrived');
     await page.click('#btn-marker');
     await waitFor(() => hostMessages.find(msg => msg.type === 'command' && msg.action === 'mark_stream' && msg.label === 'Trade ship arrived'), 'host VOD marker command');
+
+    hostWs.send(JSON.stringify({ type: 'community_goal', active: false, completed: false, title: '', progress: 0, required: 25 }));
+    await page.waitForSelector('#goal-idle:not([style*="display: none"])');
+    await page.fill('#goal-title', 'Complete thirty orders');
+    await page.fill('#goal-target', '30');
+    await page.click('#btn-start-goal');
+    await waitFor(() => hostMessages.find(msg => msg.type === 'command' && msg.action === 'start_goal' && msg.title === 'Complete thirty orders' && msg.target === 30), 'host community goal start command');
+    hostWs.send(JSON.stringify({ type: 'community_goal', active: true, completed: false, title: 'Complete thirty orders', progress: 0, required: 30 }));
+    await page.waitForSelector('#goal-active:not([style*="display:none"])');
+    await page.click('#btn-end-goal');
+    await waitFor(() => hostMessages.find(msg => msg.type === 'command' && msg.action === 'end_goal'), 'host community goal end command');
 
     await page.locator('#claim-list button', { hasText: 'Reject' }).click();
     await waitFor(() => hostMessages.find(msg => msg.type === 'claim_response' && msg.username === VIEWER_LOGIN), 'host claim_response');
@@ -210,6 +226,8 @@ async function main() {
         activeVoteReplayed: true,
         streamMarkerReplayed: true,
         streamMarkerCommandReachedHost: true,
+        communityGoalReplayed: true,
+        communityGoalCommandsReachedHost: true,
         claimActionNotOptimistic: true,
         hostResolutionClearedClaim: true,
         crossRoomAdminEventsIsolated: true,

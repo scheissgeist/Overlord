@@ -55,6 +55,7 @@ namespace Overlord
         public const string RosterState = "roster_state";
         public const string ViewerSummary = "viewer_summary";
         public const string StreamMarker = "stream_marker";
+        public const string CommunityGoal = "community_goal";
 
         // --- Browser -> Game (incoming) ---
         public const string Command = "command";

@@ -5,7 +5,7 @@ const WS_URL = (() => {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 })();
-const UI_BUILD = '20260828-stream-markers-v1';
+const UI_BUILD = '20260828-community-goals-v1';
 
 // Twitch OAuth — the relay injects TWITCH_CLIENT_ID into <body> when it serves the
 // page. Absent, /auth/twitch returns 503 and the Twitch button cannot work; there is
@@ -59,6 +59,7 @@ let relayCapabilities = null;
 let negotiatedMapTransport = null;
 let viewerPermissions = null;
 let viewerSummary = null;
+let communityGoalState = null;
 let toolkitState = null;
 let toolkitStateAt = 0; // when the current toolkitState arrived (staleness check)
 let colonyResources = null;
@@ -204,6 +205,8 @@ const lobbyDeathCopy = $('lobby-death-copy');
 const lobbySummary = $('lobby-summary');
 const lobbyTickets = $('lobby-tickets');
 const lobbyCapabilities = $('lobby-capabilities');
+const communityGoalLobby = $('community-goal-lobby');
+const communityGoalMain = $('community-goal-main');
 const colonistList = $('colonist-list');
 
 const pawnPortrait = $('pawn-portrait');
@@ -1371,6 +1374,39 @@ function handleViewerSummary(message) {
   }
 }
 
+function renderCommunityGoal() {
+  const goal = communityGoalState;
+  const visible = !!goal && (goal.active || goal.completed);
+  for (const el of [communityGoalLobby, communityGoalMain]) {
+    if (!el) continue;
+    el.classList.toggle('hidden', !visible);
+    el.classList.toggle('complete', !!goal?.completed);
+    if (!visible) { el.innerHTML = ''; continue; }
+    const progress = Math.max(0, Number(goal.progress) || 0);
+    const target = Math.max(1, Number(goal.required) || 1);
+    const percent = Math.max(0, Math.min(100, progress / target * 100));
+    const count = goal.completed ? 'Complete' : `${progress}/${target}`;
+    el.innerHTML = `<div class="community-goal-head"><span class="community-goal-title">${escapeHtml(goal.title || 'Community goal')}</span><span class="community-goal-count">${escapeHtml(count)}</span></div>` +
+      `<div class="community-goal-track"><div class="community-goal-fill" style="width:${percent}%"></div></div>`;
+  }
+}
+
+function handleCommunityGoal(message) {
+  const wasComplete = communityGoalState?.completed === true;
+  communityGoalState = {
+    active: message?.active === true,
+    completed: message?.completed === true,
+    title: String(message?.title || ''),
+    progress: Math.max(0, Number(message?.progress) || 0),
+    required: Math.max(1, Number(message?.required) || 1),
+  };
+  renderCommunityGoal();
+  if (!wasComplete && communityGoalState.completed) {
+    appendLog(`Community goal complete: ${communityGoalState.title || 'Community goal'}`);
+    playSound('vote');
+  }
+}
+
 function normalizeViewer(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -2248,6 +2284,7 @@ function handleMessage(msg) {
     case 'pawn_died':        handlePawnDied(msg);        break;
     case 'action_log':       handleActionLog(msg);       break;
     case 'viewer_summary':   handleViewerSummary(msg);   break;
+    case 'community_goal':   handleCommunityGoal(msg);   break;
     case 'portal_available': handlePortalAvailable(msg); break;
     case 'ticket_update':    handleTicketUpdate(msg);    break;
     case 'game_info':        handleGameInfo(msg);        break;

@@ -331,6 +331,7 @@ const REPLAYABLE_TARGETED_TYPES = new Set([
 const REPLAYABLE_ROOM_TYPES = new Set([
   'game_info',
   'vote_update',
+  'community_goal',
 ]);
 const REPLAY_ORDER = [
   'host_capabilities',
@@ -350,6 +351,7 @@ const REPLAY_ORDER = [
 ];
 const ROOM_REPLAY_ORDER = [
   'game_info',
+  'community_goal',
 ];
 const CLEAR_VIEWER_CACHE_TYPES = new Set([
   'viewer_kick',
@@ -614,6 +616,12 @@ function cachedActiveVote(room) {
   }
 }
 
+function cachedCommunityGoal(room) {
+  const cached = room?.roomReplayCache?.get('community_goal');
+  if (!cached) return null;
+  try { return JSON.parse(cached.text); } catch { return null; }
+}
+
 function adminRoomState(room) {
   return {
     pendingClaims: room ? Array.from(room.pendingClaims.values()).map(claim => ({
@@ -622,6 +630,7 @@ function adminRoomState(room) {
     })) : [],
     recentCommandFailures: recentCommandFailures(room),
     activeVote: cachedActiveVote(room),
+    communityGoal: cachedCommunityGoal(room),
     streamMarkers: room ? room.streamMarkers.slice(-20).reverse() : [],
   };
 }

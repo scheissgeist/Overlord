@@ -91,6 +91,8 @@ namespace Overlord
             RespawnManager.ClearCooldowns();
             if (viewerManager == null)
                 viewerManager = new ViewerManager();
+            if (communityGoalManager == null)
+                communityGoalManager = new CommunityGoalManager();
 
             var settings = OverlordMod.Settings;
 
@@ -106,6 +108,7 @@ namespace Overlord
                     LogUtil.Log("Connected to relay server");
                     SendHostCapabilities(adminOnly: true);
                     viewerManager?.SendColonistList();
+                    communityGoalManager?.BroadcastState();
                 };
                 relayClient.OnDisconnected += () => LogUtil.Warn("Disconnected from relay server");
                 relayClient.OnMessageReceived += OnRelayMessage;
@@ -126,6 +129,7 @@ namespace Overlord
                         SendHostCapabilities(user);
                         viewerManager.SendPermissions(user);
                         viewerManager.SendGameInfoNow(user);
+                        communityGoalManager?.SendState(user);
                     });
                 };
                 embeddedServer.OnViewerDisconnected += user =>
@@ -252,11 +256,14 @@ namespace Overlord
                 viewerManager = new ViewerManager();
 
             Scribe_Deep.Look(ref viewerManager, "viewerManager");
+            Scribe_Deep.Look(ref communityGoalManager, "communityGoalManager");
 
             if (Scribe.mode == LoadSaveMode.PostLoadInit)
             {
                 if (viewerManager == null)
                     viewerManager = new ViewerManager();
+                if (communityGoalManager == null)
+                    communityGoalManager = new CommunityGoalManager();
             }
         }
 
@@ -412,6 +419,7 @@ namespace Overlord
             viewerManager.SendPermissions(username);
             viewerManager.SendViewerSummary(username,
                 restoredPreviousPawn ? "restored" : returning ? "rejoined" : "joined");
+            communityGoalManager?.SendState(username);
             // Force game_info so late joiners don't stay stuck on "Host waiting".
             viewerManager.SendGameInfoNow(username);
 
@@ -494,7 +502,9 @@ namespace Overlord
             if (ok && !silent && !isAdminCommand && !string.IsNullOrEmpty(username))
             {
                 var session = viewerManager?.GetSession(username);
-                session?.RecordSuccessfulAction(action);
+                bool countedForGoal = session?.RecordSuccessfulAction(action) == true;
+                if (countedForGoal)
+                    communityGoalManager?.Advance(username, action);
                 var summary = viewerManager?.BuildViewerSummary(username, "command");
                 if (result != null && summary != null)
                     result["viewerSummary"] = summary;
@@ -829,6 +839,7 @@ namespace Overlord
             var session = viewerManager.GetSession(username);
             // Always refresh host clock/speed for this viewer, even before assignment.
             viewerManager?.SendGameInfoNow(username);
+            communityGoalManager?.SendState(username);
             if (session == null || !session.HasPawn) return;
 
             // Fresh slow-tier hash so lastStateHash matches the serialized payload.
@@ -1088,5 +1099,7 @@ namespace Overlord
 
         private VoteManager voteManager = new VoteManager();
         public VoteManager VoteManager => voteManager;
+        private CommunityGoalManager communityGoalManager = new CommunityGoalManager();
+        public CommunityGoalManager CommunityGoalManager => communityGoalManager;
     }
 }

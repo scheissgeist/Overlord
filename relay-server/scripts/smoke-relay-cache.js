@@ -252,6 +252,10 @@ async function main() {
     ];
 
     const initialViewerCursor = viewerMessages.length;
+    send(hostWs, {
+      type: 'community_goal', active: true, completed: false,
+      title: 'Cache community actions', progress: 6, required: 20, startedTick: 44000,
+    });
     for (const msg of targetedMessages) send(hostWs, msg);
     send(hostWs, {
       type: 'map_manifest',
@@ -273,6 +277,7 @@ async function main() {
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'map_delta', 'viewer map_delta delivery', msg => msg.mapEpoch === 7 && msg.seq === 11);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'entity_keyframe', 'viewer entity_keyframe delivery', msg => msg.mapEpoch === 7 && msg.entityCount === 1);
     await waitForMessageAfter(viewerMessages, initialViewerCursor, 'viewer_summary', 'viewer summary delivery', msg => msg.commands === 12);
+    await waitForMessageAfter(viewerMessages, initialViewerCursor, 'community_goal', 'community goal delivery', msg => msg.progress === 6 && msg.required === 20);
 
     const diagnostics = await readReplayCacheDiagnostics();
     const expectedCachedTypes = ['permissions', 'viewer_summary', 'pawn_state', 'map_manifest', 'map_full', 'map_delta', 'entity_keyframe'];
@@ -353,6 +358,7 @@ async function main() {
     await waitForMessageAfter(reconnectMessages, 0, 'map_delta', 'cached map_delta replay on reconnect', msg => msg.mapEpoch === 7 && msg.seq === 11 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'entity_keyframe', 'cached entity_keyframe replay on reconnect', msg => msg.mapEpoch === 7 && msg.entityCount === 1 && msg.relayCached === true);
     await waitForMessageAfter(reconnectMessages, 0, 'viewer_summary', 'cached viewer summary replay on reconnect', msg => msg.commands === 12 && msg.relayCached === true);
+    await waitForMessageAfter(reconnectMessages, 0, 'community_goal', 'cached community goal replay on reconnect', msg => msg.progress === 6 && msg.relayCached === true);
 
     const replacementSession = await requestJson('POST', '/admin/viewer-session', {
       login: VIEWER_LOGIN,
@@ -381,6 +387,7 @@ async function main() {
         mapReplayDelivered: true,
         stateResyncNotForwardedToHost: true,
         reconnectReplayDelivered: true,
+        communityGoalRoomReplayDelivered: true,
         adminSessionClearedCache: true,
         tacticalMapDisabledClearedMapCache: true,
         relayCachedReplayAnnotated: true,

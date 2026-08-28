@@ -214,12 +214,12 @@ namespace Overlord
             ResetTacticalMapStream();
         }
 
-        public void RecordSuccessfulAction(string action)
+        public bool RecordSuccessfulAction(string action)
         {
             if (action == StateProtocol.CmdToolkitPurchase)
             {
                 completedPurchases++;
-                return;
+                return true;
             }
 
             // Transport, discovery, and claim operations are not pawn orders.
@@ -228,9 +228,10 @@ namespace Overlord
                 action == StateProtocol.CmdContextMenu ||
                 action == StateProtocol.CmdClaimColonist ||
                 action == StateProtocol.CmdPreviewAppearance)
-                return;
+                return false;
 
             completedCommands++;
+            return true;
         }
 
         public void ResetTacticalMapStream()

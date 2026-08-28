@@ -35,6 +35,7 @@ const FULL_HOST_CAPABILITIES = {
   appearancePreview: true,
   socialInteractions: true,
   commandResults: true,
+  communityGoals: true,
 };
 const SCREENSHOT_DIR = process.env.OVERLORD_SMOKE_SCREENSHOTS
   ? path.resolve(ROOT, '..', 'output', 'playwright')
@@ -243,6 +244,10 @@ async function main() {
       commands: 7, purchases: 2, assignments: 1, deaths: 0, reconnects: 0,
       tickets: 3, lastPawnName: VIEWER_DISPLAY,
     }));
+    hostWs.send(JSON.stringify({
+      type: 'community_goal', active: true, completed: false,
+      title: 'Complete viewer orders', progress: 12, required: 25, startedTick: 123000,
+    }));
 
     hostWs.send(JSON.stringify({
       type: 'colonist_list',
@@ -254,6 +259,11 @@ async function main() {
     }));
 
     await page.waitForSelector('.colonist-row .claim-btn:not([disabled])', { timeout: 10000 });
+    await page.waitForFunction(() =>
+      document.getElementById('community-goal-lobby')?.textContent.includes('Complete viewer orders') &&
+      document.getElementById('community-goal-lobby')?.textContent.includes('12/25'),
+      null,
+      { timeout: 10000 });
     await page.click('.colonist-row .claim-btn');
 
     await waitFor(() => hostMessages.find(m =>
@@ -1261,10 +1271,24 @@ async function main() {
       commandWindowOpen: !document.getElementById('command-window')?.classList.contains('hidden'),
       activeCommandSection: document.querySelector('.command-nav-btn.active')?.textContent.trim(),
       commandStatus: document.querySelector('#command-window-status .status-summary')?.textContent.trim(),
+      communityGoal: document.getElementById('community-goal-main')?.textContent.trim(),
       reconnectJoins: reconnectCount,
       viewport: { width: innerWidth, height: innerHeight },
     }), reconnectJoins);
     result.degradedCapabilities = degradedCapabilities;
+    if (!result.communityGoal.includes('Complete viewer orders') || !result.communityGoal.includes('12/25')) {
+      throw new Error(`Community goal did not survive assignment/reconnect: ${result.communityGoal}`);
+    }
+
+    hostWs.send(JSON.stringify({
+      type: 'community_goal', active: false, completed: true,
+      title: 'Complete viewer orders', progress: 25, required: 25, startedTick: 123000, completedTick: 124500,
+    }));
+    await page.waitForFunction(() =>
+      document.getElementById('community-goal-main')?.textContent.includes('Complete') &&
+      document.getElementById('community-goal-main')?.classList.contains('complete'),
+      null,
+      { timeout: 10000 });
 
     hostWs.send(JSON.stringify({
       type: 'pawn_died', target: VIEWER_LOGIN, pawnName: VIEWER_DISPLAY,
@@ -1279,7 +1303,8 @@ async function main() {
       document.body.dataset.viewerPhase === 'dead' &&
       document.getElementById('lobby-death-name')?.textContent.includes('has died') &&
       document.getElementById('lobby-summary')?.textContent.includes('1 death') &&
-      document.getElementById('lobby-summary')?.textContent.includes('8 orders'),
+      document.getElementById('lobby-summary')?.textContent.includes('8 orders') &&
+      document.getElementById('community-goal-lobby')?.textContent.includes('Complete'),
       null,
       { timeout: 10000 });
     result.deathSummary = await page.evaluate(() => ({
