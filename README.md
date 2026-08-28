@@ -9,11 +9,11 @@ Assign a colonist to a viewer and they get a live control panel: needs, health, 
 **You do not need Twitch, and you do not need to be streaming.** Overlord runs in two modes:
 
 - **Local / friends mode** — no Twitch, no relay, no stream. Friends open a link on your network and type any name. See [Play with friends](#play-with-friends-no-twitch-no-streaming) or the full **[Hosting guide](docs/HOSTING_GUIDE.md)**.
-- **Twitch / stream mode** — viewers log in with Twitch through a relay. You can **join a relay someone else runs** (paste their address, press one button — no account, no secret, no deploy) or run your own. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
+- **Online / stream mode** — the official Overlord relay is filled in by default. Press **Set me up** and the mod creates your isolated game room, stores its credential, and copies your viewer link. You can replace the address with any compatible relay or run your own. Start with the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 
 One relay can carry several games at once. Viewers landing on it see a list of what is live and pick one; a relay with a single game skips the list entirely.
 
-### Deploy your own relay
+### Optional: deploy your own relay
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/scheissgeist/Overlord)
 
@@ -21,9 +21,9 @@ One click, no CLI. Render reads [`render.yaml`](render.yaml) from this repo, whi
 already points the service at the `relay-server` folder and asks you for the two
 values below.
 
-The relay runs **under your own account**, so the bill (usually $0 on a free tier)
-is yours and never someone else's. You only need this if you want to run one —
-if a friend already has, use **Join this relay** in Mod Settings instead.
+The official Overlord relay is the default. Deploying your own is optional and gives
+you control over capacity, access, and login configuration. A custom relay runs under
+your own account, so its bill (usually $0 on a free tier) is yours.
 
 You will be asked for two values:
 
@@ -44,7 +44,7 @@ Railway only one-clicks templates published to its own marketplace, so there is 
 button here — after the import, set **Root Directory** to `relay-server` and add the
 two variables above by hand in the service's Variables tab.
 
-**Letting friends host on your relay:** set `OPEN_HOSTING=1`. They press Join in
+**Letting friends host on your custom relay:** set `OPEN_HOSTING=1`. They press **Set me up** in
 their own Mod Settings and get a room of their own — you never issue anyone a
 credential. `MAX_TOTAL_VIEWERS` (default 100) bounds what it can cost you, since
 their viewers use your bandwidth. `HOST_INVITE_CODE` limits it to people you gave a
@@ -64,13 +64,14 @@ Prefer the CLI, or want Fly.io / Docker? See **[docs/SELF_HOST.md](docs/SELF_HOS
 Viewers (browser + Twitch login)
         │
         ▼
-  Your relay server  ◄── RimWorld host (Overlord mod)
+  Overlord relay     ◄── RimWorld host (Overlord mod)
+  (or your own)
         │
         └── optional: Twitch Toolkit / ToolkitUtils for Buy / Story purchases
 ```
 
 - **Mod** — runs in RimWorld; sends pawn/map state; applies viewer commands.
-- **Relay** — Node server (Fly.io, Docker, or local). Carries one game by default, or several at once when the operator turns on open hosting.
+- **Relay** — the official multi-game Overlord service by default, or a compatible Node server you operate yourself.
 - **Viewers** — open your relay URL, log in with Twitch, claim or wait for assignment.
 
 Native pawn control (draft, move, work, gear) is Overlord. Toolkit **Buy** still needs Toolkit loaded and its Twitch chat client connected in RimWorld.
@@ -108,14 +109,14 @@ check the log — it states which one happened.
 1. Subscribe: [Overlord on Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3760983440)
 2. Also subscribe to **[Harmony](https://steamcommunity.com/workshop/filedetails/?id=2009463077)** (or install Harmony another way).
 3. Enable **Harmony**, then **Overlord**, in the RimWorld mod list.
-4. For streaming: **join a relay** a friend runs (Mod Settings → paste their address → **Join this relay**), or deploy your own. See the **[Hosting guide](docs/HOSTING_GUIDE.md)**. For playing with friends, you need neither.
+4. For streaming: choose **People anywhere / my stream**, leave the official Overlord address in place, and press **Set me up**. Replace the address only to use another relay. See the **[Hosting guide](docs/HOSTING_GUIDE.md)**. For local friends, you need neither.
 
 ### From a GitHub Release
 
 1. Download the latest **Release** zip.
 2. Unzip into `RimWorld/Mods/Overlord`.
 3. Enable **Harmony**, then **Overlord**.
-4. Join a relay or deploy your own — see the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
+4. Choose online play to use the prefilled Overlord relay, or replace the address with your own — see the **[Hosting guide](docs/HOSTING_GUIDE.md)**.
 
 ### From source
 
@@ -125,11 +126,11 @@ build.bat
 
 Or `dotnet build Overlord.csproj -c Release`. Close RimWorld before replacing the DLL.
 
-Then follow **[docs/SELF_HOST.md](docs/SELF_HOST.md)** for the relay, Twitch app, and mod settings.
+The official relay needs no server setup. Follow **[docs/SELF_HOST.md](docs/SELF_HOST.md)** only to operate your own relay.
 
 ---
 
-## Relay (short)
+## Optional self-hosted relay (short)
 
 ```bat
 cd relay-server
@@ -162,7 +163,7 @@ If you use Twitch Toolkit / ToolkitUtils:
 
 ## Acknowledgements
 
-Overlord is inspired by **[Puppeteer](https://github.com/pardeike/Puppeteer)** by **Andreas Pardeike (Brrainz)** — the original RimWorld mod that let Twitch viewers control colonists from a browser. Overlord is a new codebase aimed at RimWorld 1.5/1.6 and self-hosted relays; it is not affiliated with or maintained by the Puppeteer authors.
+Overlord is inspired by **[Puppeteer](https://github.com/pardeike/Puppeteer)** by **Andreas Pardeike (Brrainz)** — the original RimWorld mod that let Twitch viewers control colonists from a browser. Overlord is a new codebase aimed at RimWorld 1.5/1.6 with a shared default relay and optional self-hosting; it is not affiliated with or maintained by the Puppeteer authors.
 
 Harmony is by the same author: [HarmonyRimWorld](https://github.com/pardeike/HarmonyRimWorld).
 

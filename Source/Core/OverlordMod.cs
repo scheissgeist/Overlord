@@ -1,5 +1,6 @@
 using System.Reflection;
 using HarmonyLib;
+using RimWorld;
 using UnityEngine;
 using Verse;
 
@@ -208,6 +209,23 @@ namespace Overlord
         private static string stashedRelayUrl = "";
 
         /// <summary>
+        /// Opens the beginner online path with the project relay already filled in.
+        /// The field stays editable, so replacing it with a private/self-hosted relay
+        /// changes only this player's destination and keeps the same registration path.
+        /// </summary>
+        internal static void OpenOnlineSetup()
+        {
+            if (!Settings.HasRelayUrl)
+                Settings.relayUrl = OverlordSettings.OfficialRelayUrl;
+            uiTwitchMode = true;
+            uiModeInitialized = true;
+            RelayProbe.Reset();
+            RelayJoin.Reset();
+            Settings.Write();
+            Find.WindowStack.Add(new Dialog_ModSettings(Instance));
+        }
+
+        /// <summary>
         /// The first thing in the settings window, because it is the first thing a new
         /// streamer needs. This window used to open on four camera presets and a
         /// capture-bisect debug ladder; "how does anyone connect to me" was answered by
@@ -240,13 +258,17 @@ namespace Overlord
             {
                 if (Settings.HasRelayUrl) stashedRelayUrl = Settings.relayUrl;
                 Settings.relayUrl = "";
+                Settings.setupChoiceMade = true;
                 uiTwitchMode = false;
                 RelayProbe.Reset();
             }
             GUI.color = uiTwitchMode ? Color.green : off;
             if (Widgets.ButtonText(twitchRect, "People anywhere / my stream"))
             {
-                if (!Settings.HasRelayUrl) Settings.relayUrl = stashedRelayUrl;
+                if (!Settings.HasRelayUrl)
+                    Settings.relayUrl = string.IsNullOrWhiteSpace(stashedRelayUrl)
+                        ? OverlordSettings.OfficialRelayUrl
+                        : stashedRelayUrl;
                 uiTwitchMode = true;
                 RelayProbe.Reset();
             }
@@ -258,7 +280,7 @@ namespace Overlord
             // which is the only reading that matters. Never put a bare duration next to
             // the words "free tier"; say what the number measures, or drop it.
             listing.Label(uiTwitchMode
-                ? "    For people who are not on your home network. Someone has to run a small server for this; the easy way is to use one a friend already runs."
+                ? "    For people outside your home network. The Overlord relay is filled in for you; replace it only if you want to use another relay."
                 : "    Your game hands out a link that works on your home network. Nothing to sign up for, nothing to install, no accounts.");
             listing.Gap(6f);
 
@@ -349,10 +371,9 @@ namespace Overlord
         }
 
         // Two ways to be in relay mode, and they are wildly different amounts of work:
-        // JOIN a relay somebody else runs (paste an address, press a button, done), or
-        // RUN one yourself (an account, env vars, a Twitch app). The first is what
-        // almost everyone wants and it used to not exist, so it goes first and the
-        // second is folded away behind a toggle.
+        // use the project relay (already filled in, press a button), or RUN one yourself
+        // (an account, env vars, a Twitch app). The first is what almost everyone wants,
+        // so it goes first and the second is folded away behind a toggle.
         private static bool showRunMyOwn;
         private static string inviteCode = "";
         private static string joinLabel = "";
@@ -365,7 +386,7 @@ namespace Overlord
                 return;
             }
 
-            StepLabel(listing, false, "Paste the address a friend sent you, then press the button.");
+            StepLabel(listing, false, "Use the Overlord relay below, or replace it with your own address, then press Set me up.");
             // Spelled out because a tester went off and tried to generate a Twitch oauth
             // token to host with. Nothing in Overlord ever asks a host for one - that is
             // Twitch Toolkit's setup, a different and optional mod - but with nothing on
@@ -407,7 +428,7 @@ namespace Overlord
             Widgets.Label(new Rect(inviteRect.x + 2f, inviteRect.yMax + 1f, inviteRect.width, 18f), "invite code (only if given one)");
             GUI.color = hint;
             listing.Gap(18f);
-            listing.Label("        Leave both empty unless you were told otherwise. Only the address above is required.");
+            listing.Label("        The Overlord address is already filled in. Change it only for a private/self-hosted relay; leave the optional boxes empty unless told otherwise.");
 
             Color prev = GUI.color;
             switch (RelayJoin.State)
@@ -460,6 +481,11 @@ namespace Overlord
             {
                 GUI.color = Color.yellow;
                 listing.Label("NEXT: load or start a save. Nothing connects from the main menu — that is normal, not a fault.");
+            }
+            else if (comp.Relay == null)
+            {
+                GUI.color = Color.yellow;
+                listing.Label("NEXT: return to the main menu and load this save again. The current save started in friends mode before online setup finished.");
             }
             else
             {
@@ -545,6 +571,7 @@ namespace Overlord
             listing.Label("        TWITCH_CLIENT_ID - from the Twitch developer console. It goes on the relay, not here.");
             listing.Label("        ALLOW_GUEST_LOGIN=1 instead, with TWITCH_CLIENT_ID empty, lets viewers join by typing a name - no Twitch app at all. Anyone with the link can then join as anyone, so it is for a test or a private group.");
             listing.Label("        OPEN_HOSTING=1 lets OTHER streamers press Join and host on your relay. Their viewers cost your bandwidth, so MAX_ROOMS caps how many games at once.");
+            listing.Label("        After deployment, replace the official relay address above with your server's address.");
             var btnRow = listing.GetRect(30f);
             float third = (btnRow.width - 16f) / 3f;
             if (Widgets.ButtonText(new Rect(btnRow.x, btnRow.y, third, btnRow.height), "Hosting guide"))

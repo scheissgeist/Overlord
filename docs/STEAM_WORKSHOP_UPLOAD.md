@@ -12,7 +12,7 @@ Do **not** add Twitch Toolkit / ToolkitUtils as required (optional Buy/Story bri
 Do **not** add Puppeteer.  
 Leave Required DLC empty unless a hard DLC dependency appears later.
 
-The self-hosted relay cannot be a Steam Required Item — keep that clear in the description.
+The official relay is a web service, not a Steam Required Item. Self-hosting remains optional.
 
 ## Description / links
 

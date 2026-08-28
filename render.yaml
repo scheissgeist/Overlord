@@ -1,10 +1,9 @@
 # Render blueprint for the Overlord relay.
 #
 # This exists so the "Deploy to Render" button in README.md works: Render reads
-# this file to learn what to build. The relay is ONE service and is single-tenant
-# by construction (server.js keeps a single module-level hostSocket), so one
-# deployment serves exactly one streamer. Each streamer deploys their own under
-# their own account — that is what keeps the bill theirs.
+# this file to learn what to build. The relay is multi-tenant, but a new custom
+# deployment accepts only its owner by default. Set OPEN_HOSTING=1 to let other
+# streamers register isolated rooms; their viewers consume the operator's bandwidth.
 services:
   - type: web
     name: overlord-relay

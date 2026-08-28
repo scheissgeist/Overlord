@@ -4,17 +4,24 @@ namespace Overlord
 {
     public class OverlordSettings : ModSettings
     {
+        public const string OfficialRelayUrl = "https://overlord-relay.fly.dev";
+
         // Relay server URL (Fly.io or custom)
         public string relayUrl = "";
+
+        // Blank relayUrl is both the friends-mode runtime switch and the untouched
+        // default value, so it cannot prove the player deliberately chose local play.
+        // Persist the choice separately so a fresh install sees onboarding once.
+        public bool setupChoiceMade = false;
 
         // Pre-shared secret sent by the game host to authenticate with the relay.
         // Only used when YOU run the relay. Someone joining a relay another person
         // runs never touches this — see hostKey.
         public string hostSecret = "";
 
-        // Issued by the relay when you join one somebody else runs. The mod asks for
-        // it, stores it, and sends it; nobody types or copies a credential. This is
-        // what makes "anyone can host" reachable by a person who does not program.
+        // Issued when this game registers with the official or another shared relay.
+        // The mod asks for it, stores it, and sends it; nobody types or copies a
+        // credential. This is what makes online hosting reachable without server work.
         public string hostKey = "";
         public string roomId = "";
         // The link to hand to viewers, as the relay built it. Kept so the settings
@@ -116,6 +123,9 @@ namespace Overlord
         /// neither mode ran. Every relay/friends decision must go through this.
         /// </summary>
         public bool HasRelayUrl => !string.IsNullOrWhiteSpace(relayUrl);
+        public bool HasHostCredential => !string.IsNullOrWhiteSpace(hostKey)
+                                      || !string.IsNullOrWhiteSpace(hostSecret);
+        public bool IsRelayConfigured => HasRelayUrl && HasHostCredential;
 
         public override void ExposeData()
         {
@@ -123,6 +133,7 @@ namespace Overlord
             // A config saved before the trim fix can still hold padding.
             if (Scribe.mode == LoadSaveMode.LoadingVars || Scribe.mode == LoadSaveMode.PostLoadInit)
                 relayUrl = (relayUrl ?? string.Empty).Trim();
+            Scribe_Values.Look(ref setupChoiceMade, "setupChoiceMade", false);
             Scribe_Values.Look(ref hostSecret, "hostSecret", "");
             Scribe_Values.Look(ref hostKey, "hostKey", "");
             Scribe_Values.Look(ref roomId, "roomId", "");

@@ -7,7 +7,7 @@ Twitch viewers control your RimWorld colonists from a browser.
 
 [list]
 [*] [b]Local / friends mode[/b] — no Twitch, no relay, no stream. Leave the Relay URL blank in Mod Settings and your friends open your local address in a browser, type any name, and claim a colonist.
-[*] [b]Twitch / stream mode[/b] — viewers log in with Twitch through a relay. If a friend already runs one, paste their address into Mod Settings and press [b]Join this relay[/b]: no account, no secret, no server, no Twitch application. Otherwise run your own (one click on Render, free tier).
+[*] [b]Online / stream mode[/b] — the official Overlord relay is already filled in. Press [b]Set me up[/b] and the mod creates your room and copies your viewer link: no account, no secret, no server, no Twitch application. Replace the address only to use your own compatible relay.
 [/list]
 
 [b]Hosting needs no Twitch account and no token.[/b] Only your viewers sign in, and they just click a button on the link you send them. If something asks you for an oauth token, that is Twitch Toolkit — a different, optional mod.
@@ -46,17 +46,17 @@ Friends outside your network need a port-forward or a tunnel (Tailscale, cloudfl
 [*] Load a save. The settings screen shows the exact link to send your friends.
 [/olist]
 
-[b]Streaming on a relay a friend runs — about a minute:[/b]
+[b]Streaming through the Overlord relay — about a minute:[/b]
 [olist]
 [*] Subscribe to [b]Harmony[/b], then [b]Overlord[/b]. Enable both. Restart RimWorld.
-[*] Mod Settings → Overlord → [b]Stream to Twitch[/b] → paste their address → [b]Join this relay[/b].
-[*] Copy the link it gives you and load a save. That link is yours, not theirs.
+[*] Open the in-game Overlord tab → [b]People anywhere / my stream[/b]. The official relay address is already filled in.
+[*] Press [b]Set me up[/b]. Your link is copied automatically. Reload the save if setup began inside a running game.
 [/olist]
 
 [b]Running your own relay — about twenty minutes, once:[/b]
 [olist]
 [*] Deploy it from the GitHub page (one-click on Render, or Fly/Docker).
-[*] Mod Settings → Overlord → [b]I run my own relay[/b] → Generate a host secret, put the same value on the relay.
+[*] Mod Settings → Overlord → [b]Advanced: I want to run the server myself[/b] → Generate a host secret, put the same value on the relay.
 [*] Paste your relay's address, then press [b]Test connection[/b] before going live.
 [/olist]
 

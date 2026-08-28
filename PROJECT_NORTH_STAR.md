@@ -1,6 +1,6 @@
 # Overlord — Project North Star
 
-**One-line:** A RimWorld 1.5/1.6 mod that lets Twitch viewers control a streamer's colonists from a browser, via a self-hosted relay.
+**One-line:** A RimWorld 1.5/1.6 mod that lets viewers control a streamer's colonists from a browser, through the shared Overlord relay or an optional self-hosted relay.
 
 ## Ship criterion
 Overlord is **shipped and live** (Steam Workshop item `3760983440`, GitHub `scheissgeist/Overlord` `v0.1.0`). The bar for any change is now: **it must not regress a live, public mod that streamers run during broadcasts.** Correctness and frame-time (no stutter on the streamer's game) outrank new features.
@@ -10,7 +10,7 @@ Overlord is **shipped and live** (Steam Workshop item `3760983440`, GitHub `sche
 
 ## What the product is (the axis)
 - **Mod (this repo):** runs inside RimWorld; captures pawn/map state, renders per-viewer map frames, applies viewer commands. Must be a good citizen of the game's single main thread.
-- **Relay:** Node server (self-hosted); one host connection per instance. Not in this repo's hot path.
+- **Relay:** multi-tenant Node server; the project service is the default, while compatible self-hosting remains supported. Not in the mod's main-thread hot path.
 - **Viewers:** browser clients; get state + map frames, send commands.
 
 ## How to report back (Sean, 2026-08-05)

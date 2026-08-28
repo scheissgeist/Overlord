@@ -5,15 +5,15 @@ using System.Threading;
 namespace Overlord
 {
     /// <summary>
-    /// "Join this relay" — the one button a streamer who is not the relay operator
-    /// ever needs to press.
+    /// "Set me up" — the one button an online host normally needs to press.
     ///
     /// Why this exists: hosting used to require registering a Twitch application,
     /// deploying a Node server, inventing a HOST_SECRET and matching it in two
     /// places. That is a developer workflow, and most people asked to do it simply
-    /// do not. This collapses it to: paste the address a friend sent you, press
-    /// Join. The relay issues a room and a key, the mod stores them, and the mod
-    /// hands back a link to paste into chat. No secret is ever shown or typed.
+    /// do not. This collapses it to: use the prefilled Overlord relay (or replace
+    /// it with your own), press Set me up. The relay issues a room and a key, the
+    /// mod stores them, and hands back a link to paste into chat. No secret is ever
+    /// shown or typed.
     ///
     /// Threading matches RelayProbe: the request runs on a ThreadPool thread, the
     /// GUI only reads fields. Nothing here runs unless the button is pressed.
@@ -65,7 +65,7 @@ namespace Overlord
             if (string.IsNullOrEmpty(baseUrl))
             {
                 Finish(Status.Fail, "No address to set up with.",
-                       "Paste the address your friend sent you into the box, then press the button.");
+                       "Restore the Overlord relay address, or paste your own relay address, then press the button.");
                 return;
             }
 
@@ -144,6 +144,7 @@ namespace Overlord
 
             var settings = OverlordMod.Settings;
             settings.relayUrl = baseUrl;
+            settings.setupChoiceMade = true;
             settings.roomId = roomId;
             settings.hostKey = hostKey;
             settings.viewerUrl = baseUrl + (string.IsNullOrEmpty(viewerPath) ? "/g/" + roomId : viewerPath);

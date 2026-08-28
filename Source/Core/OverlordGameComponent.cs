@@ -94,11 +94,11 @@ namespace Overlord
 
             var settings = OverlordMod.Settings;
 
-            // IsNullOrWhiteSpace, not IsNullOrEmpty: a field holding one stray space is
-            // "not empty", which put the game into relay mode against an unparseable URL
-            // AND skipped the embedded server, so friends mode silently did not start
-            // either. A blank-looking box has to mean blank.
-            if (!string.IsNullOrWhiteSpace(settings.relayUrl))
+            // An address expresses setup intent; the issued key (or a self-host secret)
+            // grants host authority. Require both before leaving local mode. Otherwise
+            // opening online setup and closing it before "Set me up" would make the next
+            // save attempt an unauthenticated relay connection and disable friends mode.
+            if (settings.IsRelayConfigured)
             {
                 relayClient = new RelayClient(settings.relayUrl, settings.hostSecret, settings.hostKey);
                 relayClient.OnConnected += () =>

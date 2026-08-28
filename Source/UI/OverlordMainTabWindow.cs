@@ -91,16 +91,16 @@ namespace Overlord
         }
 
         /// <summary>
-        /// Set up = one of the two modes can actually serve someone. Friends mode needs
-        /// nothing at all, so a blank relay address counts as ready.
+        /// Set up = one of the two modes can actually serve someone. A blank relay URL
+        /// only counts as friends mode after the player explicitly chose it; otherwise
+        /// the untouched default would skip this first-run screen entirely.
         /// </summary>
         private static bool IsSetUp()
         {
             var settings = OverlordMod.Settings;
             if (settings == null) return true;                 // never block on a null
-            if (!settings.HasRelayUrl) return true;            // friends mode: nothing to do
-            return !string.IsNullOrEmpty(settings.hostKey)     // joined someone's relay
-                || !string.IsNullOrEmpty(settings.hostSecret); // running your own
+            if (!settings.HasRelayUrl) return settings.setupChoiceMade;
+            return settings.IsRelayConfigured;
         }
 
         /// <summary>
@@ -135,17 +135,18 @@ namespace Overlord
             if (Widgets.ButtonText(friendsRect, "People in my house"))
             {
                 OverlordMod.Settings.relayUrl = "";
+                OverlordMod.Settings.setupChoiceMade = true;
                 OverlordMod.Settings.Write();
             }
             if (Widgets.ButtonText(onlineRect, "People anywhere / my stream"))
             {
-                Find.WindowStack.Add(new Dialog_ModSettings(OverlordMod.Instance));
+                OverlordMod.OpenOnlineSetup();
             }
 
             listing.Gap(8f);
             GUI.color = MutedColor;
             listing.Label("Left: your game hands out a link that works on your home network. Nothing to sign up for.");
-            listing.Label("Right: opens the setup box. Paste the address a friend sent you and press one button — that is the whole thing.");
+            listing.Label("Right: opens online setup with the Overlord relay already filled in. Press one button, or replace the address with your own relay.");
             GUI.color = TextColor;
 
             listing.Gap(16f);

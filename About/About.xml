@@ -7,7 +7,7 @@
 
 Two ways to play:
 - With friends: leave the Relay URL blank in Mod Settings. The mod serves the page itself, friends open your local address and type any name. No Twitch, no relay, no streaming.
-- With Twitch viewers: they log in with Twitch through a relay you host. There is no shared public server; each streamer runs their own.
+- Online or with Twitch viewers: the official Overlord relay is filled in by default. Press Set me up and share the link it copies. You can replace the address with a compatible relay you run yourself.
 
 Mobile-first UI, narrow Harmony patch surface. Setup guide: https://github.com/scheissgeist/Overlord/blob/master/docs/HOSTING_GUIDE.md
 
