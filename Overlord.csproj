@@ -23,6 +23,7 @@
     <!-- The release smoke is its own executable project. Keep its source and
          generated obj files out of the RimWorld mod's default **/*.cs glob. -->
     <Compile Remove="relay-server\scripts\host-transport-smoke\**\*.cs" />
+    <Compile Remove="tools\**\*.cs" />
 
     <!-- RimWorld -->
     <Reference Include="Assembly-CSharp">
