@@ -1237,6 +1237,9 @@ function createViewerSession(login, displayName, ttlMs) {
 // and a solo viewer's 2.1M-pixel budget is ~3x that. 4 MiB leaves an order of
 // magnitude of headroom over the real traffic while cutting the abuse ceiling by 25x.
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4 * 1024 * 1024 });
+// Largest legitimate viewer message is a few hundred bytes (chat, a command, a
+// resync request with a short `wanted` list); 16 KiB leaves wide headroom.
+const MAX_VIEWER_MESSAGE_BYTES = 16 * 1024;
 
 wss.on('connection', (ws, req) => {
   const url     = new URL(req.url, 'http://localhost');
@@ -1500,6 +1503,15 @@ wss.on('connection', (ws, req) => {
           return;
         }
         sendTokens -= 1;
+
+        // maxPayload (4 MiB) is sized for HOST map frames on this same server. A
+        // viewer only ever sends small JSON commands, and each accepted one is parsed,
+        // logged and forwarded to the streamer's game: at 20 msg/s a viewer could
+        // otherwise push ~80 MB/s at the host.
+        if (raw.length > MAX_VIEWER_MESSAGE_BYTES) {
+          recordOps('viewer_message_rejected', { username: login, reason: 'too_large', bytes: raw.length });
+          return;
+        }
 
         // Keep sliding TTL alive while the viewer is actively sending.
         resolveSession(sToken);

@@ -145,12 +145,15 @@ async function checkNestedIdentityKeys() {
     type: 'chat',
     message: 'nested',
   }));
+  viewer.ws.send(JSON.stringify({ type: 'chat', message: 'oversized', pad: 'x'.repeat(64 * 1024) }));
   viewer.ws.send(JSON.stringify({ type: 'chat', message: 'plain' }));
   await wait(300);
 
   const chats = host.messages.filter(m => m.type === 'chat').map(m => m.message);
   record('viewer message hiding a nested type/username is not forwarded to the host',
     !chats.includes('nested'), `host received: ${JSON.stringify(chats)}`);
+  record('oversized viewer message (64 KiB) is not forwarded to the host',
+    !chats.includes('oversized'), `host received: ${JSON.stringify(chats)}`);
   record('ordinary viewer chat still reaches the host',
     chats.includes('plain'), `host received: ${JSON.stringify(chats)}`);
   viewer.ws.close();
