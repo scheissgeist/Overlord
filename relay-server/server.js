@@ -363,6 +363,19 @@ const CLEAR_VIEWER_CACHE_TYPES = new Set([
 const app    = express();
 const server = http.createServer(app);
 
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // The operator pages hold HOST_SECRET (the overlay in its URL). Nobody else may
+  // frame them, and the overlay's URL must never travel in a Referer.
+  if (req.path === '/admin' || req.path === '/obs' || req.path === '/admin.html' || req.path === '/obs.html') {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    res.setHeader('Referrer-Policy', 'no-referrer');
+  }
+  next();
+});
+
 // Serve index.html with TWITCH_CLIENT_ID injected into data attribute
 const indexHtmlPath = path.join(__dirname, 'public', 'index.html');
 const CLIENT_BUILD = readClientBuild();

@@ -349,6 +349,18 @@ async function checkNoRoomHijack() {
   }
 }
 
+async function checkHeaders() {
+  const adminPage = await request('GET', '/admin');
+  const obsPage = await request('GET', '/obs');
+  const root = await request('GET', '/');
+  record('/admin and /obs refuse framing and send no Referer',
+    [adminPage, obsPage].every(r => r.headers.get('x-frame-options') === 'DENY' && r.headers.get('referrer-policy') === 'no-referrer'),
+    `admin xfo=${adminPage.headers.get('x-frame-options')} obs xfo=${obsPage.headers.get('x-frame-options')}`);
+  record('responses send nosniff and no X-Powered-By',
+    root.headers.get('x-content-type-options') === 'nosniff' && !root.headers.get('x-powered-by'),
+    `nosniff=${root.headers.get('x-content-type-options')} powered=${root.headers.get('x-powered-by')}`);
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -365,6 +377,7 @@ async function main() {
   await startRelay();
   try {
     await checkNestedIdentityKeys();
+    await checkHeaders();
     await checkConsoleXss();
     await checkViewerXss();
     await checkNoRoomHijack();
