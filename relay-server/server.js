@@ -1675,7 +1675,7 @@ wss.on('connection', (ws, req) => {
 
   // ── Admin (receives all host broadcasts, read-only) ──────────────────────
   if (role === 'admin') {
-    if (!HOST_SECRET || secret !== HOST_SECRET) {
+    if (!HOST_SECRET || !timingSafeEqualStr(String(secret || ''), HOST_SECRET)) {
       credentialFailures.hit(ip);
       ws.close(4001, 'Unauthorized');
       return;
@@ -2186,7 +2186,7 @@ function adminAuth(req, res, next) {
     return res.status(429).json({ error: 'Too many failed attempts. Wait a few minutes.' });
   }
   const auth = req.headers.authorization;
-  if (HOST_SECRET && auth === `Bearer ${HOST_SECRET}`) return next();
+  if (HOST_SECRET && timingSafeEqualStr(String(auth || ''), `Bearer ${HOST_SECRET}`)) return next();
   credentialFailures.hit(ip);
   res.status(401).json({ error: 'Unauthorized' });
 }
