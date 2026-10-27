@@ -24,6 +24,9 @@ const TWITCH_TOKEN_KEY = 'overlord_twitch_token';
 // the front page with the room forgotten - and on a relay with several games live
 // they get asked to pick one they were already sent to.
 const PENDING_ROOM_KEY = 'overlord_pending_room';
+// OAuth `state`: proves a returning #access_token came from a login THIS tab started.
+// Without it, a link carrying someone else's token signs the victim in as them.
+const OAUTH_STATE_KEY = 'overlord_oauth_state';
 const LOCAL_SESSION_KEY = 'overlord_local_identity';
 const AUDIO_MODE_KEY = 'overlord_audio_mode';
 const FOLLOW_PAWN_KEY = 'overlord_follow_pawn';
@@ -1814,9 +1817,19 @@ function renderRoomsInLobby(rooms) {
 
   if (returningFromTwitch) {
     const token = hash.get('access_token');
+    let expectedState = '';
+    try {
+      expectedState = sessionStorage.getItem(OAUTH_STATE_KEY) || '';
+      sessionStorage.removeItem(OAUTH_STATE_KEY);
+    } catch (_) {}
     // Put the room back in the address too, so a later refresh still works.
     const clean = selectedRoom ? '/g/' + selectedRoom : location.pathname;
     history.replaceState(null, '', clean);
+    if (!expectedState || hash.get('state') !== expectedState) {
+      showScreen('login');
+      showLoginError('That sign-in link did not come from this page. Please sign in with Twitch again.');
+      return;
+    }
     exchangeTwitchToken(token);
     return;
   }
@@ -1844,7 +1857,11 @@ if (btnTwitch) {
       if (selectedRoom) sessionStorage.setItem(PENDING_ROOM_KEY, selectedRoom);
       else sessionStorage.removeItem(PENDING_ROOM_KEY);
     } catch (_) {}
-    const url = `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=${TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT)}&scope=${scope}`;
+    const stateBytes = new Uint8Array(16);
+    crypto.getRandomValues(stateBytes);
+    const state = Array.from(stateBytes, b => b.toString(16).padStart(2, '0')).join('');
+    try { sessionStorage.setItem(OAUTH_STATE_KEY, state); } catch (_) {}
+    const url = `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=${encodeURIComponent(TWITCH_CLIENT_ID)}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT)}&scope=${scope}&state=${state}`;
     location.href = url;
   });
 }

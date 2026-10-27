@@ -253,6 +253,41 @@ async function checkViewerXss() {
   }
 }
 
+async function checkOAuthState() {
+  let chromium;
+  try { ({ chromium } = requireMaybeGlobal('playwright')); } catch (_) {
+    record('Twitch return requires matching OAuth state (playwright not installed)', false, 'install playwright');
+    return;
+  }
+  // Twitch mode: a fake client id is enough, nothing here reaches Twitch.
+  await stopRelay();
+  await startRelay({ TWITCH_CLIENT_ID: 'smoke-client-id', ALLOW_GUEST_LOGIN: '' });
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const attempt = async (stored, returned) => {
+      const context = await browser.newContext();
+      if (stored) {
+        await context.addInitScript(state => {
+          sessionStorage.setItem('overlord_oauth_state', state);
+        }, stored);
+      }
+      const page = await context.newPage();
+      let exchanged = false;
+      page.on('request', req => { if (req.url().endsWith('/auth/twitch')) exchanged = true; });
+      const state = returned ? `&state=${returned}` : '';
+      await page.goto(`${BASE}/#access_token=forgedtoken${state}&token_type=bearer`);
+      await wait(1200);
+      await context.close();
+      return exchanged;
+    };
+    record('a forged #access_token link (no state) is not exchanged', !(await attempt('', '')));
+    record('a #access_token with the wrong state is not exchanged', !(await attempt('aaaa', 'bbbb')));
+    record('a #access_token with the matching state is still exchanged', await attempt('cafe1234', 'cafe1234'));
+  } finally {
+    await browser.close();
+  }
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -272,6 +307,7 @@ async function main() {
     await checkConsoleXss();
     await checkViewerXss();
     await checkExpiredSession();
+    await checkOAuthState();
   } finally {
     await stopRelay();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
