@@ -1535,7 +1535,7 @@ wss.on('connection', (ws, req) => {
           msg.transport = normalizeMapTransport(msg.transport);
           const info = room.viewerInfo.get(login);
           if (info) info.mapTransport = msg.transport;
-          if (msg.transport === 'jpeg') clearViewerMapReplayCache(login, 'viewer_selected_jpeg');
+          if (msg.transport === 'jpeg') clearViewerMapReplayCache(room, login, 'viewer_selected_jpeg');
         }
         if (msg.type === 'command' && msg.action === 'context_menu') {
           const accepted = queueContextMenuRequest(room, login, msg);
