@@ -478,6 +478,9 @@ namespace Overlord
             res.Close();
         }
 
+        // Matches the relay's 16 KiB viewer cap with headroom for multi-byte text.
+        private const int MaxViewerMessageChars = 64 * 1024;
+
         private async void HandleWebSocket(HttpListenerContext ctx)
         {
             WebSocket ws = null;
@@ -505,6 +508,15 @@ namespace Overlord
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
                         msgBuilder.Append(Encoding.UTF8.GetString(msgBuf, 0, result.Count));
+                        // A viewer message is a few hundred bytes. Without a cap, a client
+                        // that never sets EndOfMessage grows this buffer until the game
+                        // runs out of memory.
+                        if (msgBuilder.Length > MaxViewerMessageChars)
+                        {
+                            LogUtil.Warn("Closing local viewer socket: message too large");
+                            await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too large", CancellationToken.None);
+                            break;
+                        }
                         if (result.EndOfMessage)
                         {
                             string msg = msgBuilder.ToString();
