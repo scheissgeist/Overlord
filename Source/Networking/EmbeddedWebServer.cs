@@ -255,6 +255,13 @@ namespace Overlord
             {
                 if (req.IsWebSocketRequest)
                 {
+                    if (!WebSocketOriginPolicy.IsAllowed(req.Headers["Origin"], req.Headers["Host"]))
+                    {
+                        LogUtil.Warn($"Refused websocket from foreign origin: {req.Headers["Origin"]}");
+                        res.StatusCode = 403;
+                        res.Close();
+                        return;
+                    }
                     HandleWebSocket(ctx);
                     return;
                 }

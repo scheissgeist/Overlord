@@ -10,3 +10,10 @@ mono jsonhelper-tests.exe
 ```
 
 If `ProcessWsMessage` changes, update the copy in `Annotate()` to match.
+
+`WebSocketOriginPolicyTests.cs` covers the embedded server's websocket Origin/Host gate:
+
+```
+mcs -out:origin-tests.exe Source/Networking/WebSocketOriginPolicy.cs tools/security-tests/WebSocketOriginPolicyTests.cs
+mono origin-tests.exe
+```
