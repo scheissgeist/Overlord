@@ -255,6 +255,13 @@ namespace Overlord
             {
                 if (req.IsWebSocketRequest)
                 {
+                    if (!WebSocketOriginPolicy.IsAllowed(req.Headers["Origin"], req.Headers["Host"]))
+                    {
+                        LogUtil.Warn($"Refused websocket from foreign origin: {req.Headers["Origin"]}");
+                        res.StatusCode = 403;
+                        res.Close();
+                        return;
+                    }
                     HandleWebSocket(ctx);
                     return;
                 }
@@ -471,6 +478,9 @@ namespace Overlord
             res.Close();
         }
 
+        // Matches the relay's 16 KiB viewer cap with headroom for multi-byte text.
+        private const int MaxViewerMessageChars = 64 * 1024;
+
         private async void HandleWebSocket(HttpListenerContext ctx)
         {
             WebSocket ws = null;
@@ -498,6 +508,15 @@ namespace Overlord
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
                         msgBuilder.Append(Encoding.UTF8.GetString(msgBuf, 0, result.Count));
+                        // A viewer message is a few hundred bytes. Without a cap, a client
+                        // that never sets EndOfMessage grows this buffer until the game
+                        // runs out of memory.
+                        if (msgBuilder.Length > MaxViewerMessageChars)
+                        {
+                            LogUtil.Warn("Closing local viewer socket: message too large");
+                            await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too large", CancellationToken.None);
+                            break;
+                        }
                         if (result.EndOfMessage)
                         {
                             string msg = msgBuilder.ToString();
@@ -541,14 +560,25 @@ namespace Overlord
         /// <summary>Returns the possibly updated username after processing.</summary>
         private string ProcessWsMessage(string sessionId, WebSocket ws, string currentUsername, string json)
         {
-            string type = JsonHelper.ExtractString(json, "type");
+            // SECURITY: the trusted username/source/adminCommand keys are appended to
+            // this raw text below. That is only sound if the text is exactly one object;
+            // otherwise a client that leaves an object open gets OUR keys nested inside
+            // it while its own "adminCommand":true stays at the top level.
+            json = json?.Trim();
+            if (!JsonHelper.IsSingleObject(json))
+            {
+                SendToSocket(ws, "{\"type\":\"error\",\"message\":\"Malformed message\"}");
+                return currentUsername;
+            }
+
+            string type = JsonHelper.ExtractLastString(json, "type");
             if (type == null)
                 return currentUsername;
 
             if (type == "auth")
             {
-                string user = JsonHelper.ExtractString(json, "username");
-                string display = JsonHelper.ExtractString(json, "displayName") ?? user;
+                string user = JsonHelper.ExtractLastString(json, "username");
+                string display = JsonHelper.ExtractLastString(json, "displayName") ?? user;
                 if (user == null)
                 {
                     SendToSocket(ws, "{\"type\":\"error\",\"message\":\"Missing username\"}");
@@ -584,8 +614,15 @@ namespace Overlord
                 return currentUsername;
             }
 
-            string annotated = json.TrimEnd('}') +
-                $",\"username\":\"{JsonHelper.Escape(currentUsername)}\",\"source\":\"viewer\",\"adminCommand\":false}}";
+            // Remove exactly the one closing brace. TrimEnd('}') removed every trailing
+            // brace, so {"adminCommand":true,"z":{"a":1}} came out as
+            // {"adminCommand":true,"z":{"a":1,"username":...,"adminCommand":false}} with
+            // the trusted keys buried one level down, and the top-level scan read the
+            // client's own adminCommand:true: admin (ban, spawn, assign) for anyone.
+            string body = json.Substring(0, json.Length - 1).TrimEnd();
+            string separator = body.EndsWith("{") ? "" : ",";
+            string annotated = body + separator +
+                $"\"username\":\"{JsonHelper.Escape(currentUsername)}\",\"source\":\"viewer\",\"adminCommand\":false}}";
             OnCommandReceived?.Invoke(currentUsername, annotated);
             return currentUsername;
         }

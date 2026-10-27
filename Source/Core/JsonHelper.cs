@@ -129,6 +129,42 @@ namespace Overlord
             return found;
         }
 
+        /// <summary>
+        /// True when <paramref name="json"/> (already trimmed) is exactly one JSON object:
+        /// it opens with '{', its matching '}' is the final character, and braces and
+        /// brackets balance outside of strings. Used before appending trusted keys to a
+        /// client's raw JSON text, so the appended keys are guaranteed to land at the top
+        /// level instead of inside an object the client left open.
+        /// </summary>
+        public static bool IsSingleObject(string json)
+        {
+            if (string.IsNullOrEmpty(json) || json[0] != '{' || json[json.Length - 1] != '}')
+                return false;
+
+            int depth = 0;
+            bool inString = false;
+            for (int i = 0; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inString)
+                {
+                    if (c == '\\') { i++; continue; }
+                    if (c == '"') inString = false;
+                    continue;
+                }
+                if (c == '"') { inString = true; continue; }
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']')
+                {
+                    depth--;
+                    if (depth < 0) return false;
+                    // The outer object may only close at the very last character.
+                    if (depth == 0 && i != json.Length - 1) return false;
+                }
+            }
+            return depth == 0 && !inString;
+        }
+
         public static string ExtractLastString(string json, string key)
         {
             int keyIdx = FindLastTopLevelKey(json, key);

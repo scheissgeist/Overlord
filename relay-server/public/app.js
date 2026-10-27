@@ -24,6 +24,9 @@ const TWITCH_TOKEN_KEY = 'overlord_twitch_token';
 // the front page with the room forgotten - and on a relay with several games live
 // they get asked to pick one they were already sent to.
 const PENDING_ROOM_KEY = 'overlord_pending_room';
+// OAuth `state`: proves a returning #access_token came from a login THIS tab started.
+// Without it, a link carrying someone else's token signs the victim in as them.
+const OAUTH_STATE_KEY = 'overlord_oauth_state';
 const LOCAL_SESSION_KEY = 'overlord_local_identity';
 const AUDIO_MODE_KEY = 'overlord_audio_mode';
 const FOLLOW_PAWN_KEY = 'overlord_follow_pawn';
@@ -264,6 +267,13 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+// Host-sent colours are always #RRGGBB. Anything else is dropped instead of being
+// written into a style attribute, where `;` and url() would still get through.
+function safeCssColor(value) {
+  const text = String(value ?? '').trim();
+  return /^#[0-9a-f]{3,8}$/i.test(text) ? text : 'transparent';
 }
 
 function cssEscape(value) {
@@ -1713,7 +1723,14 @@ function startRoomWatch() {
 
     if (!rooms.length) return;
 
-    if (rooms.length === 1) {
+    // A viewer who was sent to (or picked) a game stays in it while that streamer
+    // is away; their socket hears host_connected when the game comes back. Only a
+    // viewer with NO game yet is auto-joined. Moving a waiting audience into
+    // whatever single room happened to be live let any stranger with OPEN_HOSTING
+    // collect another streamer's viewers the moment that streamer's game dropped.
+    if (selectedRoom && rooms.some(room => room.roomId === selectedRoom)) return;
+
+    if (rooms.length === 1 && !selectedRoom) {
       // One game is live and nothing else is competing for the slot, so join it
       // rather than making someone click a list of one. Same rule the login screen
       // already follows.
@@ -1807,9 +1824,19 @@ function renderRoomsInLobby(rooms) {
 
   if (returningFromTwitch) {
     const token = hash.get('access_token');
+    let expectedState = '';
+    try {
+      expectedState = sessionStorage.getItem(OAUTH_STATE_KEY) || '';
+      sessionStorage.removeItem(OAUTH_STATE_KEY);
+    } catch (_) {}
     // Put the room back in the address too, so a later refresh still works.
     const clean = selectedRoom ? '/g/' + selectedRoom : location.pathname;
     history.replaceState(null, '', clean);
+    if (!expectedState || hash.get('state') !== expectedState) {
+      showScreen('login');
+      showLoginError('That sign-in link did not come from this page. Please sign in with Twitch again.');
+      return;
+    }
     exchangeTwitchToken(token);
     return;
   }
@@ -1837,7 +1864,11 @@ if (btnTwitch) {
       if (selectedRoom) sessionStorage.setItem(PENDING_ROOM_KEY, selectedRoom);
       else sessionStorage.removeItem(PENDING_ROOM_KEY);
     } catch (_) {}
-    const url = `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=${TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT)}&scope=${scope}`;
+    const stateBytes = new Uint8Array(16);
+    crypto.getRandomValues(stateBytes);
+    const state = Array.from(stateBytes, b => b.toString(16).padStart(2, '0')).join('');
+    try { sessionStorage.setItem(OAUTH_STATE_KEY, state); } catch (_) {}
+    const url = `https://id.twitch.tv/oauth2/authorize?response_type=token&client_id=${encodeURIComponent(TWITCH_CLIENT_ID)}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT)}&scope=${scope}&state=${state}`;
     location.href = url;
   });
 }
@@ -2778,7 +2809,9 @@ function handleItemIcons(msg) {
   if (!icons || typeof icons !== 'object') return;
   let any = false;
   for (const key of Object.keys(icons)) {
-    itemIconCache.set(key, String(icons[key] || ''));
+    // Only base64 is ever valid here; anything else would land inside an src attribute.
+    const icon = String(icons[key] || '');
+    itemIconCache.set(key, /^[A-Za-z0-9+/=]*$/.test(icon) ? icon : '');
     any = true;
   }
   if (any) {
@@ -2796,7 +2829,7 @@ function itemIconHtml(defName, stuffDefName, cls = 'item-icon') {
   const key = iconKey(defName, stuffDefName);
   if (!key) return '';
   const cached = itemIconCache.get(key);
-  if (cached) return `<img class="${cls}" src="data:image/png;base64,${cached}" alt="" loading="lazy">`;
+  if (cached) return `<img class="${escapeAttr(cls)}" src="data:image/png;base64,${escapeAttr(cached)}" alt="" loading="lazy">`;
   if (cached === '') return `<span class="${cls} ${cls}-empty" aria-hidden="true"></span>`; // known no-icon
   ensureItemIcon(defName, stuffDefName);
   return `<span class="${cls} ${cls}-empty" aria-hidden="true"></span>`; // pending
@@ -3178,7 +3211,7 @@ function dyeWheelColor(itemId) {
 // identical copies; the wheel would have made it three.
 function renderDyePalette(itemId) {
   const swatches = hostCapabilities.dyePalette.map(c =>
-    `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${escapeAttr(c.hex)}"
+    `<button class="worn-dye-swatch" title="${escapeAttr(c.label)}" style="background:${safeCssColor(c.hex)}"
        data-dye-apply="${itemId}" data-dye-color="${escapeAttr(c.id)}"></button>`).join('');
   if (!dyeWheelAllowed()) {
     return `<div class="worn-dye-palette hidden" data-dye-palette="${itemId}">${swatches}</div>`;
@@ -3206,7 +3239,7 @@ function renderDyePalette(itemId) {
 
 function renderWornRow(item) {
   const swatch = item.color
-    ? `<span class="worn-swatch" style="background:${escapeAttr(item.color)}"></span>` : '';
+    ? `<span class="worn-swatch" style="background:${safeCssColor(item.color)}"></span>` : '';
   const hp = Number.isFinite(item.hp) ? ` <span class="gear-sheet-count">${item.hp}%</span>` : '';
   const canDye = item.dyeable && Number.isFinite(item.itemId) && dyeAllowed();
   const dyeBtn = canDye
@@ -4793,10 +4826,12 @@ function handleGameInfo(msg) {
   const speedLabels = ['Paused', '1×', '2×', '3×', '4×'];
   const spd = msg.paused ? 'Paused' : (speedLabels[msg.speed] || `${msg.speed}×`);
   const time = `${String(msg.hour ?? '?').padStart(2, '0')}:00`;
+  // Every field here is host-controlled, and game_info is replayed to everyone who
+  // later joins the room, so all of it is escaped.
   el.innerHTML =
-    `<span>${msg.season || ''} Day ${msg.day || '?'}, Yr ${msg.year || '?'}</span>` +
-    `<span>${time} · ${msg.temperature ?? '?'}°C · ${spd}</span>` +
-    (msg.mapName ? `<span>${msg.mapName}</span>` : '');
+    `<span>${escapeHtml(msg.season || '')} Day ${escapeHtml(msg.day || '?')}, Yr ${escapeHtml(msg.year || '?')}</span>` +
+    `<span>${escapeHtml(time)} · ${escapeHtml(msg.temperature ?? '?')}°C · ${escapeHtml(spd)}</span>` +
+    (msg.mapName ? `<span>${escapeHtml(msg.mapName)}</span>` : '');
 }
 
 // ─── Context menu ─────────────────────────────────────────────────────────────
@@ -7284,13 +7319,13 @@ function handleVoteUpdate(msg) {
 
   playSound('vote');
   updateDrawerPreview(msg.question || 'Vote active', 'Events');
-  const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
+  const total = (msg.options || []).reduce((s, o) => s + (Number(o.votes) || 0), 0) || 1;
   el.innerHTML = `<div class="vote-box">
     <div class="vote-q">${escapeHtml(msg.question || 'Vote')}</div>
     ${(msg.options || []).map((o, i) => `<div class="vote-opt" onclick="castVote(${i})">
       <span>${escapeHtml(o.label ?? '')}</span>
-      <div class="vote-bar-bg"><div class="vote-bar" style="width:${(o.votes||0)/total*100}%"></div></div>
-      <span>${o.votes || 0}</span>
+      <div class="vote-bar-bg"><div class="vote-bar" style="width:${(Number(o.votes) || 0) / total * 100}%"></div></div>
+      <span>${Number(o.votes) || 0}</span>
     </div>`).join('')}
   </div>`;
 }

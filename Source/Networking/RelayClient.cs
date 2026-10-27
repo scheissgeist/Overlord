@@ -235,7 +235,12 @@ namespace Overlord
                     else
                         connectUrl = $"{relayUrl}?role=host";
 
-                    LogUtil.Log($"Connecting to relay: {connectUrl}");
+                    // Never log connectUrl itself: it carries the host key or HOST_SECRET,
+                    // and Player.log is what streamers paste into bug reports (and what
+                    // PlayerLogArchiver keeps 30 copies of).
+                    string credential = !string.IsNullOrEmpty(hostKey) ? " (host key)"
+                        : !string.IsNullOrEmpty(hostSecret) ? " (host secret)" : " (no credential)";
+                    LogUtil.Log($"Connecting to relay: {relayUrl}{credential}");
                     await webSocket.ConnectAsync(new Uri(connectUrl), cts.Token);
 
                     if (webSocket.State == WebSocketState.Open)

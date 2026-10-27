@@ -144,7 +144,9 @@ namespace Overlord
                 {
                     embeddedQueue.Enqueue(() =>
                     {
-                        string type = JsonHelper.ExtractString(json, "type");
+                        // Top-level only: a first-match scan would take a "type" the
+                        // client nested inside its own sub-object.
+                        string type = JsonHelper.ExtractLastString(json, "type");
                         if (type == StateProtocol.Command || type == "command")
                             HandleCommand(json);
                         else if (type == StateProtocol.MapTransport)
@@ -300,7 +302,10 @@ namespace Overlord
         {
             try
             {
-                string type = JsonHelper.ExtractString(json, "type");
+                // SECURITY: top-level only. ExtractString returns the first "type" at ANY
+                // depth, so a viewer could nest {"type":"viewer_joined","username":...}
+                // inside a chat message and have it handled as a join for any name.
+                string type = JsonHelper.ExtractLastString(json, "type");
                 if (type == null) return;
 
                 switch (type)
@@ -376,8 +381,8 @@ namespace Overlord
 
         private void HandleViewerJoined(string json)
         {
-            string username = JsonHelper.ExtractString(json, "username");
-            string displayName = JsonHelper.ExtractString(json, "displayName") ?? username;
+            string username = JsonHelper.ExtractLastString(json, "username");
+            string displayName = JsonHelper.ExtractLastString(json, "displayName") ?? username;
             if (username == null) return;
 
             bool returning = viewerManager.GetSession(username) != null;
@@ -467,7 +472,7 @@ namespace Overlord
 
         private void HandleViewerLeft(string json)
         {
-            string username = JsonHelper.ExtractString(json, "username");
+            string username = JsonHelper.ExtractLastString(json, "username");
             if (username == null) return;
             viewerManager?.MarkDisconnected(username);
             LogUtil.Log($"Viewer left: {username}");

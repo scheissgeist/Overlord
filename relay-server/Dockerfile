@@ -20,9 +20,11 @@ FROM base AS build
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y build-essential node-gyp pkg-config python-is-python3
 
-# Install node modules
-COPY package.json ./
-RUN npm install
+# Install exactly what package-lock.json pins. `npm install` with only package.json
+# resolved fresh versions on every build, so the audited lockfile never reached
+# production and each deploy could pull different (or compromised) releases.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Copy application code
 COPY . .
