@@ -1504,6 +1504,18 @@ wss.on('connection', (ws, req) => {
           recordOps('viewer_message_rejected', { username: login, type: msg.type });
           return;
         }
+        // SECURITY — the host's OnRelayMessage reads `type`, and its viewer_joined /
+        // viewer_left handlers read `username` / `displayName`, with a FIRST-match scan
+        // that ignores nesting (JsonHelper.ExtractString). A viewer could pass the type
+        // check above with {"0":{"type":"viewer_joined","username":"victim",...},
+        // "type":"chat"} and the host would act on the nested copy: impersonate or
+        // disconnect any viewer, rename their colonist. No legitimate viewer message
+        // nests these keys, so refuse the message outright; that protects every mod
+        // version already installed, not only ones with a fixed parser.
+        if (hasNestedIdentityKey(msg)) {
+          recordOps('viewer_message_rejected', { username: login, type: msg.type, reason: 'nested_identity_key' });
+          return;
+        }
         // SECURITY — key ORDER is load-bearing here, not just key value.
         // The host reads these three fields with a LAST-occurrence scan over the raw
         // JSON text (JsonHelper.ExtractLastString), which does not track brace depth,
@@ -1617,6 +1629,30 @@ wss.on('connection', (ws, req) => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+const NESTED_IDENTITY_KEYS = new Set(['type', 'username', 'displayName', 'source', 'adminCommand', 'login']);
+
+/**
+ * True when any object BELOW the top level of a viewer message carries one of the
+ * keys the host uses to decide what a message is or who sent it. Iterative so a
+ * deeply nested payload cannot overflow the stack.
+ */
+function hasNestedIdentityKey(msg) {
+  const stack = [];
+  for (const value of Object.values(msg)) {
+    if (value && typeof value === 'object') stack.push(value);
+  }
+  while (stack.length) {
+    const node = stack.pop();
+    const isArray = Array.isArray(node);
+    for (const key of Object.keys(node)) {
+      if (!isArray && NESTED_IDENTITY_KEYS.has(key)) return true;
+      const value = node[key];
+      if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+  return false;
+}
+
 function sendToHost(room, msg) {
   if (!room || !room.hostSocket || room.hostSocket.readyState !== WebSocket.OPEN) {
     const summary = typeof msg === 'string'
