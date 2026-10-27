@@ -218,6 +218,41 @@ async function checkConsoleXss() {
   }
 }
 
+async function checkViewerXss() {
+  let chromium;
+  try { ({ chromium } = requireMaybeGlobal('playwright')); } catch (_) {
+    record('viewer page escapes host data (playwright not installed)', false, 'install playwright to run this check');
+    return;
+  }
+  const host = await openSocket(`role=host&secret=${encodeURIComponent(HOST_SECRET)}`);
+  const login = 'xss_target';
+  const res = await admin('POST', '/admin/viewer-session', { login, ttlMs: 3600 * 1000 });
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(session => {
+      localStorage.setItem('overlord_session', JSON.stringify(session));
+    }, res.json);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/`);
+    // Wait until the relay has told the host about this viewer, then attack it.
+    for (let i = 0; i < 50 && !host.messages.some(m => m.type === 'viewer_joined' && m.username === login); i++) {
+      await wait(100);
+    }
+    host.ws.send(JSON.stringify({ type: 'game_info', season: XSS, day: XSS, year: XSS, hour: XSS, temperature: XSS, speed: XSS, mapName: XSS }));
+    host.ws.send(JSON.stringify({ type: 'vote_update', active: true, question: 'q', options: [{ label: 'a', votes: XSS }] }));
+    await wait(1000);
+    const pwned = await page.evaluate(() => window.__pwned || 0);
+    const info = await page.locator('#game-info').innerText().catch(() => '');
+    record('viewer page does not execute host-sent game_info / vote markup', pwned === 0, `__pwned=${pwned}`);
+    record('viewer page shows the game_info text', info.includes('<img'), `#game-info: ${info.slice(0, 120)}`);
+  } finally {
+    await browser.close();
+    host.ws.close();
+    await wait(100);
+  }
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -235,6 +270,7 @@ async function main() {
   try {
     await checkNestedIdentityKeys();
     await checkConsoleXss();
+    await checkViewerXss();
     await checkExpiredSession();
   } finally {
     await stopRelay();
