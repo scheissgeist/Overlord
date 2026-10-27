@@ -1723,7 +1723,14 @@ function startRoomWatch() {
 
     if (!rooms.length) return;
 
-    if (rooms.length === 1) {
+    // A viewer who was sent to (or picked) a game stays in it while that streamer
+    // is away; their socket hears host_connected when the game comes back. Only a
+    // viewer with NO game yet is auto-joined. Moving a waiting audience into
+    // whatever single room happened to be live let any stranger with OPEN_HOSTING
+    // collect another streamer's viewers the moment that streamer's game dropped.
+    if (selectedRoom && rooms.some(room => room.roomId === selectedRoom)) return;
+
+    if (rooms.length === 1 && !selectedRoom) {
       // One game is live and nothing else is competing for the slot, so join it
       // rather than making someone click a list of one. Same rule the login screen
       // already follows.

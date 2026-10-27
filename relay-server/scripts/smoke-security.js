@@ -317,6 +317,38 @@ async function checkAbuseLimits() {
   record('a forged Fly-Client-IP header does not escape the lockout', spoofed.code === 429, `status=${spoofed.code}`);
 }
 
+async function checkNoRoomHijack() {
+  let chromium;
+  try { ({ chromium } = requireMaybeGlobal('playwright')); } catch (_) {
+    record('viewer is not moved into another streamer\'s room (playwright not installed)', false, 'install playwright');
+    return;
+  }
+  const regA = (await request('POST', '/api/host/register', { label: 'Streamer A' })).json;
+  const regB = (await request('POST', '/api/host/register', { label: 'Hijacker' })).json;
+  const hostA = await openSocket(`role=host&key=${encodeURIComponent(regA.hostKey)}`);
+  const session = (await admin('POST', '/admin/viewer-session', { login: 'loyal_viewer', ttlMs: 3600 * 1000 })).json;
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(value => {
+      localStorage.setItem('overlord_session', JSON.stringify(value));
+    }, session);
+    const page = await context.newPage();
+    await page.goto(`${BASE}/g/${regA.roomId}`);
+    await wait(1500);
+    // Streamer A's game drops; the attacker's room is now the only live one.
+    hostA.ws.close();
+    const hostB = await openSocket(`role=host&key=${encodeURIComponent(regB.hostKey)}`);
+    await wait(7500); // the room watch polls every 6s
+    const pathNow = await page.evaluate(() => location.pathname);
+    record('viewer sent to room A is not auto-moved into the only other live room',
+      pathNow === `/g/${regA.roomId}`, `path=${pathNow} (A=${regA.roomId}, B=${regB.roomId})`);
+    hostB.ws.close();
+  } finally {
+    await browser.close();
+  }
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -335,6 +367,7 @@ async function main() {
     await checkNestedIdentityKeys();
     await checkConsoleXss();
     await checkViewerXss();
+    await checkNoRoomHijack();
     await checkExpiredSession();
     await checkOAuthState();
     await checkAbuseLimits();
