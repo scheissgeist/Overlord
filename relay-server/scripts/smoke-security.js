@@ -291,6 +291,32 @@ async function checkOAuthState() {
   }
 }
 
+async function checkAbuseLimits() {
+  await stopRelay();
+  await startRelay();
+  let lastGuest = 0;
+  for (let i = 0; i < 61; i++) {
+    lastGuest = (await request('POST', '/auth/guest', { name: `flood_${i}` })).code;
+  }
+  record('61st guest login from one IP in 10 minutes is refused (429)', lastGuest === 429, `status=${lastGuest}`);
+
+  let codes = [];
+  for (let i = 0; i < 21; i++) {
+    codes.push((await request('GET', '/admin/status', undefined, { Authorization: 'Bearer wrong-guess' })).code);
+  }
+  record('wrong admin bearer is refused, then locked out after 20 misses',
+    codes[0] === 401 && codes[20] === 429, `first=${codes[0]} last=${codes[20]}`);
+  const locked = await openSocket(`role=admin&secret=${encodeURIComponent(HOST_SECRET)}`);
+  await wait(300);
+  record('locked-out IP cannot open an admin socket either', locked.closed && locked.closeCode === 4029,
+    `closeCode=${locked.closeCode}`);
+
+  // Spoofed Fly-Client-IP must not reset the counter off Fly.
+  const spoofed = await request('GET', '/admin/status', undefined,
+    { Authorization: 'Bearer wrong-guess', 'Fly-Client-IP': '203.0.113.9' });
+  record('a forged Fly-Client-IP header does not escape the lockout', spoofed.code === 429, `status=${spoofed.code}`);
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -311,6 +337,7 @@ async function main() {
     await checkViewerXss();
     await checkExpiredSession();
     await checkOAuthState();
+    await checkAbuseLimits();
   } finally {
     await stopRelay();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });

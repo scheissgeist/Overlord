@@ -1030,6 +1030,71 @@ function totalReplayCacheViewers() {
   return n;
 }
 
+// ─── Abuse limits ─────────────────────────────────────────────────────────────
+/**
+ * The caller's IP. Fly's edge sets Fly-Client-IP, so it is trusted only when
+ * running on Fly (FLY_APP_NAME is set on every Fly machine). Elsewhere the header
+ * is whatever the client typed, so use the LAST X-Forwarded-For entry (the one the
+ * nearest proxy appended; a client can only add entries to the left of it), else
+ * the socket address.
+ */
+function clientIp(req) {
+  if (process.env.FLY_APP_NAME && req.headers['fly-client-ip']) {
+    return String(req.headers['fly-client-ip']).trim();
+  }
+  const xff = String(req.headers['x-forwarded-for'] || '');
+  if (xff) {
+    const last = xff.split(',').map(part => part.trim()).filter(Boolean).pop();
+    if (last) return last;
+  }
+  return String((req.socket && req.socket.remoteAddress) || '');
+}
+
+/** Fixed-window counter per key. `hit` counts and reports whether over the limit. */
+function makeWindowLimiter(windowMs, max) {
+  const hits = new Map();
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of hits) if (now - entry.windowStart > windowMs) hits.delete(key);
+  }, windowMs);
+  if (sweep.unref) sweep.unref();
+  return {
+    hit(key) {
+      const now = Date.now();
+      const entry = hits.get(key);
+      if (!entry || now - entry.windowStart > windowMs) {
+        hits.set(key, { count: 1, windowStart: now });
+        return 1 > max;
+      }
+      entry.count++;
+      return entry.count > max;
+    },
+    over(key) {
+      const entry = hits.get(key);
+      // Locked once `max` hits are on record, so the (max+1)th attempt is refused.
+      return !!entry && Date.now() - entry.windowStart <= windowMs && entry.count >= max;
+    },
+  };
+}
+
+// Viewer logins: each one mints a session and rewrites the sessions file, and a
+// Twitch login costs two outbound calls to Twitch. Sessions last a day, so a real
+// viewer logs in rarely; 60 per 10 minutes still covers a whole household or LAN.
+const authLimiter = makeWindowLimiter(10 * 60 * 1000, 60);
+// Wrong HOST_SECRET / host key / admin bearer. Only failures count, so the real
+// operator is never slowed; 20 misses in 10 minutes locks that IP out for the rest
+// of the window, which ends online guessing of a weak secret.
+const credentialFailures = makeWindowLimiter(10 * 60 * 1000, 20);
+
+function authRateLimit(req, res, next) {
+  const ip = clientIp(req);
+  if (authLimiter.hit(ip)) {
+    recordOps('auth_rate_limited', { ip, path: req.path });
+    return res.status(429).json({ error: 'Too many sign-in attempts. Wait a few minutes.' });
+  }
+  next();
+}
+
 app.get('/admin/logs', adminAuth, (req, res) => {
   const limit = Math.max(1, Math.min(parseInt(req.query.limit || '200', 10), OPS_LOG_LIMIT));
   res.json({ ok: true, logs: opsLog.slice(-limit) });
@@ -1040,7 +1105,7 @@ app.get('/admin/logs', adminAuth, (req, res) => {
 // Returns:       { sessionToken, login, displayName }  or 401
 app.use(express.json({ limit: '4kb' }));
 
-app.post('/auth/twitch', async (req, res) => {
+app.post('/auth/twitch', authRateLimit, async (req, res) => {
   const accessToken = req.body && req.body.token;
   if (!accessToken) return res.status(400).json({ error: 'Missing token' });
 
@@ -1086,7 +1151,7 @@ app.post('/auth/twitch', async (req, res) => {
 // Browser calls: POST /auth/guest  { name: "someone" }
 // Returns:       { sessionToken, login, displayName }  — the same shape /auth/twitch
 // returns, so the viewer client treats the two identically from here on.
-app.post('/auth/guest', (req, res) => {
+app.post('/auth/guest', authRateLimit, (req, res) => {
   if (!GUEST_LOGIN) {
     return res.status(503).json({
       error: TWITCH_CLIENT_ID
@@ -1250,6 +1315,12 @@ wss.on('connection', (ws, req) => {
   const sToken  = url.searchParams.get('session');
   const clientBuild = String(url.searchParams.get('build') || '').slice(0, 80);
   const mapTransport = normalizeMapTransport(url.searchParams.get('mapTransport'));
+  const ip = clientIp(req);
+
+  if ((role === 'host' || role === 'admin') && credentialFailures.over(ip)) {
+    ws.close(4029, 'Too many failed attempts');
+    return;
+  }
 
   // ── Host ──────────────────────────────────────────────────────────────────
   if (role === 'host') {
@@ -1261,6 +1332,7 @@ wss.on('connection', (ws, req) => {
     const presented = hostKeyParam || secret;
     const room = findRoomByHostKey(presented);
     if (!room) {
+      credentialFailures.hit(ip);
       ws.close(4001, 'Unauthorized');
       console.log(presented
         ? '[relay] Host rejected: unknown key'
@@ -1604,6 +1676,7 @@ wss.on('connection', (ws, req) => {
   // ── Admin (receives all host broadcasts, read-only) ──────────────────────
   if (role === 'admin') {
     if (!HOST_SECRET || secret !== HOST_SECRET) {
+      credentialFailures.hit(ip);
       ws.close(4001, 'Unauthorized');
       return;
     }
@@ -2027,7 +2100,7 @@ app.post('/api/host/register', (req, res) => {
     });
   }
 
-  const ip = String(req.headers['fly-client-ip'] || req.ip || req.socket.remoteAddress || '');
+  const ip = clientIp(req);
   if (registerRateLimited(ip)) {
     recordOps('host_register_rate_limited', { ip });
     return res.status(429).json({ error: 'Too many attempts. Wait a few minutes.' });
@@ -2072,11 +2145,16 @@ app.post('/api/host/register', (req, res) => {
 // A game whose key was refused (relay restarted without a volume, room reaped)
 // re-registers with this so the streamer sees a reconnect instead of a dead end.
 app.post('/api/host/reclaim', (req, res) => {
+  const ip = clientIp(req);
+  if (credentialFailures.over(ip)) {
+    return res.status(429).json({ error: 'Too many attempts. Wait a few minutes.' });
+  }
   const key = String((req.body && req.body.hostKey) || '');
   const existing = findRoomByHostKey(key);
   if (existing) {
     return res.json({ ok: true, roomId: existing.roomId, hostKey: existing.hostKey, viewerPath: `/g/${existing.roomId}` });
   }
+  credentialFailures.hit(ip);
   res.status(404).json({ error: 'That key is not known to this relay.' });
 });
 
@@ -2103,8 +2181,13 @@ function adminAuth(req, res, next) {
   // /admin/reload and /admin/host-command. The admin WebSocket role already fails
   // closed, so the two disagreed — that makes this a defect, not a design choice.
   // A relay with no secret must refuse admin access, not hand it to anyone.
+  const ip = clientIp(req);
+  if (credentialFailures.over(ip)) {
+    return res.status(429).json({ error: 'Too many failed attempts. Wait a few minutes.' });
+  }
   const auth = req.headers.authorization;
   if (HOST_SECRET && auth === `Bearer ${HOST_SECRET}`) return next();
+  credentialFailures.hit(ip);
   res.status(401).json({ error: 'Unauthorized' });
 }
 
