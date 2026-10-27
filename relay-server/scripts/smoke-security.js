@@ -17,6 +17,19 @@ const os = require('os');
 const path = require('path');
 const WebSocket = require('ws');
 
+function requireMaybeGlobal(name) {
+  try {
+    return require(name);
+  } catch (localError) {
+    try {
+      const npmRoot = childProcess.execSync('npm root -g', { encoding: 'utf8' }).trim();
+      return require(path.join(npmRoot, name));
+    } catch {
+      throw localError;
+    }
+  }
+}
+
 const PORT = parseInt(process.env.SECURITY_SMOKE_PORT || '8097', 10);
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_BASE = `ws://127.0.0.1:${PORT}/ws`;
@@ -145,6 +158,66 @@ async function checkNestedIdentityKeys() {
   await wait(100);
 }
 
+// A hostile host (any streamer, when OPEN_HOSTING is on) sends script payloads in
+// every field the operator consoles render. Neither page may run them: both hold
+// HOST_SECRET (admin.html in sessionStorage, obs.html in its URL).
+const XSS = '<img src=x onerror="window.__pwned=(window.__pwned||0)+1">';
+const QUOTE_BREAK = `x');window.__pwned=(window.__pwned||0)+1;//"'`;
+
+function hostileHostMessages(viewerLogin) {
+  return [
+    { type: 'game_info', season: XSS, day: XSS, hour: XSS, temperature: XSS, mapName: XSS },
+    { type: 'colonist_list', colonists: [{ id: `1)${XSS}`, name: XSS, assignedTo: viewerLogin }] },
+    { type: 'claim_request', username: QUOTE_BREAK, displayName: XSS, pawnId: `1);window.__pwned=1;//`, pawnName: XSS },
+    { type: 'vote_update', active: true, question: XSS, options: [{ label: XSS, votes: XSS }] },
+    { type: 'pawn_died', pawnName: XSS, username: XSS },
+  ];
+}
+
+async function checkConsoleXss() {
+  let chromium;
+  try { ({ chromium } = requireMaybeGlobal('playwright')); } catch (_) {
+    record('operator consoles escape host data (playwright not installed)', false, 'install playwright to run this check');
+    return;
+  }
+  const host = await openSocket(`role=host&secret=${encodeURIComponent(HOST_SECRET)}`);
+  const token = await mintSession('xss_viewer', 3600 * 1000);
+  const viewer = await openSocket(`role=viewer&session=${token}`);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(secret => {
+      if (location.pathname === '/admin') sessionStorage.setItem('overlord_admin_secret', secret);
+    }, HOST_SECRET);
+    const adminPage = await context.newPage();
+    await adminPage.goto(`${BASE}/admin`);
+    await adminPage.waitForSelector('#dashboard', { state: 'visible', timeout: 10000 });
+    const obsPage = await context.newPage();
+    await obsPage.goto(`${BASE}/obs?secret=${encodeURIComponent(HOST_SECRET)}`);
+    await wait(800);
+
+    for (const msg of hostileHostMessages('xss_viewer')) host.ws.send(JSON.stringify(msg));
+    await wait(800);
+    // The claim buttons used inline onclick handlers built from host strings.
+    const approve = adminPage.locator('#claim-list button').first();
+    if (await approve.count()) await approve.click().catch(() => {});
+    await adminPage.locator('#colonist-list .colonist-card').first().click().catch(() => {});
+    await wait(300);
+
+    const adminPwned = await adminPage.evaluate(() => window.__pwned || 0);
+    const obsPwned = await obsPage.evaluate(() => window.__pwned || 0);
+    const claimText = await adminPage.locator('#claim-list').innerText().catch(() => '');
+    record('admin console does not execute host-sent markup', adminPwned === 0, `__pwned=${adminPwned}`);
+    record('admin console still renders the hostile claim as text', claimText.includes('<img'), `claim list: ${claimText.slice(0, 120)}`);
+    record('OBS overlay does not execute host-sent markup', obsPwned === 0, `__pwned=${obsPwned}`);
+  } finally {
+    await browser.close();
+    viewer.ws.close();
+    host.ws.close();
+    await wait(100);
+  }
+}
+
 async function checkExpiredSession() {
   if (FAST) { console.log('SKIP  expired session (SECURITY_SMOKE_FAST=1)'); return; }
   const token = await mintSession('sleeper', 60 * 1000);
@@ -161,6 +234,7 @@ async function main() {
   await startRelay();
   try {
     await checkNestedIdentityKeys();
+    await checkConsoleXss();
     await checkExpiredSession();
   } finally {
     await stopRelay();

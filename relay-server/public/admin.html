@@ -373,7 +373,7 @@
               hostConnected = true;
               markFresh();
               renderExceptions();
-              $('host-status').innerHTML = `<span class="dot on"></span>Connected — ${msg.season || ''} Day ${msg.day || '?'}, ${msg.hour ?? '?'}h, ${msg.temperature ?? '?'}°C`;
+              $('host-status').innerHTML = `<span class="dot on"></span>Connected — ${esc(msg.season || '')} Day ${esc(msg.day || '?')}, ${esc(msg.hour ?? '?')}h, ${esc(msg.temperature ?? '?')}°C`;
               break;
 
             case 'host_capabilities':
@@ -494,10 +494,10 @@
       if (!viewers.length) { el.innerHTML = '<span class="none">No viewers</span>'; return; }
       el.innerHTML = viewers.map(v => {
         const assigned = colonists.find(c => c.assignedTo === v.login);
-        const assignLabel = assigned ? `→ ${assigned.name}` : '';
+        const assignLabel = assigned ? `→ ${esc(assigned.name)}` : '';
         const sel = selectedViewer === v.login ? ' selected' : '';
         const label = v.displayName && v.displayName !== v.login ? `${v.displayName} (${v.login})` : v.login;
-        return `<div class="viewer-card${sel}" onclick="selectViewer('${esc(v.login)}')">
+        return `<div class="viewer-card${sel}" data-viewer="${esc(v.login)}">
           <span>${esc(label)}</span>
           <span class="assignment">${assignLabel}</span>
         </div>`;
@@ -508,9 +508,9 @@
       const el = $('colonist-list');
       if (!colonists.length) { el.innerHTML = '<span class="none">No colonists</span>'; return; }
       el.innerHTML = colonists.map(c => {
-        const owner = c.assignedTo ? `← ${c.assignedTo}` : 'open';
+        const owner = c.assignedTo ? `← ${esc(c.assignedTo)}` : 'open';
         const sel = selectedColonist === c.id ? ' selected' : '';
-        return `<div class="colonist-card${sel}" onclick="selectColonist(${c.id})">
+        return `<div class="colonist-card${sel}" data-colonist="${esc(c.id)}">
           <span>${esc(c.name)}</span>
           <span class="owner">${owner}</span>
         </div>`;
@@ -527,10 +527,10 @@
       }
       idle.style.display = 'none';
       active.style.display = '';
-      const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
+      const total = (msg.options || []).reduce((s, o) => s + (Number(o.votes) || 0), 0) || 1;
       const lines = (msg.options || []).map((o, i) => {
-        const pct = Math.round((o.votes || 0) / total * 100);
-        return `<strong>${esc(o.label)}</strong>: ${o.votes || 0} (${pct}%)`;
+        const pct = Math.round((Number(o.votes) || 0) / total * 100);
+        return `<strong>${esc(o.label)}</strong>: ${Number(o.votes) || 0} (${pct}%)`;
       }).join('  ·  ');
       $('vote-results').innerHTML = `<strong>${esc(msg.question)}</strong><br><span>${lines}</span>`;
     }
@@ -547,8 +547,8 @@
       el.innerHTML = orderedClaims.map(c => `<div class="claim-card">
         <span>${esc(c.displayName)} → ${esc(c.pawnName)}</span>
         <span class="claim-actions" title="${c.connected === false ? 'Viewer is offline' : 'Viewer is connected'}">
-          <button onclick="approveClaim('${esc(c.username)}', ${c.pawnId})">Approve</button>
-          <button onclick="rejectClaim('${esc(c.username)}', ${c.pawnId})">Reject</button>
+          <button data-claim="approve" data-username="${esc(c.username)}" data-pawn="${esc(c.pawnId)}">Approve</button>
+          <button data-claim="reject" data-username="${esc(c.username)}" data-pawn="${esc(c.pawnId)}">Reject</button>
         </span>
       </div>`).join('');
     }
@@ -562,6 +562,23 @@
       updateButtons();
       renderViewers(liveViewers);
     };
+    // Delegated clicks: values travel in data-* attributes, never inside inline JS,
+    // so a host-sent name or id cannot become code.
+    $('viewer-list').addEventListener('click', e => {
+      const card = e.target.closest('[data-viewer]');
+      if (card) selectViewer(card.dataset.viewer);
+    });
+    $('colonist-list').addEventListener('click', e => {
+      const card = e.target.closest('[data-colonist]');
+      if (card) selectColonist(Number(card.dataset.colonist));
+    });
+    $('claim-list').addEventListener('click', e => {
+      const btn = e.target.closest('[data-claim]');
+      if (!btn) return;
+      const pawnId = Number(btn.dataset.pawn);
+      if (btn.dataset.claim === 'approve') approveClaim(btn.dataset.username, pawnId);
+      else rejectClaim(btn.dataset.username, pawnId);
+    });
     window.selectColonist = function(id) {
       selectedColonist = selectedColonist === id ? null : id;
       updateButtons();
@@ -730,7 +747,11 @@
       const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60);
       return h > 0 ? `${h}h ${m}m` : `${m}m`;
     }
-    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    // Escapes for both element text and quoted attributes. The old textContent trick
+    // left " and ' alone, so host-sent values could break out of attributes.
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
     function log(text, kind) {
       const el = $('event-log');
       const entry = document.createElement('div');

@@ -119,14 +119,18 @@
       }
     }
 
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+
     function renderViewerBar() {
       const el = $('viewer-bar');
       el.innerHTML = Object.entries(viewers).map(([login, v]) => {
         const assigned = v.pawnName !== null;
         return `<div class="viewer-tag">
           <span class="dot ${assigned ? 'assigned' : 'waiting'}"></span>
-          <span>${v.displayName}</span>
-          ${assigned ? `<span class="pawn-name">→ ${v.pawnName}</span>` : ''}
+          <span>${esc(v.displayName)}</span>
+          ${assigned ? `<span class="pawn-name">→ ${esc(v.pawnName)}</span>` : ''}
         </div>`;
       }).join('');
     }
@@ -135,7 +139,7 @@
       const el = $('kill-feed');
       const entry = document.createElement('div');
       entry.className = 'kill-entry';
-      entry.innerHTML = `<span class="skull">💀</span><span class="name">${pawnName}</span> has fallen${viewer ? ` (${viewer})` : ''}`;
+      entry.innerHTML = `<span class="skull">💀</span><span class="name">${esc(pawnName)}</span> has fallen${viewer ? ` (${esc(viewer)})` : ''}`;
       el.appendChild(entry);
       setTimeout(() => entry.remove(), 9000);
       while (el.children.length > 5) el.removeChild(el.firstChild);
@@ -155,13 +159,13 @@
       const el = $('vote-display');
       if (!msg.active) { el.style.display = 'none'; return; }
       el.style.display = 'block';
-      const total = (msg.options || []).reduce((s, o) => s + (o.votes || 0), 0) || 1;
+      const total = (msg.options || []).reduce((s, o) => s + (Number(o.votes) || 0), 0) || 1;
       el.innerHTML = `<div class="vote-box">
-        <div class="vote-question">${msg.question || 'Vote'}</div>
+        <div class="vote-question">${esc(msg.question || 'Vote')}</div>
         ${(msg.options || []).map(o => `<div class="vote-option">
-          <span>${o.label}</span>
-          <div class="vote-bar-bg"><div class="vote-bar" style="width:${(o.votes||0)/total*100}%"></div></div>
-          <span>${o.votes || 0}</span>
+          <span>${esc(o.label)}</span>
+          <div class="vote-bar-bg"><div class="vote-bar" style="width:${(Number(o.votes) || 0) / total * 100}%"></div></div>
+          <span>${Number(o.votes) || 0}</span>
         </div>`).join('')}
       </div>`;
     }
