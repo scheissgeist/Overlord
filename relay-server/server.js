@@ -1179,7 +1179,10 @@ function resolveSession(token) {
     sessions.delete(token);
     schedulePersistSessions();
     if (!hasActiveSessionForLogin(s.login, now)) {
-      clearViewerReplayCache(s.login, 'session_expired');
+      // Was clearViewerReplayCache(s.login, ...), which treats the login string as a
+      // room and throws. On the websocket connection path that is outside any try,
+      // so one expired token crashed the whole relay process.
+      clearViewerReplayCacheEverywhere(s.login, 'session_expired');
     }
     return null;
   }
