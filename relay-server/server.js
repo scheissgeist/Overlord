@@ -1054,6 +1054,13 @@ app.post('/auth/twitch', async (req, res) => {
       recordOps('auth_failed', { reason: 'invalid_twitch_token' });
       return res.status(401).json({ error: 'Invalid Twitch token' });
     }
+    // A valid token proves who the user is to SOME Twitch app, not to this one.
+    // Without this check, any other app a viewer ever authorized (or its operator)
+    // could replay that viewer's token here and take over their colonist.
+    if (identity.client_id !== TWITCH_CLIENT_ID) {
+      recordOps('auth_failed', { reason: 'twitch_token_wrong_client', username: identity.login });
+      return res.status(401).json({ error: 'Invalid Twitch token' });
+    }
 
     // Validate response has login but no display_name — fetch from Helix
     let displayName = identity.login;
