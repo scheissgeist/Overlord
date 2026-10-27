@@ -144,7 +144,9 @@ namespace Overlord
                 {
                     embeddedQueue.Enqueue(() =>
                     {
-                        string type = JsonHelper.ExtractString(json, "type");
+                        // Top-level only: a first-match scan would take a "type" the
+                        // client nested inside its own sub-object.
+                        string type = JsonHelper.ExtractLastString(json, "type");
                         if (type == StateProtocol.Command || type == "command")
                             HandleCommand(json);
                         else if (type == StateProtocol.MapTransport)
